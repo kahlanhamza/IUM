@@ -15,6 +15,9 @@ fi
 mkdir -p "$ROOT/.toolchain"
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$ROOT/.toolchain/rustup-init.sh"
 sh "$ROOT/.toolchain/rustup-init.sh" -y --profile minimal --default-toolchain stable
+# Gates need rustfmt + clippy; minimal profile ships neither (recycle on
+# 2026-11-02 cost a bootstrap detour). Install them with the toolchain.
+rustup component add rustfmt clippy
 cargo --version
 rustc --version
 echo "[install-toolchain] done — activate with: . scripts/rust-env.sh"

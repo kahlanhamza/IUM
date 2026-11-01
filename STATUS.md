@@ -14,7 +14,7 @@
 cd /home/z/my-project
 git pull                      # remote: github.com/kahlanhamza/IUM (private)
 . scripts/rust-env.sh         # persistent toolchain in .toolchain/ (gitignored)
-cargo test -p ium-core        # expect: 55 passed (34 unit + 4 loopback HTTP + 16 integration + 1 compile-fail contract)
+cargo test -p ium-core        # expect: 56 passed (35 unit + 4 loopback HTTP + 16 integration + 1 compile-fail contract)
 bash scripts/gate.sh          # before ANY push: gates on the COMMITTED tree (defect #11 rule)
 ```
 
@@ -40,17 +40,19 @@ the Tauri/React shell (`ium-app/`) is **frozen** until M2+M3 (ADR-006).
 | 2026-11-02 | Process infra: STATUS.md, roadmap, engineering process, ADRs, issue/PR templates, `scripts/gh_issues.py` | this commit |
 | 2026-11-02 | **Issue #1 closed** the new way: design note + RED evidence on the issue, compile-fail contract test (trybuild), then fix. `verify` is now a required trait method — verify-before-declare cannot be silently inherited (ADR-004 fully enforced) | 55/55 gates green, [issue comment](https://github.com/kahlanhamza/IUM/issues/1#issuecomment-6563392514) |
 | 2026-11-02 | **Defect #11 caught & fixed**: pushed HEAD `99ed179` was RED on CI — `d62094a` shipped the trybuild contract test but forgot to stage the `ium-core/Cargo.toml` dev-dependency; local gates had run on the working tree. Fix staged properly; permanent fix: `scripts/gate.sh` now gates the **committed tree** in a detached worktree | RED: E0433 reproduced on `99ed179` + CI failure confirmed via API; GREEN: gate.sh 55/55 on committed tree |
+| 2026-11-02 | **Issue #2 closed** the new way: design note on the issue (0-rows legality table) + RED evidence (silent `Ok(())` on a corrupted journal) + fix `JournalError::ChunksMissing` rows-affected check, test pinned to the variant. Design note surfaced the planless-job hole → filed as #5 instead of scope-creeping | 56/56 gates green; #2 auto-closed by commit |
 
 ## 3. In progress
 
-Nothing — this task closed. Next task = first M2 issue (§4).
+Nothing — issue #2 closed the same session it was picked up. Next: #4 (§4).
 
 ## 4. Backlog / next (ordered — milestone [M2: Hardening & Honesty](https://github.com/kahlanhamza/IUM/milestone/1))
 
-1. **#2 — journal: rows-affected check on `DELETE FROM chunks` in `replace_chunks`** —
-   symmetry with the other loud-failure writes (`journal.rs`).
-2. **#4 — ci: nightly fuzz** — run the chunk-pool invariant fuzz (`chunk.rs:510`) with
+1. **#4 — ci: nightly fuzz** — run the chunk-pool invariant fuzz (`chunk.rs:510`) with
    expanded rounds on a schedule; add coverage report.
+2. **#5 — engine/journal: pin the invariant "every committed job has ≥1 chunk"** — found
+   during the #2 design note: `plan(0)` returns an empty plan (0-byte file ⇒ planless job);
+   collapsing it makes #2's one special case go away.
 3. **#3 — tests: `MockAdapter` should also log at entry** — same observability gap that bit
    the stall test exists in the older mock (fixed only in `ScriptedAdapter`).
 4. M3 spike: S3 multipart against MinIO in CI (design note + issue breakdown).
@@ -138,7 +140,8 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-02 | Filed milestone M2 + issues #1–#4 via `scripts/gh_issues.py` | backlog tracked on GitHub, not in chat | `adb8fa0` |
 | 2026-11-02 | Issue #1 via the full loop (design note → red → fix → green → close) | verify now required; trybuild contract test; 55/55 | see git log |
 | 2026-11-02 | **Defect #11**: audit caught pushed HEAD `99ed179` red on CI (unstaged trybuild dep); RED reproduced locally, fix committed properly | pushed tree now compiles: 55/55 | `6423227` |
-| 2026-11-02 | Process hardening: `scripts/gate.sh` — gates run on the committed tree (detached worktree), dirty tree refused; process doc + DoD updated | gate.sh GREEN on committed tree; this STATUS row is the record | this commit |
+| 2026-11-02 | Process hardening: `scripts/gate.sh` — gates run on the committed tree (detached worktree), dirty tree refused; process doc + DoD updated | gate.sh GREEN on committed tree; this STATUS row is the record | `ca3b3eb` |
+| 2026-11-02 | Issue #2 via the full loop (design note → RED → fix → GREEN); follow-up #5 filed; toolchain installer now ships rustfmt+clippy (recycle gap) | 56/56 gates green on committed tree; #2 closed | see git log |
 
 ## 10. Security
 
