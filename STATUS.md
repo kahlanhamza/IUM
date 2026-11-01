@@ -14,7 +14,7 @@
 cd /home/z/my-project
 git pull                      # remote: github.com/kahlanhamza/IUM (private)
 . scripts/rust-env.sh         # persistent toolchain in .toolchain/ (gitignored)
-cargo test -p ium-core        # expect: 54 passed (34 unit + 4 loopback HTTP + 16 integration)
+cargo test -p ium-core        # expect: 55 passed (34 unit + 4 loopback HTTP + 16 integration + 1 compile-fail contract)
 ```
 
 If `.toolchain/` was wiped: `bash scripts/install-toolchain.sh` (installs rustup minimal profile
@@ -37,6 +37,7 @@ the Tauri/React shell (`ium-app/`) is **frozen** until M2+M3 (ADR-006).
 | 2026-11-02 | **3 gate defects caught and fixed** (slipped in via ungated snapshot commit `0c11211`): clippy lint `eviction.rs:96`, invisible wedged calls in `ScriptedAdapter` log + wrong offset convention in stall test, fmt drift | commit `fix(core): restore green gates…` |
 | 2026-11-02 | Gates verified green by execution: **54/54 tests, fmt, clippy `-D warnings`** | local run log, session log §9 |
 | 2026-11-02 | Process infra: STATUS.md, roadmap, engineering process, ADRs, issue/PR templates, `scripts/gh_issues.py` | this commit |
+| 2026-11-02 | **Issue #1 closed** the new way: design note + RED evidence on the issue, compile-fail contract test (trybuild), then fix. `verify` is now a required trait method — verify-before-declare cannot be silently inherited (ADR-004 fully enforced) | 55/55 gates green, [issue comment](https://github.com/kahlanhamza/IUM/issues/1#issuecomment-6563392514) |
 
 ## 3. In progress
 
@@ -44,17 +45,13 @@ Nothing — this task closed. Next task = first M2 issue (§4).
 
 ## 4. Backlog / next (ordered — milestone [M2: Hardening & Honesty](https://github.com/kahlanhamza/IUM/milestone/1))
 
-1. **#1 — `TransferAdapter::verify` must be a required trait method** — today it has a default
-   "pass" impl (`adapter.rs`), so a future adapter could silently skip verify-before-declare.
-   Design note first: per-adapter verify strategies (HTTP: HEAD Content-Length + ETag;
-   S3: ETag/checksum; TUS: offset + checksum).
-2. **#2 — journal: rows-affected check on `DELETE FROM chunks` in `replace_chunks`** —
+1. **#2 — journal: rows-affected check on `DELETE FROM chunks` in `replace_chunks`** —
    symmetry with the other loud-failure writes (`journal.rs`).
-3. **#4 — ci: nightly fuzz** — run the chunk-pool invariant fuzz (`chunk.rs:510`) with
+2. **#4 — ci: nightly fuzz** — run the chunk-pool invariant fuzz (`chunk.rs:510`) with
    expanded rounds on a schedule; add coverage report.
-4. **#3 — tests: `MockAdapter` should also log at entry** — same observability gap that bit
+3. **#3 — tests: `MockAdapter` should also log at entry** — same observability gap that bit
    the stall test exists in the older mock (fixed only in `ScriptedAdapter`).
-5. M3 spike: S3 multipart against MinIO in CI (design note + issue breakdown).
+4. M3 spike: S3 multipart against MinIO in CI (design note + issue breakdown).
 
 ## 5. Defect audit trail
 
@@ -132,7 +129,8 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-01 | Session snapshot (no message, gates bypassed) | introduced defects 8–10 | `0c11211` |
 | 2026-11-02 | Post-recycle audit + gate fixes (defects 8–10) | 54/54 green locally, fmt+clippy clean | `adb9390` |
 | 2026-11-02 | Process adoption: STATUS.md SSOT, roadmap, process, ADRs, templates | issue-driven loop now mandatory | `fca56c9` |
-| 2026-11-02 | Filed milestone M2 + issues #1–#4 via `scripts/gh_issues.py` | backlog tracked on GitHub, not in chat | this commit |
+| 2026-11-02 | Filed milestone M2 + issues #1–#4 via `scripts/gh_issues.py` | backlog tracked on GitHub, not in chat | `adb8fa0` |
+| 2026-11-02 | Issue #1 via the full loop (design note → red → fix → green → close) | verify now required; trybuild contract test; 55/55 | see git log |
 
 ## 10. Security
 
