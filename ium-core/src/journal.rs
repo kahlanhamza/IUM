@@ -75,6 +75,8 @@ pub enum JournalError {
     UnknownChunk(String, u32),
     #[error("job {0} already has chunks")]
     ChunksExist(String),
+    #[error("job {0} has no chunk rows in journal")]
+    ChunksMissing(String),
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -219,7 +221,12 @@ impl SessionJournal {
     }
 
     /// Replace the chunk plan for a job (used after resplit / rebuild).
-    /// Fails loudly for unknown jobs (catches id typos and journal races).
+    /// Fails loudly for unknown jobs, and for jobs whose existing plan is
+    /// missing: job + plan are committed atomically, so 0 rows removed while
+    /// installing a non-empty replacement means journal corruption or a
+    /// resplit of a planless (0-byte) job — see issue #2, follow-up #5.
+    /// The one legal 0-rows case: replacing an empty plan with an empty plan
+    /// (degenerate 0-byte job); anything else refuses and rolls back.
     pub fn replace_chunks(&self, job_id: &str, chunks: &[ChunkRow]) -> Result<(), JournalError> {
         let job_exists: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM jobs WHERE id=?1",
@@ -230,7 +237,10 @@ impl SessionJournal {
             return Err(JournalError::UnknownJob(job_id.to_string()));
         }
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM chunks WHERE job_id=?1", params![job_id])?;
+        let removed = tx.execute("DELETE FROM chunks WHERE job_id=?1", params![job_id])?;
+        if removed == 0 && !chunks.is_empty() {
+            return Err(JournalError::ChunksMissing(job_id.to_string()));
+        }
         insert_chunks(&tx, job_id, chunks)?;
         tx.commit()?;
         Ok(())
@@ -550,6 +560,34 @@ mod tests {
         assert!(matches!(
             j.replace_chunks("GHOST", &[]),
             Err(JournalError::UnknownJob(_))
+        ));
+    }
+
+    #[test]
+    fn replace_chunks_fails_loudly_when_plan_vanished() {
+        let j = SessionJournal::open_in_memory().unwrap();
+        j.insert_job(NewJob {
+            id: "JOB1",
+            source_path: "p",
+            source_size: 200,
+            adapter: "tus",
+            endpoint: "https://t",
+            capability_badge: "resumable",
+            chunks: &sample_chunks(),
+        })
+        .unwrap();
+
+        // Simulate out-of-band deletion / journal corruption: the job row
+        // survives but its chunk plan does not (unreachable via journal paths,
+        // which never delete plan rows outside replace_chunks).
+        j.conn.execute("DELETE FROM chunks", []).unwrap();
+
+        // Replacing a plan that no longer exists must be loud, not a silent
+        // no-op that lets a resplit proceed on a corrupted journal (#2).
+        // Non-empty replacement plan + 0 rows removed => ChunksMissing.
+        assert!(matches!(
+            j.replace_chunks("JOB1", &sample_chunks()),
+            Err(JournalError::ChunksMissing(_))
         ));
     }
 }
