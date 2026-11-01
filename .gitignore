@@ -26,3 +26,6 @@ tool-results/
 
 # --- local rust toolchain (sandbox-persistent, not part of the repo) ---
 .toolchain/
+
+# --- gate.sh shared build cache for committed-tree worktrees ---
+.gate-target/

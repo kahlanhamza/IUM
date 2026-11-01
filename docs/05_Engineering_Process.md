@@ -18,11 +18,15 @@
    issue. A fix without a failing test does not ship.
 4. **Minimal fix.** Smallest change that makes the failing test pass. No drive-by refactors —
    if you see something unrelated, it gets its own issue.
-5. **Full gates, locally.** `cargo fmt --all -- --check && cargo clippy -p ium-core
-   --all-targets -- -D warnings && cargo test -p ium-core`. All three, every time, before the
-   commit. CI re-runs them on ubuntu/macos/windows — a red CI row reopens the issue.
+5. **Full gates — on the committed tree.** Commit first, then `bash scripts/gate.sh`: it refuses
+   a dirty working tree, checks out HEAD in a detached worktree, and runs `cargo fmt --all --
+   --check`, `cargo clippy -p ium-core --all-targets -- -D warnings`, `cargo test -p ium-core`
+   *there*. Working-tree gates are not evidence — defect #11 shipped green local gates on a
+   working tree while the committed tree could not compile. CI re-runs everything on
+   ubuntu/macos/windows — a red CI row reopens the issue.
 6. **One logical commit per issue.** Message: `fix(core): …(#N)` / `feat(adapter): …(#N)` /
-   `docs: …`. Reference the issue; never mix unrelated changes.
+   `docs: …`. Reference the issue; never mix unrelated changes. Stage deliberately: after
+   committing, `git status` must be clean — anything left behind is an unstaged landmine.
 7. **STATUS.md update.** Append a session-log row, move items between Done/In progress/Backlog,
    update §6 tools if the toolbox changed. This is part of DoD, not bookkeeping.
 8. **Push.** `bash scripts/gh-push.sh`. A task that is not pushed does not exist — the sandbox
@@ -33,7 +37,7 @@
 - [ ] Issue exists with acceptance criteria
 - [ ] Failing test written first (for bugs) / criteria-encoded tests (for features)
 - [ ] Minimal fix; no unrelated changes smuggled in
-- [ ] fmt + clippy `-D warnings` + full test suite green locally
+- [ ] `scripts/gate.sh` green — fmt + clippy `-D warnings` + full suite, **on the committed tree**
 - [ ] CI green on all 3 OS
 - [ ] STATUS.md updated (session log + phase pointers)
 - [ ] Pushed to `origin/main`
@@ -46,8 +50,10 @@
 
 ## Rules of engagement
 
-- **Gates are non-bypassable** (ADR-007). Snapshot/backup scripts (`preserve.sh`) must run the
-  gates or at minimum never be treated as "done" work.
+- **Gates are non-bypassable** (ADR-007), and they run on the **committed tree** (defect #11:
+  d62094a passed working-tree gates while the pushed tree failed to compile — the gate is now
+  `scripts/gate.sh`, which tests HEAD itself in a detached worktree). Snapshot/backup scripts
+  (`preserve.sh`) must run the gates or at minimum never be treated as "done" work.
 - **Journal is truth** (ADR-002): any state a function acts on is read from the journal, not
   from caller arguments.
 - **Honest badges** (ADR-004): nothing reports Done that the adapter did not verify.
