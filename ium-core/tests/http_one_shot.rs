@@ -310,6 +310,50 @@ async fn http_one_shot_streams_whole_file_and_verifies() {
 }
 
 #[tokio::test]
+async fn http_one_shot_uploads_zero_byte_file_end_to_end() {
+    let server = spawn_server();
+    let dir = tempfile::tempdir().unwrap();
+    let (path, file_bytes) = make_source(dir.path(), 0);
+    assert!(file_bytes.is_empty());
+
+    let m = manager_with_http();
+    let rec = m.create_job(&spec_for(&path, 0, server.addr), 4).unwrap();
+
+    // Issue #5 invariant: even a 0-byte file plans exactly one chunk.
+    let snap = m.snapshot(&rec.id).unwrap();
+    assert_eq!(snap.chunks.len(), 1);
+    assert_eq!((snap.chunks[0].begin, snap.chunks[0].end), (0, 0));
+
+    let done = m.run_job(&rec.id).await.unwrap();
+    if done.state != JobState::Done {
+        for (seq, k, p) in m.snapshot(&rec.id).unwrap().events {
+            eprintln!("EVENT {seq:>3} {k:<18} {p}");
+        }
+    }
+    assert_eq!(done.state, JobState::Done, "expected success: {done:?}");
+
+    // Honest badge: Done required the real server round-trips — one empty
+    // PUT (the old empty-plan convention reached Done with zero PUTs).
+    assert_eq!(server.put_count(), 1);
+    assert!(
+        server.received().is_empty(),
+        "nothing to upload, nothing sent"
+    );
+
+    let snap = m.snapshot(&rec.id).unwrap();
+    assert_eq!(snap.chunks[0].state, ChunkState::Verified);
+    assert_eq!(snap.chunks[0].bytes_confirmed, 0);
+    assert_eq!(
+        snap.events
+            .iter()
+            .filter(|(_, k, _)| k == "verified")
+            .count(),
+        1
+    );
+    server.shutdown.send(()).ok();
+}
+
+#[tokio::test]
 async fn http_500_exhausts_retries_and_fails_honestly() {
     let server = spawn_server();
     server.set_behavior(PutBehavior::Always(500));

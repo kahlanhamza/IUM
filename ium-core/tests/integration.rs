@@ -233,16 +233,33 @@ async fn job_runs_to_done_with_all_chunks_verified() {
 }
 
 #[tokio::test]
-async fn zero_byte_job_completes_trivially() {
+async fn zero_byte_job_uploads_and_verifies_like_any_file() {
+    // Issue #5 invariant: even a 0-byte file plans one [0, 0) chunk that
+    // must be leased, uploaded, confirmed and verified — the old empty-plan
+    // convention let such a job reach Done with zero server round-trips.
     let dir = tempfile::tempdir().unwrap();
     let path = make_source(dir.path(), "empty.bin", 0);
     let m = manager_with(Arc::new(MockAdapter::new(Capability::new(
         Capability::RESUMABLE,
     ))));
     let rec = m.create_job(&spec_for(&path, 0), 4).unwrap();
+    let snap = m.snapshot(&rec.id).unwrap();
+    assert_eq!(snap.chunks.len(), 1);
+    assert_eq!((snap.chunks[0].begin, snap.chunks[0].end), (0, 0));
+
     let done = m.run_job(&rec.id).await.unwrap();
     assert_eq!(done.state, JobState::Done);
-    assert!(m.snapshot(&rec.id).unwrap().chunks.is_empty());
+    let snap = m.snapshot(&rec.id).unwrap();
+    assert_eq!(snap.chunks[0].state, ium_core::chunk::ChunkState::Verified);
+    assert_eq!(snap.chunks[0].bytes_confirmed, 0);
+    assert_eq!(
+        snap.events
+            .iter()
+            .filter(|(_, k, _)| k == "verified")
+            .count(),
+        1,
+        "verify-before-declare must have run"
+    );
 }
 
 #[tokio::test]

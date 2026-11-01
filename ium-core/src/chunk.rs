@@ -70,7 +70,11 @@ impl ChunkPool {
     /// where the total length allows it.
     pub fn plan(total_len: u64, n: u32, chunk_min: u64) -> Vec<(u64, u64)> {
         if total_len == 0 {
-            return Vec::new();
+            // Issue #5 invariant: every committed job has >= 1 chunk. A
+            // 0-byte file plans one zero-length chunk that must still be
+            // leased, uploaded, confirmed and verified — nothing reaches
+            // Done without a server round-trip.
+            return vec![(0, 0)];
         }
         let n = n.max(1);
         let n = if chunk_min > 0 {
@@ -393,10 +397,23 @@ mod tests {
     }
 
     #[test]
-    fn zero_byte_file_has_no_chunks() {
-        let pool = ChunkPool::new(0, 8);
-        assert!(pool.chunks().is_empty());
+    fn zero_byte_file_plans_single_zero_length_chunk() {
+        // Issue #5 invariant: every committed job has >= 1 chunk. A 0-byte
+        // file plans exactly one [0, 0) chunk that must still be leased,
+        // uploaded and confirmed — no job reaches Done without a server
+        // round-trip (the old empty-plan convention let it happen silently).
+        assert_eq!(ChunkPool::plan(0, 16, CHUNK_MIN), vec![(0, 0)]);
+        let mut pool = ChunkPool::new(0, 8);
+        assert_eq!(pool.chunks().len(), 1);
+        let c = &pool.chunks()[0];
+        assert_eq!((c.begin, c.end), (0, 0));
+        assert_eq!(c.state, ChunkState::Pending);
+        assert_eq!(c.bytes_confirmed, 0);
+        let idx = c.idx;
+        assert!(!pool.all_uploaded(), "0-byte chunk must still be uploaded");
+        pool.complete(idx);
         assert!(pool.all_uploaded());
+        assert_eq!(pool.remaining_unconfirmed(), 0);
     }
 
     #[test]

@@ -77,6 +77,8 @@ pub enum JournalError {
     ChunksExist(String),
     #[error("job {0} has no chunk rows in journal")]
     ChunksMissing(String),
+    #[error("empty chunk plan for job {0}")]
+    EmptyPlan(String),
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -176,6 +178,11 @@ impl SessionJournal {
     /// chunks. Atomic: a crash between the job row and its chunk plan leaves
     /// neither.
     pub fn insert_job(&self, job: NewJob<'_>) -> Result<JobRecord, JournalError> {
+        // Issue #5 invariant: a job is committed WITH its plan, atomically —
+        // an empty plan is a caller bug, refused before anything is journaled.
+        if job.chunks.is_empty() {
+            return Err(JournalError::EmptyPlan(job.id.to_string()));
+        }
         let ts = now_ms();
         let tx = self.conn.unchecked_transaction()?;
         let exists: i64 = tx.query_row(
@@ -221,13 +228,15 @@ impl SessionJournal {
     }
 
     /// Replace the chunk plan for a job (used after resplit / rebuild).
-    /// Fails loudly for unknown jobs, and for jobs whose existing plan is
-    /// missing: job + plan are committed atomically, so 0 rows removed while
-    /// installing a non-empty replacement means journal corruption or a
-    /// resplit of a planless (0-byte) job — see issue #2, follow-up #5.
-    /// The one legal 0-rows case: replacing an empty plan with an empty plan
-    /// (degenerate 0-byte job); anything else refuses and rolls back.
+    /// Fails loudly for: an empty replacement plan (`EmptyPlan` — caller bug,
+    /// checked before job lookup), unknown jobs, and jobs whose existing plan
+    /// is missing (`ChunksMissing` — job + plan commit atomically, so 0 rows
+    /// removed is journal corruption or an out-of-band deletion; issue #2,
+    /// its documented special case collapsed by the #5 invariant).
     pub fn replace_chunks(&self, job_id: &str, chunks: &[ChunkRow]) -> Result<(), JournalError> {
+        if chunks.is_empty() {
+            return Err(JournalError::EmptyPlan(job_id.to_string()));
+        }
         let job_exists: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM jobs WHERE id=?1",
             params![job_id],
@@ -238,7 +247,7 @@ impl SessionJournal {
         }
         let tx = self.conn.unchecked_transaction()?;
         let removed = tx.execute("DELETE FROM chunks WHERE job_id=?1", params![job_id])?;
-        if removed == 0 && !chunks.is_empty() {
+        if removed == 0 {
             return Err(JournalError::ChunksMissing(job_id.to_string()));
         }
         insert_chunks(&tx, job_id, chunks)?;
@@ -456,14 +465,15 @@ mod tests {
     #[test]
     fn duplicate_job_is_rejected() {
         let j = SessionJournal::open_in_memory().unwrap();
+        let chunks = sample_chunks();
         let job = || NewJob {
             id: "JOB1",
             source_path: "p",
-            source_size: 10,
+            source_size: 200,
             adapter: "tus",
             endpoint: "https://t",
             capability_badge: "resumable",
-            chunks: &[],
+            chunks: &chunks,
         };
         j.insert_job(job()).unwrap();
         assert!(matches!(
@@ -478,11 +488,11 @@ mod tests {
         j.insert_job(NewJob {
             id: "JOB1",
             source_path: "p",
-            source_size: 10,
+            source_size: 200,
             adapter: "tus",
             endpoint: "https://t",
             capability_badge: "resumable",
-            chunks: &[],
+            chunks: &sample_chunks(),
         })
         .unwrap();
         let a = j
@@ -544,11 +554,11 @@ mod tests {
         j.insert_job(NewJob {
             id: "JOB2",
             source_path: "p",
-            source_size: 5,
+            source_size: 200,
             adapter: "tus",
             endpoint: "https://t",
             capability_badge: "resumable",
-            chunks: &[],
+            chunks: &sample_chunks(),
         })
         .unwrap();
         assert_eq!(j.list_jobs().unwrap().len(), 2);
@@ -557,10 +567,57 @@ mod tests {
     #[test]
     fn replace_chunks_rejects_unknown_job() {
         let j = SessionJournal::open_in_memory().unwrap();
+        // Non-empty plan: an empty one is rejected as EmptyPlan BEFORE the
+        // job lookup (issue #5 precedence — caller bug first), and a real
+        // resplit always carries a plan.
         assert!(matches!(
-            j.replace_chunks("GHOST", &[]),
+            j.replace_chunks("GHOST", &sample_chunks()),
             Err(JournalError::UnknownJob(_))
         ));
+    }
+
+    #[test]
+    fn insert_job_rejects_empty_plan() {
+        let j = SessionJournal::open_in_memory().unwrap();
+        // Issue #5: a job is committed with its plan, atomically — an empty
+        // plan is a caller bug and must be refused, not journaled.
+        assert!(matches!(
+            j.insert_job(NewJob {
+                id: "JOB1",
+                source_path: "p",
+                source_size: 0,
+                adapter: "tus",
+                endpoint: "https://t",
+                capability_badge: "resumable",
+                chunks: &[],
+            }),
+            Err(JournalError::EmptyPlan(_))
+        ));
+        assert!(j.load_job("JOB1").unwrap().is_none(), "nothing committed");
+    }
+
+    #[test]
+    fn replace_chunks_rejects_empty_replacement_plan() {
+        let j = SessionJournal::open_in_memory().unwrap();
+        j.insert_job(NewJob {
+            id: "JOB1",
+            source_path: "p",
+            source_size: 200,
+            adapter: "tus",
+            endpoint: "https://t",
+            capability_badge: "resumable",
+            chunks: &sample_chunks(),
+        })
+        .unwrap();
+        // Issue #5: the #2 special case collapses — an empty replacement plan
+        // is refused outright; and with a non-empty plan, 0 rows removed is
+        // always ChunksMissing (covered by the plan-vanished test below).
+        assert!(matches!(
+            j.replace_chunks("JOB1", &[]),
+            Err(JournalError::EmptyPlan(_))
+        ));
+        // The existing plan must be untouched by the refused call.
+        assert_eq!(j.load_chunks("JOB1").unwrap().len(), 2);
     }
 
     #[test]
