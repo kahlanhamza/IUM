@@ -42,18 +42,18 @@ the Tauri/React shell (`ium-app/`) is **frozen** until M2+M3 (ADR-006).
 
 Nothing — this task closed. Next task = first M2 issue (§4).
 
-## 4. Backlog / next (ordered)
+## 4. Backlog / next (ordered — milestone [M2: Hardening & Honesty](https://github.com/kahlanhamza/IUM/milestone/1))
 
-1. **`TransferAdapter::verify` must be a required trait method** — today it has a default
+1. **#1 — `TransferAdapter::verify` must be a required trait method** — today it has a default
    "pass" impl (`adapter.rs`), so a future adapter could silently skip verify-before-declare.
    Design note first: per-adapter verify strategies (HTTP: HEAD Content-Length + ETag;
    S3: ETag/checksum; TUS: offset + checksum).
-2. **journal: rows-affected check on `DELETE FROM chunks` in `replace_chunks`** — symmetry
-   with the other loud-failure writes (`journal.rs`).
-3. **ci: nightly fuzz** — run the chunk-pool invariant fuzz (`chunk.rs:510`) with expanded
-   rounds on a schedule; add coverage report.
-4. **tests: `MockAdapter` should also log at entry** — same observability gap that bit the
-   stall test exists in the older mock (fixed only in `ScriptedAdapter`).
+2. **#2 — journal: rows-affected check on `DELETE FROM chunks` in `replace_chunks`** —
+   symmetry with the other loud-failure writes (`journal.rs`).
+3. **#4 — ci: nightly fuzz** — run the chunk-pool invariant fuzz (`chunk.rs:510`) with
+   expanded rounds on a schedule; add coverage report.
+4. **#3 — tests: `MockAdapter` should also log at entry** — same observability gap that bit
+   the stall test exists in the older mock (fixed only in `ScriptedAdapter`).
 5. M3 spike: S3 multipart against MinIO in CI (design note + issue breakdown).
 
 ## 5. Defect audit trail
@@ -130,13 +130,16 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 |---|---|---|---|
 | 2026-11-01 | Sprint 0: fix 7 audited defects, real HTTP adapter, CI matrix | 45 tests green, CI repaired | `145c983` |
 | 2026-11-01 | Session snapshot (no message, gates bypassed) | introduced defects 8–10 | `0c11211` |
-| 2026-11-02 | Process adoption + post-recycle audit + gate fixes | 3 defects found & fixed; 54/54 green; SSOT/roadmap/ADRs/templates landed | see git log |
+| 2026-11-02 | Post-recycle audit + gate fixes (defects 8–10) | 54/54 green locally, fmt+clippy clean | `adb9390` |
+| 2026-11-02 | Process adoption: STATUS.md SSOT, roadmap, process, ADRs, templates | issue-driven loop now mandatory | `fca56c9` |
+| 2026-11-02 | Filed milestone M2 + issues #1–#4 via `scripts/gh_issues.py` | backlog tracked on GitHub, not in chat | this commit |
 
-## 10. Blocked on user / security
+## 10. Security
 
-- **GitHub PAT missing.** The sandbox recycle wiped `.secrets/gh_token`. Nothing can be pushed
-  (currently N commits ahead of `origin/main`) and issues cannot be filed until it is restored:
-  **rotate the token** (it appeared in chat once — rotate regardless), then:
-  `mkdir -p .secrets && chmod 700 .secrets && echo 'TOKEN' > .secrets/gh_token && chmod 600 .secrets/gh_token`
-  then run `python3 scripts/gh_issues.py` and `bash scripts/gh-push.sh`.
+- Token state: fine-grained PAT restored into `.secrets/gh_token` on 2026-11-02 (gitignored,
+  chmod 600). **It has now been pasted into chat twice — rotate it at
+  <https://github.com/settings/personal-access-tokens> when convenient.** After rotating:
+  `mkdir -p .secrets && chmod 700 .secrets && echo 'NEW_TOKEN' > .secrets/gh_token && chmod 600 .secrets/gh_token`
+  (never commit this file; scopes needed: repo contents read/write, issues read/write,
+  metadata read).
 - `.secrets/` and `.toolchain/` are gitignored; `core.fileMode false` is set (sandbox mode churn).
