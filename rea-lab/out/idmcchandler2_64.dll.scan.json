@@ -1,0 +1,62 @@
+{
+ "pe_info": {
+  "file": "idmcchandler2_64.dll",
+  "size_bytes": 19059,
+  "machine": "0x8664",
+  "time_stamp": 1443441378,
+  "linker_version": "9.0",
+  "subsystem": 2,
+  "entry_point": "0x46d2c",
+  "is_dotnet": false,
+  "sections": [
+   {
+    "name": ".text",
+    "virtual_size": 330204,
+    "virtual_address": "0x1000",
+    "raw_size": 330240,
+    "entropy": 6.339
+   },
+   {
+    "name": ".rdata",
+    "virtual_size": 93560,
+    "virtual_address": "0x52000",
+    "raw_size": 93696,
+    "entropy": 0.0
+   },
+   {
+    "name": ".data",
+    "virtual_size": 9536,
+    "virtual_address": "0x69000",
+    "raw_size": 3072,
+    "entropy": 0.0
+   },
+   {
+    "name": ".pdata",
+    "virtual_size": 21924,
+    "virtual_address": "0x6c000",
+    "raw_size": 22016,
+    "entropy": 0.0
+   },
+   {
+    "name": ".rsrc",
+    "virtual_size": 1880,
+    "virtual_address": "0x72000",
+    "raw_size": 2048,
+    "entropy": 0.0
+   },
+   {
+    "name": ".reloc",
+    "virtual_size": 1840,
+    "virtual_address": "0x73000",
+    "raw_size": 2048,
+    "entropy": 0.0
+   }
+  ],
+  "imports": {},
+  "exports_count": 0
+ },
+ "keyword_hits": {},
+ "mutex_like_strings": [],
+ "strings_total_ascii": 44,
+ "strings_total_utf16": 0
+}

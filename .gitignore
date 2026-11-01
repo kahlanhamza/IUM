@@ -1,0 +1,22 @@
+# --- secrets: never commit ---
+.secrets/
+
+# --- user-facing delivery channel (repo holds docs/ + rea-lab/out/ instead) ---
+upload/
+download/
+
+# --- acquired binaries & local tooling (large / not redistributable) ---
+rea-lab/targets/
+rea-lab/bin/
+rea-lab/pylib/
+
+# --- sandbox infra (not part of IUM) ---
+skills/
+.env
+agent-ctx/
+
+# --- ephemera ---
+node_modules/
+__pycache__/
+*.pyc
+*.log

@@ -1,0 +1,251 @@
+{
+ "pe_info": {
+  "file": "idman643build16.exe",
+  "size_bytes": 12698904,
+  "machine": "0x14c",
+  "time_stamp": 1792702295,
+  "linker_version": "9.0",
+  "subsystem": 2,
+  "entry_point": "0x5b7a",
+  "is_dotnet": false,
+  "sections": [
+   {
+    "name": ".text",
+    "virtual_size": 46759,
+    "virtual_address": "0x1000",
+    "raw_size": 47104,
+    "entropy": 6.623
+   },
+   {
+    "name": ".rdata",
+    "virtual_size": 14026,
+    "virtual_address": "0xd000",
+    "raw_size": 14336,
+    "entropy": 5.282
+   },
+   {
+    "name": ".data",
+    "virtual_size": 11964,
+    "virtual_address": "0x11000",
+    "raw_size": 8192,
+    "entropy": 2.65
+   },
+   {
+    "name": ".rsrc",
+    "virtual_size": 18264,
+    "virtual_address": "0x14000",
+    "raw_size": 18432,
+    "entropy": 4.504
+   },
+   {
+    "name": ".reloc",
+    "virtual_size": 5714,
+    "virtual_address": "0x19000",
+    "raw_size": 6144,
+    "entropy": 4.036
+   }
+  ],
+  "imports": {
+   "ADVAPI32.dll": [
+    "RegDeleteValueW",
+    "RegQueryValueExW",
+    "RegOpenKeyExA",
+    "RegCloseKey"
+   ],
+   "USER32.dll": [
+    "FindWindowA",
+    "ShowWindow",
+    "SetForegroundWindow",
+    "CreateDialogParamA",
+    "SetWindowTextA",
+    "GetMessageA",
+    "TranslateMessage",
+    "DispatchMessageA",
+    "wsprintfW",
+    "DestroyWindow",
+    "PostQuitMessage",
+    "wsprintfA",
+    "MessageBoxA",
+    "SendMessageA"
+   ],
+   "SHELL32.dll": [
+    "SHBrowseForFolderW",
+    "SHGetPathFromIDListW"
+   ],
+   "KERNEL32.dll": [
+    "LCMapStringW",
+    "LCMapStringA",
+    "GetStringTypeW",
+    "MultiByteToWideChar",
+    "GetStringTypeA",
+    "GetLocaleInfoA",
+    "GetDiskFreeSpaceW",
+    "GetProcAddress",
+    "GetModuleHandleA",
+    "FreeLibrary",
+    "LoadLibraryA",
+    "GetCurrentProcess",
+    "LocalFree",
+    "lstrlenA",
+    "CloseHandle",
+    "WriteFile",
+    "SetFilePointer",
+    "CreateFileW",
+    "FormatMessageA",
+    "GetLastError",
+    "CreateThread",
+    "CreateProcessW",
+    "GetModuleFileNameW",
+    "GetExitCodeThread",
+    "WaitForSingleObject",
+    "CreateDirectoryW",
+    "GetFileAttributesW",
+    "GetTempPathW",
+    "GetVersionExA",
+    "ExitProcess",
+    "CreateMutexA",
+    "ExitThread",
+    "MapViewOfFile",
+    "SetFileTime",
+    "GetFileTime",
+    "CreateFileMappingA",
+    "GetFileSize",
+    "UnmapViewOfFile",
+    "RtlUnwind",
+    "HeapFree",
+    "GetCommandLineA",
+    "GetStartupInfoA",
+    "TerminateProcess",
+    "UnhandledExceptionFilter",
+    "SetUnhandledExceptionFilter",
+    "IsDebuggerPresent",
+    "GetModuleHandleW",
+    "TlsGetValue",
+    "TlsAlloc",
+    "TlsSetValue",
+    "TlsFree",
+    "InterlockedIncrement",
+    "SetLastError",
+    "GetCurrentThreadId",
+    "InterlockedDecrement",
+    "HeapAlloc",
+    "RaiseException",
+    "HeapCreate",
+    "VirtualFree",
+    "DeleteCriticalSection",
+    "LeaveCriticalSection",
+    "EnterCriticalSection",
+    "VirtualAlloc",
+    "HeapReAlloc",
+    "Sleep",
+    "GetStdHandle",
+    "GetModuleFileNameA",
+    "FreeEnvironmentStringsA",
+    "GetEnvironmentStrings",
+    "FreeEnvironmentStringsW",
+    "WideCharToMultiByte",
+    "GetEnvironmentStringsW",
+    "SetHandleCount",
+    "GetFileType",
+    "QueryPerformanceCounter",
+    "GetTickCount",
+    "GetCurrentProcessId",
+    "GetSystemTimeAsFileTime",
+    "GetCPInfo",
+    "GetACP",
+    "GetOEMCP",
+    "IsValidCodePage",
+    "HeapSize",
+    "InitializeCriticalSectionAndSpinCount"
+   ]
+  },
+  "exports_count": 0
+ },
+ "keyword_hits": {
+  "protocols": {
+   "http://": {
+    "count": 18,
+    "samples": [
+     "http://ocsp.digicert.com0A",
+     "5http://cacerts.digicert.com/DigiCertTrustedRootG4.crt0C",
+     "2http://crl3.digicert.com/DigiCertTrustedRootG4.crl0",
+     "http://www.digicert.com/CPS0",
+     "Mhttp://crl3.digicert.com/DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1.crl0S",
+     "Mhttp://crl4.digicert.com/DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1.crl0"
+    ]
+   }
+  },
+  "transfer_core": {
+   "thread": {
+    "count": 7,
+    "samples": [
+     "- unexpected multithread lock error",
+     "- not enough space for thread data",
+     "`local static thread guard'",
+     "CreateThread",
+     "GetExitCodeThread",
+     "ExitThread"
+    ]
+   },
+   "download": {
+    "count": 6,
+    "samples": [
+     "Internet Download Manager",
+     "<description>Internet Download Manager installer</description>",
+     "Please visit http://www.internetdownloadmanager.com",
+     "Internet Download Manager installer",
+     "Internet Download Manager (IDM)",
+     "Internet Download Manager installer"
+    ]
+   }
+  },
+  "file_io": {
+   "SetFilePointer": {
+    "count": 1,
+    "samples": [
+     "SetFilePointer"
+    ]
+   },
+   "WriteFile": {
+    "count": 1,
+    "samples": [
+     "WriteFile"
+    ]
+   },
+   "CreateFile": {
+    "count": 2,
+    "samples": [
+     "CreateFileW",
+     "CreateFileMappingA"
+    ]
+   },
+   "CreateFileMapping": {
+    "count": 1,
+    "samples": [
+     "CreateFileMappingA"
+    ]
+   },
+   "MapViewOfFile": {
+    "count": 2,
+    "samples": [
+     "MapViewOfFile",
+     "UnmapViewOfFile"
+    ]
+   }
+  }
+ },
+ "mutex_like_strings": [
+  "   name=\"Tonec.IDM.idman643build16\"",
+  "IDM Setup",
+  "IDM requires Windows 7 or later.",
+  "IDM1.tmp",
+  "IDMFTYPE",
+  "IDM_Setup_Mutex_st23nZ7a",
+  "IDM_Setup_Temp",
+  "Initializing IDM Installation Wizard...",
+  "Internet Download Manager (IDM)",
+  "components2/idmcchandler2_64.dllUT"
+ ],
+ "strings_total_ascii": 20885,
+ "strings_total_utf16": 41
+}

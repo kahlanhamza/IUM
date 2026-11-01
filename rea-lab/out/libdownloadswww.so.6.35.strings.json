@@ -1,0 +1,452 @@
+{
+ "file": "libdownloadswww.so.6.35",
+ "size": 1938368,
+ "strings_total": 7514,
+ "keyword_hits": {
+  "http_headers": {
+   "Range:": {
+    "count": 6,
+    "samples": [
+     "Range: bytes=%s",
+     "Content-Range: bytes %s/%ld",
+     "Content-Range:",
+     "Content-Range: bytes 0-%ld/%ld",
+     "Content-Range: bytes %s%ld/%ld",
+     "Range: %s"
+    ]
+   },
+   "Content-Range": {
+    "count": 5,
+    "samples": [
+     "Content-Range",
+     "Content-Range: bytes %s/%ld",
+     "Content-Range:",
+     "Content-Range: bytes 0-%ld/%ld",
+     "Content-Range: bytes %s%ld/%ld"
+    ]
+   },
+   "Accept-Ranges": {
+    "count": 2,
+    "samples": [
+     "Accept-Ranges",
+     "Accept-ranges: b%s%s.tmp"
+    ]
+   },
+   "Content-Length": {
+    "count": 7,
+    "samples": [
+     "Content-Length",
+     "Content-Length: %ld",
+     "Content-Length:",
+     "Invalid Content-Length: value",
+     "Overflow Content-Length: value",
+     "CONNECT: no content-length or chunked",
+     "Ignoring Content-Length in CONNECT %03d response"
+    ]
+   },
+   "Content-Type": {
+    "count": 8,
+    "samples": [
+     "Content-Type",
+     "Content-Type: application/x-www-form-urlencoded",
+     "Content-Type: %s%s%s",
+     "Content-Type: application/dns-message",
+     "Content-Type:",
+     "Content-Type: application/x-www-form-urlencoded",
+     "Content-Type: text/parameters",
+     "Content-Type: application/sdp"
+    ]
+   },
+   "Last-Modified": {
+    "count": 4,
+    "samples": [
+     "Last-Modified",
+     "Last-Modified: %s, %02d %s %4d %02d:%02d:%02d GMT",
+     "Last-Modified: %s, %02d %s %4d %02d:%02d:%02d GMT",
+     "Last-Modified:"
+    ]
+   },
+   "If-Modified-Since": {
+    "count": 1,
+    "samples": [
+     "If-Modified-Since"
+    ]
+   },
+   "ETag": {
+    "count": 2,
+    "samples": [
+     "_ZN18WwwDownloadSection26compareDownloadsByHttpEtagERK20AbstractDownloadGuidS2_RbS3_",
+     "_ZNK17HttpHeadersParser4etagEv"
+    ]
+   },
+   "Expect:": {
+    "count": 2,
+    "samples": [
+     "Expect:",
+     "Expect: 100-continue"
+    ]
+   },
+   "Connection": {
+    "count": 160,
+    "samples": [
+     "_ZNK27DownloadMirrorsUsageManager25nextMirrorConnectionCountEv",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE13getDefaultCtrEvENUlPKNS_18QMetaTypeInterfaceEPvE_4_FUNES8_S9_",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE10getMoveCtrEvENUlPKNS_18QMetaTypeInterfaceEPvS9_E_4_FUNES8_S9_S9_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE9getSizeFnEvENUlPKvE_4_FUNES7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE20getCompareIteratorFnEvENUlPKvS7_E_4_FUNES7_S7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE17getCopyIteratorFnEvENUlPvPKvE_4_FUNES6_S8_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE25getCompareConstIteratorFnEvENUlPKvS7_E_4_FUNES7_S7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE22getCopyConstIteratorFnEvENUlPvPKvE_4_FUNES6_S8_"
+    ]
+   },
+   "Keep-Alive": {
+    "count": 3,
+    "samples": [
+     "keep-alive",
+     "Keep-Alive",
+     "Proxy-Connection: Keep-Alive"
+    ]
+   },
+   "User-Agent": {
+    "count": 3,
+    "samples": [
+     "User-Agent: ",
+     "User-Agent",
+     "User-Agent: %s"
+    ]
+   },
+   "Authorization": {
+    "count": 8,
+    "samples": [
+     "%sAuthorization: Digest %s",
+     "Proxy-authorization",
+     "Authorization",
+     "%sAuthorization: Basic %s",
+     "Authorization: Bearer %s",
+     "Authorization:",
+     "Authorization: %s4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+     "%sAuthorization: NTLM %s"
+    ]
+   },
+   "Cookie": {
+    "count": 111,
+    "samples": [
+     "_ZN14QNetworkCookieD1Ev",
+     "_ZN17QArrayDataPointerI14QNetworkCookieED2Ev",
+     "_ZN17QArrayDataPointerI14QNetworkCookieED1Ev",
+     "_ZNK14QNetworkCookieeqERKS_",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI5QListI14QNetworkCookieEE13getDefaultCtrEvENUlPKNS_18QMetaTypeInterfaceEPvE_4_FUNES7_S8_",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI5QListI14QNetworkCookieEE10getMoveCtrEvENUlPKNS_18QMetaTypeInterfaceEPvS8_E_4_FUNES7_S8_S8_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QListI14QNetworkCookieEE9getSizeFnEvENUlPKvE_4_FUNES6_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QListI14QNetworkCookieEE20getCompareIteratorFnEvENUlPKvS6_E_4_FUNES6_S6_"
+    ]
+   },
+   "multipart": {
+    "count": 3,
+    "samples": [
+     "multipart/mixed",
+     "multipart/",
+     "multipart/form-data"
+    ]
+   },
+   "chunked": {
+    "count": 6,
+    "samples": [
+     "Transfer-Encoding: chunked",
+     "Failed reading the chunked-encoded stream",
+     "%s in chunked-encoding",
+     "Ignore chunked response-body",
+     "CONNECT responded chunked",
+     "CONNECT: no content-length or chunked"
+    ]
+   }
+  },
+  "protocols": {
+   "https://": {
+    "count": 9,
+    "samples": [
+     "https://curl.se/",
+     "https://libssh2.org/",
+     "https://zlib.net/",
+     "https://curl.se/docs/copyright.html",
+     "https://libssh2.org/license.html",
+     "https://www.zlib.net/zlib_license.html",
+     "# Your HSTS cache. https://curl.se/docs/hsts.html",
+     "# Your alt-svc cache. https://curl.se/docs/alt-svc.html"
+    ]
+   },
+   "sftp": {
+    "count": 65,
+    "samples": [
+     "_ZNK14CurlDownloader6isSftpEv",
+     "libssh2_sftp_close_handle",
+     "libssh2_sftp_shutdown",
+     "libssh2_sftp_stat_ex",
+     "libssh2_sftp_open_ex",
+     "libssh2_sftp_symlink_ex",
+     "libssh2_sftp_readdir_ex",
+     "libssh2_sftp_mkdir_ex"
+    ]
+   }
+  },
+  "transfer_core": {
+   "fragment": {
+    "count": 3,
+    "samples": [
+     "_ZN4QUrl11setFragmentERK7QStringNS_11ParsingModeE",
+     "No fragment part in the URL",
+     "Bad fragment"
+    ]
+   },
+   "chunk": {
+    "count": 14,
+    "samples": [
+     "Transfer-Encoding: chunked",
+     "Chunky upload is not supported by HTTP 1.0",
+     "no chunk, no close, no size. Assume close to signal end",
+     "UNSIGNED-PAYLOADchunk hex-length longer than %d",
+     "chunk hex-length char not a hex digit: 0x%x",
+     "chunk hex-length not valid: '%s'",
+     "Failed reading the chunked-encoded stream",
+     "Leftovers after chunking: %zu bytes"
+    ]
+   },
+   "part": {
+    "count": 33,
+    "samples": [
+     "_ZN17ThirdPartyLibInfoD2Ev",
+     "_ZN17ThirdPartyLibInfoD1Ev",
+     "_ZN17QArrayDataPointerI17ThirdPartyLibInfoED2Ev",
+     "_ZN17QArrayDataPointerI17ThirdPartyLibInfoED1Ev",
+     "_ZN17ThirdPartyLibInfoC2ERKS_",
+     "_ZN17ThirdPartyLibInfoC1ERKS_",
+     "_ZN17QArrayDataPointerI17ThirdPartyLibInfoE17reallocateAndGrowEN10QArrayData14GrowthPositionExPS1_",
+     "_ZN9QtPrivate30q_relocate_overlap_n_left_moveIP17ThirdPartyLibInfoxEEvT_T0_S3_"
+    ]
+   },
+   "resume": {
+    "count": 9,
+    "samples": [
+     "_Unwind_Resume",
+     "biggest section resume offset: ",
+     "forcibly testing resume support",
+     "cannot mix POSTFIELDS with RESUME_FROM",
+     "failed to resume file:// transfer",
+     "Instructs server to resume from offset %ld",
+     "Unable to resume from offset %ld",
+     "HTTP server doesn't seem to support byte ranges. Cannot resume."
+    ]
+   },
+   "restart": {
+    "count": 1,
+    "samples": [
+     "NTLM auth restarted"
+    ]
+   },
+   "retry": {
+    "count": 4,
+    "samples": [
+     "REFUSED_STREAM, retrying a fresh connect",
+     "Connection died, retrying a fresh connect (retry count: %d)",
+     "Retry-After:",
+     "set timeouts for state %d; Total % ld, retry %d maxtry %d"
+    ]
+   },
+   "speed": {
+    "count": 8,
+    "samples": [
+     "_ZNK11WwwDownload5speedE23NetworkTrafficDirectionb",
+     "_ZNK42AbstractNetworkConsumersWithExtraTasksPack5speedE23NetworkTrafficDirectionb",
+     "_ZNK13WwwDownloader5speedE23NetworkTrafficDirectionb",
+     "_ZNK18WwwDownloadSection5speedE23NetworkTrafficDirectionb",
+     "_ZNK14CurlDownloader5speedE23NetworkTrafficDirectionb",
+     "  %% Total    %% Received %% Xferd  Average Speed   Time    Time     Time  Current",
+     "                                 Dload  Upload   Total   Spent    Left  Speed",
+     "TERM SPEED"
+    ]
+   },
+   "connection": {
+    "count": 160,
+    "samples": [
+     "_ZNK27DownloadMirrorsUsageManager25nextMirrorConnectionCountEv",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE13getDefaultCtrEvENUlPKNS_18QMetaTypeInterfaceEPvE_4_FUNES8_S9_",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE10getMoveCtrEvENUlPKNS_18QMetaTypeInterfaceEPvS9_E_4_FUNES8_S9_S9_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE9getSizeFnEvENUlPKvE_4_FUNES7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE20getCompareIteratorFnEvENUlPKvS7_E_4_FUNES7_S7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE17getCopyIteratorFnEvENUlPvPKvE_4_FUNES6_S8_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE25getCompareConstIteratorFnEvENUlPKvS7_E_4_FUNES7_S7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE22getCopyConstIteratorFnEvENUlPvPKvE_4_FUNES6_S8_"
+    ]
+   },
+   "thread": {
+    "count": 12,
+    "samples": [
+     "_ZN18WwwDownloadSection15setWriterThreadEP7QThread",
+     "_ZN7QObject12moveToThreadEP7QThreadN2Qt15Disambiguated_tE",
+     "_ZN11WwwDownload16setWritersThreadEP7QThread",
+     "pthread_mutex_destroy",
+     "pthread_mutex_lock",
+     "pthread_mutex_unlock",
+     "pthread_mutex_init",
+     "pthread_create"
+    ]
+   },
+   "mirror": {
+    "count": 34,
+    "samples": [
+     "_ZNK27DownloadMirrorsUsageManager27containsMirrorWithoutErrorsEv",
+     "_ZNK27DownloadMirrorsUsageManager13nextMirrorUrlEv",
+     "_ZNK27DownloadMirrorsUsageManager25nextMirrorConnectionCountEv",
+     "_ZN27DownloadMirrorsUsageManagerC2Ev",
+     "_ZN27DownloadMirrorsUsageManagerC1Ev",
+     "_ZN17QArrayDataPointerIN27DownloadMirrorsUsageManager10MirrorInfoEED2Ev",
+     "_ZN17QArrayDataPointerIN27DownloadMirrorsUsageManager10MirrorInfoEED1Ev",
+     "_ZN5QListIN27DownloadMirrorsUsageManager10MirrorInfoEE7reserveEx"
+    ]
+   },
+   "schedule": {
+    "count": 1,
+    "samples": [
+     "_ZN19FileDataAsyncWriter25schedulePreallocateOnOpenEx"
+    ]
+   },
+   "queue": {
+    "count": 1,
+    "samples": [
+     "Unable to allocate memory for listener queue"
+    ]
+   },
+   "priority": {
+    "count": 13,
+    "samples": [
+     "_ZN9QtPrivate24QEqualityOperatorForTypeI24AbstractDownloadPriorityLb1EE6equalsEPKNS_18QMetaTypeInterfaceEPKvS7_",
+     "_ZN9QtPrivate24QLessThanOperatorForTypeI24AbstractDownloadPriorityLb1EE8lessThanEPKNS_18QMetaTypeInterfaceEPKvS7_",
+     "_ZN9QtPrivate26QDataStreamOperatorForTypeI24AbstractDownloadPriorityLb1EE12dataStreamInEPKNS_18QMetaTypeInterfaceER11QDataStreamPv",
+     "_ZN9QtPrivate26QDataStreamOperatorForTypeI24AbstractDownloadPriorityLb1EE13dataStreamOutEPKNS_18QMetaTypeInterfaceER11QDataStreamPKv",
+     "_Z41qRegisterNormalizedMetaTypeImplementationI24AbstractDownloadPriorityEiRK10QByteArray",
+     "_ZN9QtPrivate25QMetaTypeInterfaceWrapperI24AbstractDownloadPriorityE8metaTypeE",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI24AbstractDownloadPriorityE17getLegacyRegisterEvENUlvE_4_FUNEv",
+     "_ZZN11QMetaTypeIdI24AbstractDownloadPriorityE14qt_metatype_idEvE11metatype_id"
+    ]
+   }
+  },
+  "engine_modules": {
+   "downloadswww": {
+    "count": 18,
+    "samples": [
+     "libdownloadswww.so.6",
+     "downloadswww",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,833",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,446",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,733",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,986",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,334",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,345"
+    ]
+   },
+   "vmscl": {
+    "count": 16,
+    "samples": [
+     "libvmsclshared.so.6",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,833",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,446",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,733",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,986",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,334",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,345",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,1683"
+    ]
+   },
+   "fdm": {
+    "count": 21,
+    "samples": [
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,833",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,446",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,733",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,986",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,334",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,345",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownload.cpp,1683",
+     "/home/jenkins/workspace/fdm_qml_ubuntu/src/vmscl/inet/qt/download/downloadswww/wwwdownloader.cpp"
+    ]
+   }
+  },
+  "storage": {
+   "download": {
+    "count": 944,
+    "samples": [
+     "_ZN21AbstractWwwDownloaderC2EP7QObject",
+     "_ZTV21AbstractWwwDownloader",
+     "_ZN21AbstractWwwDownloaderC1EP7QObject",
+     "_ZN21AbstractWwwDownloader7refererERK21WwwDownloadSourceInfo",
+     "_ZN30DownloadGuidFromDownloadSourceC2Ev",
+     "_ZN30DownloadGuidFromDownloadSourceC1Ev",
+     "_ZN30DownloadGuidFromDownloadSource3getERK26AbstractDownloadSourceInfoR20AbstractDownloadGuidRb",
+     "_ZN26AbstractDownloadSourceInfoD2Ev"
+    ]
+   }
+  }
+ },
+ "transfer_vocab_samples": [
+  "%s connect timeout after %ldms, move on!",
+  "%s in chunked-encoding",
+  "%s starting (timeout=%ldms)",
+  "API timeout expired",
+  "Accept timeout occurred while waiting server connect",
+  "Bad fragment",
+  "CONNECT responded chunked",
+  "CONNECT: no content-length or chunked",
+  "Chunk callback failed",
+  "Chunky upload is not supported by HTTP 1.0",
+  "Connection died, retrying a fresh connect (retry count: %d)",
+  "Connection timeout after %ld ms",
+  "Content-Range:",
+  "Content-Range: bytes %s%ld/%ld",
+  "Content-Range: bytes %s/%ld",
+  "Content-Range: bytes 0-%ld/%ld",
+  "Couldn't resume download",
+  "FTP response timeout",
+  "Failed reading the chunked-encoded stream",
+  "Failed to resolve host '%s' with timeout after %ld ms",
+  "HTTP server doesn't seem to support byte ranges. Cannot resume.",
+  "Ignore chunked response-body",
+  "Instructs server to resume from offset %ld",
+  "Leftovers after chunking: %zu bytes",
+  "No fragment part in the URL",
+  "Proxy CONNECT aborted due to timeout",
+  "REFUSED_STREAM, retrying a fresh connect",
+  "Range: %s",
+  "Range: bytes=%s",
+  "Retry-After:",
+  "SSL connection timeout",
+  "SSL shutdown timeout",
+  "Timeout waiting for ECDH_REPLY reply",
+  "Timeout waiting for GEX_GROUP reply",
+  "Timeout waiting for GEX_GROUP reply SHA256",
+  "Timeout waiting for block %d ACK.  Retries = %d",
+  "Timeout waiting for response from SFTP subsystem",
+  "Timeout waiting for status message",
+  "Timeout was reached",
+  "Transfer-Encoding: chunked",
+  "UNSIGNED-PAYLOADchunk hex-length longer than %d",
+  "Unable to resume from offset %ld",
+  "We got a 421 - timeout",
+  "_Unwind_Resume",
+  "_ZN13WwwDownloader9onTimeoutEv",
+  "_ZN17QArrayDataPointerI26AbstractDownloadMirrorInfoED1Ev",
+  "_ZN17QArrayDataPointerI26AbstractDownloadMirrorInfoED2Ev",
+  "_ZN17QArrayDataPointerIN27DownloadMirrorsUsageManager10MirrorInfoEED1Ev",
+  "_ZN17QArrayDataPointerIN27DownloadMirrorsUsageManager10MirrorInfoEED2Ev",
+  "_ZN18WwwDownloadSection10pickMirrorEv",
+  "_ZN18WwwDownloadSection13tryNextMirrorERK13AbstractError",
+  "_ZN18WwwDownloadSection19finishedUsingMirrorERK13AbstractError",
+  "_ZN18WwwDownloadSection19tryNextMirrorOrStopERK13AbstractError",
+  "_ZN18WwwDownloadSection25isPossibleToTryNextMirrorERK13AbstractError",
+  "_ZN27DownloadMirrorsUsageManager10pickMirrorEv",
+  "_ZN27DownloadMirrorsUsageManager10setMirrorsE5QListINS_10MirrorInfoEE",
+  "_ZN27DownloadMirrorsUsageManager10setMirrorsERK5QListI26AbstractDownloadMirrorInfoE",
+  "_ZN27DownloadMirrorsUsageManager11sortMirrorsER5QListINS_10MirrorInfoEEb",
+  "_ZN27DownloadMirrorsUsageManager18forceblyPickMirrorERK26AbstractDownloadSourceInfo",
+  "_ZN27DownloadMirrorsUsageManagerC1Ev"
+ ]
+}

@@ -1,0 +1,251 @@
+{
+ "file": "libdownloadsfragments.so.6.35",
+ "size": 484664,
+ "strings_total": 2037,
+ "keyword_hits": {
+  "http_headers": {
+   "Connection": {
+    "count": 83,
+    "samples": [
+     "_ZZN9QtPrivate16QMetaTypeForTypeI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE13getDefaultCtrEvENUlPKNS_18QMetaTypeInterfaceEPvE_4_FUNES8_S9_",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE10getMoveCtrEvENUlPKNS_18QMetaTypeInterfaceEPvS9_E_4_FUNES8_S9_S9_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE9getSizeFnEvENUlPKvE_4_FUNES7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE20getCompareIteratorFnEvENUlPKvS7_E_4_FUNES7_S7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE17getCopyIteratorFnEvENUlPvPKvE_4_FUNES6_S8_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE25getCompareConstIteratorFnEvENUlPKvS7_E_4_FUNES7_S7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE22getCopyConstIteratorFnEvENUlPvPKvE_4_FUNES6_S8_",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI21QtConnectionsMapEntryE13getDefaultCtrEvENUlPKNS_18QMetaTypeInterfaceEPvE_4_FUNES5_S6_"
+    ]
+   },
+   "Cookie": {
+    "count": 89,
+    "samples": [
+     "_ZN14QNetworkCookieD1Ev",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI5QListI14QNetworkCookieEE13getDefaultCtrEvENUlPKNS_18QMetaTypeInterfaceEPvE_4_FUNES7_S8_",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI5QListI14QNetworkCookieEE10getMoveCtrEvENUlPKNS_18QMetaTypeInterfaceEPvS8_E_4_FUNES7_S8_S8_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QListI14QNetworkCookieEE9getSizeFnEvENUlPKvE_4_FUNES6_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QListI14QNetworkCookieEE20getCompareIteratorFnEvENUlPKvS6_E_4_FUNES6_S6_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QListI14QNetworkCookieEE17getCopyIteratorFnEvENUlPvPKvE_4_FUNES5_S7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QListI14QNetworkCookieEE17getDiffIteratorFnEvENUlPKvS6_E_4_FUNES6_S6_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QListI14QNetworkCookieEE25getCompareConstIteratorFnEvENUlPKvS6_E_4_FUNES6_S6_"
+    ]
+   }
+  },
+  "transfer_core": {
+   "segment": {
+    "count": 32,
+    "samples": [
+     "_ZN29IndependentSegmentsDownloaderC2Ex12QWeakPointerI30AbstractDownloadsSimpleFactoryE14QSharedPointerI27AbstractDownloadsSpeedMeterERKS0_I16QtFfmpegAvMergerEP7QObject",
+     "_ZNK29IndependentSegmentsDownloader9isRunningEv",
+     "_ZN29IndependentSegmentsDownloader18setSegmentsSourcesERK5QListI26AbstractDownloadSourceInfoEbb",
+     "_ZN29IndependentSegmentsDownloaderD2Ev",
+     "_ZN29IndependentSegmentsDownloader11qt_metacastEPKc",
+     "_ZN29IndependentSegmentsDownloader11qt_metacallEN11QMetaObject4CallEiPPv",
+     "_ZTI29IndependentSegmentsDownloader",
+     "_ZN29IndependentSegmentsDownloader18setNetworkSettingsERK31AbstractNetworkConsumerSettings"
+    ]
+   },
+   "fragment": {
+    "count": 47,
+    "samples": [
+     "_ZN17FragmentsDownloadC2Ex12QWeakPointerI30AbstractDownloadsSimpleFactoryERKS0_I16QtFfmpegAvMergerEP7QObject",
+     "_ZTV17FragmentsDownload",
+     "_ZN17FragmentsDownloadC1Ex12QWeakPointerI30AbstractDownloadsSimpleFactoryERKS0_I16QtFfmpegAvMergerEP7QObject",
+     "_ZN17FragmentsDownload10adjustInfoER30AbstractDownloadPersistentInfo",
+     "_ZN17FragmentsDownload11setInitDataERK8QVariant",
+     "_ZNK23FragmentDownloadsModule15supportedSourceERK4QUrl",
+     "_ZN23FragmentDownloadsModule28supportedSourceCheckPriorityEv",
+     "_ZNK23FragmentDownloadsModule8uniqueIdEv"
+    ]
+   },
+   "part": {
+    "count": 1,
+    "samples": [
+     "_ZNK22AbstractDownloadModule19thirdPartyLibsInfosEv"
+    ]
+   },
+   "resume": {
+    "count": 3,
+    "samples": [
+     "_Unwind_Resume",
+     "resumeData",
+     "resumeSupport"
+    ]
+   },
+   "restart": {
+    "count": 1,
+    "samples": [
+     "restart"
+    ]
+   },
+   "retry": {
+    "count": 14,
+    "samples": [
+     "_ZN5QHashI31DownloadErrorAllowedToAutoRetry15QHashDummyValueED2Ev",
+     "_ZN5QHashI31DownloadErrorAllowedToAutoRetry15QHashDummyValueED1Ev",
+     "_ZN12QHashPrivate4DataINS_4NodeI31DownloadErrorAllowedToAutoRetry15QHashDummyValueEEED2Ev",
+     "_ZN12QHashPrivate4DataINS_4NodeI31DownloadErrorAllowedToAutoRetry15QHashDummyValueEEED1Ev",
+     "_ZN12QHashPrivate4DataINS_4NodeI31DownloadErrorAllowedToAutoRetry15QHashDummyValueEEE6rehashEm",
+     "_ZN12QHashPrivate4DataINS_4NodeI31DownloadErrorAllowedToAutoRetry15QHashDummyValueEEEC2ERKS5_m",
+     "_ZN12QHashPrivate4DataINS_4NodeI31DownloadErrorAllowedToAutoRetry15QHashDummyValueEEEC1ERKS5_m",
+     "_ZN12QHashPrivate4DataINS_4NodeI31DownloadErrorAllowedToAutoRetry15QHashDummyValueEEE8detachedEPS5_"
+    ]
+   },
+   "speed": {
+    "count": 6,
+    "samples": [
+     "_ZN29IndependentSegmentsDownloaderC2Ex12QWeakPointerI30AbstractDownloadsSimpleFactoryE14QSharedPointerI27AbstractDownloadsSpeedMeterERKS0_I16QtFfmpegAvMergerEP7QObject",
+     "_ZNK29IndependentSegmentsDownloader5speedE23NetworkTrafficDirectionb",
+     "downloadSpeed",
+     "uploadSpeed",
+     "payloadDownloadSpeed",
+     "payloadUploadSpeed"
+    ]
+   },
+   "connection": {
+    "count": 83,
+    "samples": [
+     "_ZZN9QtPrivate16QMetaTypeForTypeI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE13getDefaultCtrEvENUlPKNS_18QMetaTypeInterfaceEPvE_4_FUNES8_S9_",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE10getMoveCtrEvENUlPKNS_18QMetaTypeInterfaceEPvS9_E_4_FUNES8_S9_S9_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE9getSizeFnEvENUlPKvE_4_FUNES7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE20getCompareIteratorFnEvENUlPKvS7_E_4_FUNES7_S7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE17getCopyIteratorFnEvENUlPvPKvE_4_FUNES6_S8_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE25getCompareConstIteratorFnEvENUlPKvS7_E_4_FUNES7_S7_",
+     "_ZZN22QtMetaContainerPrivate26QMetaContainerForContainerI5QHashI13QtHostAndPort21QtConnectionsMapEntryEE22getCopyConstIteratorFnEvENUlPvPKvE_4_FUNES6_S8_",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI21QtConnectionsMapEntryE13getDefaultCtrEvENUlPKNS_18QMetaTypeInterfaceEPvE_4_FUNES5_S6_"
+    ]
+   },
+   "thread": {
+    "count": 1,
+    "samples": [
+     "_ZN29IndependentSegmentsDownloader16setWritersThreadEP7QThread"
+    ]
+   },
+   "mirror": {
+    "count": 12,
+    "samples": [
+     "_ZN17QArrayDataPointerI26AbstractDownloadMirrorInfoED2Ev",
+     "_ZN17QArrayDataPointerI26AbstractDownloadMirrorInfoED1Ev",
+     "_ZN5QListI26AbstractDownloadMirrorInfoE7reserveEx",
+     "_Z16toDownloadMirrorRK8QVariant",
+     "_Z9toVariantRK26AbstractDownloadMirrorInfo",
+     "_Z9toVariantRK5QListI26AbstractDownloadMirrorInfoE",
+     "_ZN17QArrayDataPointerI26AbstractDownloadMirrorInfoE17reallocateAndGrowEN10QArrayData14GrowthPositionExPS1_",
+     "_ZN9QtPrivate30q_relocate_overlap_n_left_moveIP26AbstractDownloadMirrorInfoxEEvT_T0_S3_"
+    ]
+   },
+   "schedule": {
+    "count": 2,
+    "samples": [
+     "_Z24toDownloadScheduleRecordRK5QHashI7QString8QVariantE",
+     "_Z13toVariantHashRK30AbstractDownloadScheduleRecord"
+    ]
+   },
+   "priority": {
+    "count": 14,
+    "samples": [
+     "_ZN23FragmentDownloadsModule28supportedSourceCheckPriorityEv",
+     "_ZN9QtPrivate24QEqualityOperatorForTypeI24AbstractDownloadPriorityLb1EE6equalsEPKNS_18QMetaTypeInterfaceEPKvS7_",
+     "_ZN9QtPrivate24QLessThanOperatorForTypeI24AbstractDownloadPriorityLb1EE8lessThanEPKNS_18QMetaTypeInterfaceEPKvS7_",
+     "_ZN9QtPrivate26QDataStreamOperatorForTypeI24AbstractDownloadPriorityLb1EE12dataStreamInEPKNS_18QMetaTypeInterfaceER11QDataStreamPv",
+     "_ZN9QtPrivate26QDataStreamOperatorForTypeI24AbstractDownloadPriorityLb1EE13dataStreamOutEPKNS_18QMetaTypeInterfaceER11QDataStreamPKv",
+     "_Z41qRegisterNormalizedMetaTypeImplementationI24AbstractDownloadPriorityEiRK10QByteArray",
+     "_ZN9QtPrivate25QMetaTypeInterfaceWrapperI24AbstractDownloadPriorityE8metaTypeE",
+     "_ZZN9QtPrivate16QMetaTypeForTypeI24AbstractDownloadPriorityE17getLegacyRegisterEvENUlvE_4_FUNEv"
+    ]
+   }
+  },
+  "engine_modules": {
+   "downloadsfragments": {
+    "count": 2,
+    "samples": [
+     "libdownloadsfragments.so.6",
+     "downloadsfragments"
+    ]
+   },
+   "vmscl": {
+    "count": 1,
+    "samples": [
+     "libvmsclshared.so.6"
+    ]
+   }
+  },
+  "storage": {
+   "download": {
+    "count": 609,
+    "samples": [
+     "_ZN17FragmentsDownloadC2Ex12QWeakPointerI30AbstractDownloadsSimpleFactoryERKS0_I16QtFfmpegAvMergerEP7QObject",
+     "_ZN29IndependentSegmentsDownloaderC2Ex12QWeakPointerI30AbstractDownloadsSimpleFactoryE14QSharedPointerI27AbstractDownloadsSpeedMeterERKS0_I16QtFfmpegAvMergerEP7QObject",
+     "_ZTV17FragmentsDownload",
+     "_ZN17FragmentsDownloadC1Ex12QWeakPointerI30AbstractDownloadsSimpleFactoryERKS0_I16QtFfmpegAvMergerEP7QObject",
+     "_ZN17FragmentsDownload10adjustInfoER30AbstractDownloadPersistentInfo",
+     "_ZN26AbstractDownloadSourceInfoD2Ev",
+     "_ZN26AbstractDownloadSourceInfoD1Ev",
+     "_ZN17QArrayDataPointerI26AbstractDownloadSourceInfoED2Ev"
+    ]
+   }
+  }
+ },
+ "transfer_vocab_samples": [
+  "17FragmentsDownload",
+  "23FragmentDownloadsModule",
+  "35AbstractDownloadModuleStandardEntryI23FragmentDownloadsModuleE",
+  "FragmentsDownload",
+  "_Unwind_Resume",
+  "_Z16toDownloadMirrorRK8QVariant",
+  "_Z17toDownloadMirrorsRK8QVariant",
+  "_Z33toDownloadErrorAllowedToAutoRetryRK8QVariant",
+  "_Z35toDownloadsErrorsAllowedToAutoRetryRK8QVariant",
+  "_Z9toVariantRK26AbstractDownloadMirrorInfo",
+  "_Z9toVariantRK31DownloadErrorAllowedToAutoRetry",
+  "_Z9toVariantRK4QSetI31DownloadErrorAllowedToAutoRetryE",
+  "_Z9toVariantRK5QListI26AbstractDownloadMirrorInfoE",
+  "_ZN12QHashPrivate4DataINS_4NodeI31DownloadErrorAllowedToAutoRetry15QHashDummyValueEEE6rehashEm",
+  "_ZN12QHashPrivate4DataINS_4NodeI31DownloadErrorAllowedToAutoRetry15QHashDummyValueEEE8detachedEPS5_",
+  "_ZN12QHashPrivate4DataINS_4NodeI31DownloadErrorAllowedToAutoRetry15QHashDummyValueEEEC1ERKS5_m",
+  "_ZN12QHashPrivate4DataINS_4NodeI31DownloadErrorAllowedToAutoRetry15QHashDummyValueEEEC2ERKS5_m",
+  "_ZN12QHashPrivate4DataINS_4NodeI31DownloadErrorAllowedToAutoRetry15QHashDummyValueEEED1Ev",
+  "_ZN12QHashPrivate4DataINS_4NodeI31DownloadErrorAllowedToAutoRetry15QHashDummyValueEEED2Ev",
+  "_ZN17FragmentsDownload10adjustInfoER30AbstractDownloadPersistentInfo",
+  "_ZN17FragmentsDownload11qt_metacallEN11QMetaObject4CallEiPPv",
+  "_ZN17FragmentsDownload11qt_metacastEPKc",
+  "_ZN17FragmentsDownload11setInitDataERK8QVariant",
+  "_ZN17FragmentsDownload16staticMetaObjectE",
+  "_ZN17FragmentsDownloadD0Ev",
+  "_ZN17FragmentsDownloadD1Ev",
+  "_ZN17FragmentsDownloadD2Ev",
+  "_ZN17QArrayDataPointerI26AbstractDownloadMirrorInfoED1Ev",
+  "_ZN17QArrayDataPointerI26AbstractDownloadMirrorInfoED2Ev",
+  "_ZN23FragmentDownloadsModule28supportedSourceCheckPriorityEv",
+  "_ZN23FragmentDownloadsModuleC1ERK10QByteArrayP7QObject",
+  "_ZN23FragmentDownloadsModuleC2ERK10QByteArrayP7QObject",
+  "_ZN23FragmentDownloadsModuleD0Ev",
+  "_ZN23FragmentDownloadsModuleD1Ev",
+  "_ZN23FragmentDownloadsModuleD2Ev",
+  "_ZN29IndependentSegmentsDownloader11qt_metacallEN11QMetaObject4CallEiPPv",
+  "_ZN29IndependentSegmentsDownloader11qt_metacastEPKc",
+  "_ZN29IndependentSegmentsDownloader11setSettingsERK24AbstractDownloadSettings",
+  "_ZN29IndependentSegmentsDownloader14clearLastErrorEv",
+  "_ZN29IndependentSegmentsDownloader16fileExistsActionEi32AbstractDownloadFileExistsAction",
+  "_ZN29IndependentSegmentsDownloader16setWritersThreadEP7QThread",
+  "_ZN29IndependentSegmentsDownloader16staticMetaObjectE",
+  "_ZN29IndependentSegmentsDownloader18setNetworkSettingsERK31AbstractNetworkConsumerSettings",
+  "_ZN29IndependentSegmentsDownloader18setSegmentsSourcesERK5QListI26AbstractDownloadSourceInfoEbb",
+  "_ZN29IndependentSegmentsDownloader23setNetworkUsageSettingsERK20NetworkUsageSettings",
+  "_ZN29IndependentSegmentsDownloader7setInfoERK30AbstractDownloadPersistentInfo",
+  "_ZN29IndependentSegmentsDownloader9doCommandE23AbstractDownloadCommand",
+  "_ZN29IndependentSegmentsDownloaderD2Ev",
+  "_ZN35AbstractDownloadModuleStandardEntryI23FragmentDownloadsModuleED0Ev",
+  "_ZN35AbstractDownloadModuleStandardEntryI23FragmentDownloadsModuleED1Ev",
+  "_ZN35AbstractDownloadModuleStandardEntryI23FragmentDownloadsModuleED2Ev",
+  "_ZN5QHashI31DownloadErrorAllowedToAutoRetry15QHashDummyValueED1Ev",
+  "_ZN5QHashI31DownloadErrorAllowedToAutoRetry15QHashDummyValueED2Ev",
+  "_ZN5QListI26AbstractDownloadMirrorInfoE7reserveEx",
+  "_ZN9QtPrivate16QGenericArrayOpsI26AbstractDownloadMirrorInfoE7emplaceIJS1_EEEvxDpOT_",
+  "_ZN9QtPrivate16QMetaTypeForTypeI17FragmentsDownloadE4nameE",
+  "_ZN9QtPrivate25QMetaTypeInterfaceWrapperI17FragmentsDownloadE8metaTypeE",
+  "_ZN9QtPrivate30q_relocate_overlap_n_left_moveIP26AbstractDownloadMirrorInfoxEEvT_T0_S3_",
+  "_ZNK17FragmentsDownload10metaObjectEv",
+  "_ZNK23FragmentDownloadsModule14createDownloadExP7QObject"
+ ]
+}

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Pre-commit gate: no credentials ever enter history.
+if git diff --cached -U0 | grep -Eq 'github_pat_[A-Za-z0-9_]{20,}' 2>/dev/null; then
+  echo "BLOCKED: GitHub token pattern found in staged changes"; exit 1
+fi
+if git diff --cached -U0 | grep -Eq -- '-----BEGIN [A-Z ]*PRIVATE KEY-----' 2>/dev/null; then
+  echo "BLOCKED: private key material in staged changes"; exit 1
+fi
+TOK=$(cat .secrets/gh_token 2>/dev/null || true)
+if [ -n "$TOK" ] && git diff --cached -U0 | grep -Fq "$TOK" 2>/dev/null; then
+  echo "BLOCKED: the live access token appears in staged changes"; exit 1
+fi
+exit 0
