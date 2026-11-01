@@ -177,13 +177,13 @@ pub trait TransferAdapter: Send + Sync {
         progress: &ProgressReporter,
     ) -> Result<ChunkConfirm, AdapterError>;
 
-    /// End-of-job integrity gate (pattern #10). Default: pass.
-    async fn verify(&self, _spec: &JobSpec) -> Result<VerifyReport, AdapterError> {
-        Ok(VerifyReport {
-            ok: true,
-            detail: None,
-        })
-    }
+    /// End-of-job integrity gate (pattern #10, ADR-004). **Required, no
+    /// default** — verify-before-declare is not opt-in. An adapter that
+    /// cannot truly verify (e.g. a protocol without server-side metadata)
+    /// must still implement this and say so honestly, e.g. via
+    /// `VerifyReport { ok, detail }` after a protocol-appropriate probe;
+    /// see `HttpOneShotAdapter` for the reference implementation.
+    async fn verify(&self, spec: &JobSpec) -> Result<VerifyReport, AdapterError>;
 }
 
 /// Registry — the plugin point community contributors use to add protocols
@@ -244,6 +244,15 @@ mod tests {
                 idx: lease.idx,
                 bytes_confirmed: span,
                 adapter_token: None,
+            })
+        }
+        // Required since issue #1: verify is not opt-in. This double talks to
+        // no real endpoint, so it states that honestly instead of inheriting
+        // a silent pass.
+        async fn verify(&self, _spec: &JobSpec) -> Result<VerifyReport, AdapterError> {
+            Ok(VerifyReport {
+                ok: true,
+                detail: Some("test double: no real endpoint to verify against".into()),
             })
         }
     }
