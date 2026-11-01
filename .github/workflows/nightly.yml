@@ -1,0 +1,54 @@
+name: nightly
+
+# Nightly deep checks (issue #4) — cost nothing in PR latency, catch rare
+# lease/partial-confirm interleavings the cheap 25x400 suite pass cannot
+# afford. GitHub disables scheduled workflows after ~60 days without repo
+# activity; workflow_dispatch is the manual revive-and-prove path (it is
+# also how this definition was first verified end to end).
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # daily 03:00 UTC — off-peak for every region we ship to
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  # The chunk-pool invariant fuzz at 16x suite volume. Env-gated inside the
+  # test (IUM_FUZZ_ROUNDS / IUM_FUZZ_OPS), so this file carries no test-code
+  # duplication. Proven to ring: a planted off-by-one in complete() failed
+  # the expanded run instantly (mutation evidence on issue #4).
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Expanded chunk-pool invariant fuzz (release)
+        env:
+          IUM_FUZZ_ROUNDS: "400"
+          IUM_FUZZ_OPS: "2000"
+        run: cargo test -p ium-core --release --lib fuzz_random_operations_never_break_invariants -- --nocapture
+
+  # Line/region coverage for the engine, uploaded as an HTML artifact on
+  # every run. Artifact-only by design: private repo, no third-party
+  # service, no extra token surface. Local baseline: 90.78% regions.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Coverage report (ium-core)
+        run: cargo llvm-cov -p ium-core --html --output-dir coverage
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ium-core-coverage
+          path: coverage/

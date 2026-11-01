@@ -508,6 +508,17 @@ mod tests {
     /// bytes through every eviction.
     #[test]
     fn fuzz_random_operations_never_break_invariants() {
+        // Env-gated for the nightly CI run (issue #4): IUM_FUZZ_ROUNDS /
+        // IUM_FUZZ_OPS expand the run without touching the test; the suite
+        // defaults (25 x 400) keep PR latency unchanged.
+        let rounds: u64 = std::env::var("IUM_FUZZ_ROUNDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(25);
+        let ops: u64 = std::env::var("IUM_FUZZ_OPS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(400);
         let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
         let mut next = move |m: u64| {
             seed ^= seed << 13;
@@ -516,14 +527,14 @@ mod tests {
             (seed >> 11) % m.max(1)
         };
 
-        for round in 0..25u64 {
+        for round in 0..rounds {
             let total = CHUNK_MIN * (1 + next(12));
             let mut pool = ChunkPool::new(total, (1 + next(6)) as u32);
             let workers = ["w1", "w2", "w3"];
             // worker -> leased idx (single lease per worker keeps the fuzz simple)
             let mut held: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
 
-            for _ in 0..400 {
+            for _ in 0..ops {
                 assert_cover_invariant(&pool);
                 match next(10) {
                     0..=4 => {

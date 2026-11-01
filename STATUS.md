@@ -41,21 +41,20 @@ the Tauri/React shell (`ium-app/`) is **frozen** until M2+M3 (ADR-006).
 | 2026-11-02 | **Issue #1 closed** the new way: design note + RED evidence on the issue, compile-fail contract test (trybuild), then fix. `verify` is now a required trait method — verify-before-declare cannot be silently inherited (ADR-004 fully enforced) | 55/55 gates green, [issue comment](https://github.com/kahlanhamza/IUM/issues/1#issuecomment-6563392514) |
 | 2026-11-02 | **Defect #11 caught & fixed**: pushed HEAD `99ed179` was RED on CI — `d62094a` shipped the trybuild contract test but forgot to stage the `ium-core/Cargo.toml` dev-dependency; local gates had run on the working tree. Fix staged properly; permanent fix: `scripts/gate.sh` now gates the **committed tree** in a detached worktree | RED: E0433 reproduced on `99ed179` + CI failure confirmed via API; GREEN: gate.sh 55/55 on committed tree |
 | 2026-11-02 | **Issue #2 closed** the new way: design note on the issue (0-rows legality table) + RED evidence (silent `Ok(())` on a corrupted journal) + fix `JournalError::ChunksMissing` rows-affected check, test pinned to the variant. Design note surfaced the planless-job hole → filed as #5 instead of scope-creeping | 56/56 gates green; #2 auto-closed by commit |
+| 2026-11-02 | **Issue #4 closed**: fuzz is env-gated (`IUM_FUZZ_ROUNDS`/`IUM_FUZZ_OPS`), nightly workflow runs it at 400×2000 release + uploads an HTML coverage artifact (cargo-llvm-cov). Alarm proven by mutation: planted `complete()` off-by-one failed the expanded fuzz instantly; reverted, gates re-green. Local coverage baseline 90.78% regions / 93.55% lines | nightly.yml live; dispatch-verified (see issue #4) |
 
 ## 3. In progress
 
-Nothing — issue #2 closed the same session it was picked up. Next: #4 (§4).
+Nothing — issue #4 closed. Next: #5 (planless-job invariant), then #3.
 
 ## 4. Backlog / next (ordered — milestone [M2: Hardening & Honesty](https://github.com/kahlanhamza/IUM/milestone/1))
 
-1. **#4 — ci: nightly fuzz** — run the chunk-pool invariant fuzz (`chunk.rs:510`) with
-   expanded rounds on a schedule; add coverage report.
-2. **#5 — engine/journal: pin the invariant "every committed job has ≥1 chunk"** — found
+1. **#5 — engine/journal: pin the invariant "every committed job has ≥1 chunk"** — found
    during the #2 design note: `plan(0)` returns an empty plan (0-byte file ⇒ planless job);
    collapsing it makes #2's one special case go away.
-3. **#3 — tests: `MockAdapter` should also log at entry** — same observability gap that bit
+2. **#3 — tests: `MockAdapter` should also log at entry** — same observability gap that bit
    the stall test exists in the older mock (fixed only in `ScriptedAdapter`).
-4. M3 spike: S3 multipart against MinIO in CI (design note + issue breakdown).
+3. M3 spike: S3 multipart against MinIO in CI (design note + issue breakdown).
 
 ## 5. Defect audit trail
 
@@ -87,11 +86,13 @@ proved nothing about the committed tree; `gate.sh` closes that hole by construct
 
 ## 6. Tools — used / needed
 
-**Used now:** git; Rust stable 1.99.1 (rustup minimal profile, persisted in `.toolchain/`,
-activated via `scripts/rust-env.sh`); cargo fmt/clippy/test; **`scripts/gate.sh` (committed-tree
-gate: detached-worktree fmt+clippy+test, refuses dirty trees)**; GitHub Actions CI (3-OS matrix);
-GitHub REST API via PAT (issues/milestones/actions — `scripts/gh_issues.py`, curl); Python 3 for
-repo scripts; tokio dev-dependencies: tempfile, async-trait, serde_json, trybuild.
+**Used now:** git; Rust stable 1.99.1 (rustup minimal profile + rustfmt/clippy, persisted in
+`.toolchain/`, activated via `scripts/rust-env.sh`); cargo fmt/clippy/test; **cargo-llvm-cov
+0.9.1 (coverage, nightly job)**; **`scripts/gate.sh` (committed-tree gate: detached-worktree
+fmt+clippy+test, refuses dirty trees)**; GitHub Actions CI (3-OS matrix) + nightly (fuzz +
+coverage, dispatch-verified); GitHub REST API via PAT (issues/milestones/actions —
+`scripts/gh_issues.py`, curl); Python 3 for repo scripts; tokio dev-dependencies: tempfile,
+async-trait, serde_json, trybuild.
 
 **Needed later:** MinIO container for S3-multipart tests (M3, via CI services or docker);
 a TUS test server (M3); Tauri CLI + Node 20 (M4 — frozen). MCP servers are not installable in
@@ -141,7 +142,8 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-02 | Issue #1 via the full loop (design note → red → fix → green → close) | verify now required; trybuild contract test; 55/55 | see git log |
 | 2026-11-02 | **Defect #11**: audit caught pushed HEAD `99ed179` red on CI (unstaged trybuild dep); RED reproduced locally, fix committed properly | pushed tree now compiles: 55/55 | `6423227` |
 | 2026-11-02 | Process hardening: `scripts/gate.sh` — gates run on the committed tree (detached worktree), dirty tree refused; process doc + DoD updated | gate.sh GREEN on committed tree; this STATUS row is the record | `ca3b3eb` |
-| 2026-11-02 | Issue #2 via the full loop (design note → RED → fix → GREEN); follow-up #5 filed; toolchain installer now ships rustfmt+clippy (recycle gap) | 56/56 gates green on committed tree; #2 closed | see git log |
+| 2026-11-02 | Issue #2 via the full loop (design note → RED → fix → GREEN); follow-up #5 filed; toolchain installer now ships rustfmt+clippy (recycle gap) | 56/56 gates green on committed tree; #2 closed | `b29b8e9` + `cae3be5` |
+| 2026-11-02 | Issue #4 via the full loop (design note → mutation-RED → revert → workflow → dispatch-verified) | nightly fuzz 400×2000 + coverage artifact; alarm proven to ring; 56/56 | see git log |
 
 ## 10. Security
 
