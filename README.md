@@ -3,7 +3,7 @@
 > The missing desktop twin of IDM/aria2/Motrix/FDM — for **uploads**.
 > Resumable, segmented, multi-protocol uploads that survive slow networks, sleep, crashes and reboots.
 
-**Status:** Sprint 0 shipped — `ium-core` live (22 unit + 8 integration tests, clippy-clean, 3-OS CI) · Tauri shell scaffolded · **Repo:** private during bootstrap
+**Status:** Sprint 0 (engine-first) shipped — `ium-core` hardened: **45 tests green** (28 unit + 13 integration + 4 loopback-HTTP end-to-end), fmt + clippy clean at `-D warnings`, 3-OS CI · Real `HttpOneShotAdapter` streams bytes over the wire · Tauri shell parked until the engine ground is complete · **Repo:** private during bootstrap
 
 ## Why
 
@@ -19,20 +19,29 @@ physically cannot resume (`Resumable ✅ / One-shot ⚠️`).
 Cargo.toml               cargo workspace (ium-core; ium-app joins on desktop)
 ium-core/src/
   chunk.rs               chunk algebra: plan/lease/evict/resplit/tail-race (patterns #1,2,3,9)
+                         + invariant fuzz test (10k+ random ops, coverage never breaks)
   state.rs               supervisor state machine (pattern #5)
   journal.rs             SQLite WAL session store: jobs/chunks/events (pattern #6)
+                         + versioned migrations (PRAGMA user_version) + atomic inserts
   adapter.rs             TransferAdapter trait + Capability flags + registry (pattern #7)
-  manager.rs             JobManager facade: journaled transitions, verify-before-declare (#10)
+  adapter_http.rs        HttpOneShotAdapter: streaming PUT from disk (rustls),
+                         Retry-After, ETag capture, HEAD verify-before-declare (#10)
+  manager.rs             JobManager facade: journal-validated transitions, single-driver
+                         guard, crash recovery from any journaled state, partial-confirm resume
   retry.rs               per-error-class policy table (pattern #9)
   ids.rs                 ULID-shaped job ids
-  tests/integration.rs   mock-adapter drills: run/pause/resume/replay/one-shot/retry
-ium-app/                 Tauri 2 + React shell (source scaffold; desktop builds it)
+  tests/integration.rs   disk-backed drills: resume, retry-exhaustion, pause, crash recovery,
+                         stale-lease reclaim, double-run guard
+  tests/http_one_shot.rs REAL loopback TCP server (chunked-encoding decode): happy path,
+                         500-exhaustion, 429+Retry-After, lying-server verify gate
+ium-app/                 Tauri 2 + React shell (source scaffold; parked — engine comes first)
   src/api.ts             typed IPC contract (command mirrors)
   src-tauri/             commands: engine_status/create_job/list_jobs/snapshot/pause/resume
 .github/workflows/ci.yml  fmt + clippy + tests on ubuntu/macos/windows
 docs/
   01_Architecture_Teardown_v2.md   ← REA study: aria2, XDM, Motrix, FDM 6.35, IDM 6.43
   02_IUM_MVP_Spec_v1.md            ← stack decision, architecture, data model, roadmap
+  03_Sprint0_Engine_Record.md      ← audit findings: 7 real bugs found & fixed, with tests
 rea-lab/
   out/                             ← evidence dossiers + raw scans (committed)
   targets/                         ← acquired binaries (gitignored — not redistributable)
@@ -44,16 +53,16 @@ scripts/
   gh-push.sh                       ← token-handling push helper (token never in repo)
 ```
 
-## Build (desktop)
+## Build (engine first — this is the product right now)
 
 ```bash
 # engine only (works anywhere with rustup stable)
 cargo test -p ium-core
+cargo clippy -p ium-core --all-targets -- -D warnings
 
-# desktop shell (needs WebKitGTK on Linux / Xcode / MSVC)
-cd ium-app && pnpm install
-pnpm tauri icon path/to/icon.png   # once, before first bundle
-pnpm tauri dev
+# desktop shell (parked until the engine ground is solid)
+cd ium-app && npm install
+npm run tauri dev
 ```
 
 ## Method (clean-room REA)

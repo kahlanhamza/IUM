@@ -229,9 +229,24 @@ impl ChunkPool {
 
     /// Re-plan pending chunks around a target size (dynamic resizing, pattern #9):
     /// split oversized pending chunks, merge undersized adjacent ones.
-    /// Leased/uploaded chunks are never touched.
+    /// Uploaded/verified chunks are never touched.
+    ///
+    /// A resplit is a supervision-level decision: outstanding in-memory leases
+    /// are retired and leased chunks return to `Pending` KEEPING their
+    /// confirmed bytes (the next lease resumes from `resume_from`). Leaving
+    /// them `Leased` with a dead worker would strand the pool — caught by the
+    /// invariant fuzz.
     pub fn resplit_pending(&mut self, target: u64, chunk_min: u64) {
         let target = target.clamp(chunk_min, CHUNK_MAX.max(chunk_min));
+
+        // 0. Retire in-flight leases: leased chunks rejoin the pool (keeping
+        //    their confirmed bytes) because their lease identity dies here.
+        for c in self.chunks.iter_mut() {
+            if c.state == ChunkState::Leased {
+                c.state = ChunkState::Pending;
+            }
+        }
+        self.leases.clear();
 
         // 1. Split oversized pending chunks.
         let mut next_idx = self.chunks.len() as u32;
@@ -295,6 +310,10 @@ impl ChunkPool {
         for (i, c) in merged.iter_mut().enumerate() {
             c.idx = i as u32;
         }
+        // Renumbering invalidates every in-memory lease index: a lease held on
+        // old idx N would now "protect" an unrelated chunk (found by the
+        // invariant fuzz). Callers re-lease from the rebuilt pool.
+        self.leases.clear();
         self.chunks = merged;
     }
 
@@ -481,5 +500,110 @@ mod tests {
             ChunkPool::suggested_chunk_size(1024.0 * 1024.0, CHUNK_MIN),
             30 * 1024 * 1024
         );
+    }
+
+    /// Deterministic LCG fuzz: thousands of random lease/confirm/evict/
+    /// complete/resplit sequences must never break the pool invariants —
+    /// exact coverage of [0, total), confirmed ≤ len, and conservation of
+    /// bytes through every eviction.
+    #[test]
+    fn fuzz_random_operations_never_break_invariants() {
+        let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = move |m: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) % m.max(1)
+        };
+
+        for round in 0..25u64 {
+            let total = CHUNK_MIN * (1 + next(12));
+            let mut pool = ChunkPool::new(total, (1 + next(6)) as u32);
+            let workers = ["w1", "w2", "w3"];
+            // worker -> leased idx (single lease per worker keeps the fuzz simple)
+            let mut held: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+
+            for _ in 0..400 {
+                assert_cover_invariant(&pool);
+                match next(10) {
+                    0..=4 => {
+                        let w = workers[next(3) as usize];
+                        if held.contains_key(w) {
+                            continue;
+                        }
+                        if let Some(l) = pool.lease(w) {
+                            held.insert(w, l.idx);
+                        }
+                    }
+                    5 => {
+                        // confirm a random prefix of a held chunk
+                        let ws: Vec<&str> = held.keys().copied().collect();
+                        if ws.is_empty() {
+                            continue;
+                        }
+                        let w = ws[next(ws.len() as u64) as usize];
+                        let idx = held[w];
+                        let len = pool.chunks()[idx as usize].len();
+                        pool.report_confirmed(idx, next(len + 1));
+                    }
+                    6 => {
+                        // evict a random holder
+                        let ws: Vec<&str> = held.keys().copied().collect();
+                        if ws.is_empty() {
+                            continue;
+                        }
+                        let w = ws[next(ws.len() as u64) as usize];
+                        let idx = held.remove(&w).unwrap();
+                        pool.evict(idx, w);
+                    }
+                    7 => {
+                        // complete a random holder (server acked everything)
+                        let ws: Vec<&str> = held.keys().copied().collect();
+                        if ws.is_empty() {
+                            continue;
+                        }
+                        let w = ws[next(ws.len() as u64) as usize];
+                        let idx = held.remove(&w).unwrap();
+                        pool.complete(idx);
+                    }
+                    8 => {
+                        pool.resplit_pending(CHUNK_MIN * (1 + next(4)), CHUNK_MIN);
+                        // resplit renumbers; live leases keep ranges but idx may
+                        // drift — drop our tracking, the pool is self-consistent
+                        held.clear();
+                    }
+                    _ => {
+                        // journal round-trip: persist + rebuild must be lossless
+                        let rows = pool.rows();
+                        let rebuilt = ChunkPool::from_rows(pool.total_len(), rows);
+                        assert_cover_invariant(&rebuilt);
+                        assert_eq!(
+                            rebuilt.remaining_unconfirmed(),
+                            pool.remaining_unconfirmed()
+                        );
+                        pool = rebuilt;
+                    }
+                }
+            }
+
+            // drain: evict everyone, then single-worker to completion
+            for (w, idx) in held.drain() {
+                pool.evict(idx, w);
+            }
+            while !pool.all_uploaded() {
+                assert_cover_invariant(&pool);
+                let Some(l) = pool.lease("drain") else {
+                    pool.resplit_pending(CHUNK_MIN, CHUNK_MIN);
+                    let before = pool.remaining_unconfirmed();
+                    let Some(l) = pool.lease("drain") else {
+                        panic!("round {round}: pool wedged with {} bytes left", before);
+                    };
+                    pool.complete(l.idx);
+                    continue;
+                };
+                pool.complete(l.idx);
+            }
+            assert_eq!(pool.remaining_unconfirmed(), 0);
+        }
     }
 }

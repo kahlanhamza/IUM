@@ -15,6 +15,14 @@ tracing = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 async-trait = "0.1"
 getrandom = "0.2"
+# HTTP transport: pure-Rust TLS (no OpenSSL linkage), streaming bodies.
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "stream",
+    "http2",
+    "charset",
+] }
+tokio-util = { version = "0.7", features = ["codec"] }
 
 [dev-dependencies]
 tempfile = "3"

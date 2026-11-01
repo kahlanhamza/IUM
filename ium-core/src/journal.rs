@@ -3,6 +3,14 @@
 //!
 //! Rule: the journal is the single source of truth. `bytes_confirmed` written
 //! here must come from a server acknowledgment, never from client optimism.
+//!
+//! Durability mechanics:
+//! * WAL + `synchronous=NORMAL` — commits survive process crash (power-loss
+//!   safety is `FULL`; NORMAL is the standard trade-off for UI apps and what
+//!   every download manager we studied actually ships).
+//! * Schema migrations are versioned with `PRAGMA user_version` and applied
+//!   inside a transaction: a crash mid-migration rolls back, and reopening
+//!   replays only the migrations that never landed.
 
 use rusqlite::{params, Connection};
 use std::path::Path;
@@ -10,8 +18,10 @@ use std::path::Path;
 use crate::chunk::ChunkState;
 use crate::state::JobState;
 
+/// Ordered schema migrations. `MIGRATIONS[i]` brings the journal from
+/// version `i` to version `i + 1`. Never edit an entry — append new ones.
 const MIGRATIONS: &[&str] = &[
-    // v1 — spec §6
+    // v1 — spec §6: jobs / chunks / events
     "CREATE TABLE IF NOT EXISTS meta (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -59,6 +69,12 @@ pub enum JournalError {
     Sqlite(#[from] rusqlite::Error),
     #[error("job {0} already exists")]
     DuplicateJob(String),
+    #[error("job {0} not found in journal")]
+    UnknownJob(String),
+    #[error("job {0}: chunk {1} not found in journal")]
+    UnknownChunk(String, u32),
+    #[error("job {0} already has chunks")]
+    ChunksExist(String),
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -84,6 +100,17 @@ pub struct ChunkRow {
     pub adapter_token: Option<String>,
 }
 
+/// Flat, borrow-heavy description of a job row to insert.
+pub struct NewJob<'a> {
+    pub id: &'a str,
+    pub source_path: &'a str,
+    pub source_size: u64,
+    pub adapter: &'a str,
+    pub endpoint: &'a str,
+    pub capability_badge: &'a str,
+    pub chunks: &'a [ChunkRow],
+}
+
 pub struct SessionJournal {
     conn: Connection,
 }
@@ -95,6 +122,8 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+const JOB_COLUMNS: &str = "id, source_path, source_size, adapter, endpoint, state, capability_badge, created_at, updated_at";
+
 impl SessionJournal {
     /// Open (creating or replaying) the journal at `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, JournalError> {
@@ -102,19 +131,34 @@ impl SessionJournal {
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
         )?;
-        for m in MIGRATIONS {
-            conn.execute_batch(m)?;
-        }
-        tracing::debug!("journal opened (WAL)");
-        Ok(Self { conn })
+        Self::migrate(conn)
     }
 
     pub fn open_in_memory() -> Result<Self, JournalError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        for m in MIGRATIONS {
-            conn.execute_batch(m)?;
+        Self::migrate(conn)
+    }
+
+    /// Apply pending migrations, each in its own transaction, tracked by
+    /// `PRAGMA user_version`. A crash mid-migration rolls back its whole
+    /// transaction, so a partially-migrated journal can never be observed.
+    fn migrate(conn: Connection) -> Result<Self, JournalError> {
+        let mut version: u32 =
+            conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? as u32;
+        for (i, sql) in MIGRATIONS.iter().enumerate() {
+            let target = (i + 1) as u32;
+            if version >= target {
+                continue;
+            }
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(sql)?;
+            tx.pragma_update(None, "user_version", target as i64)?;
+            tx.commit()?;
+            version = target;
+            tracing::info!(schema_version = target, "journal migration applied");
         }
+        tracing::debug!(schema_version = version, "journal opened");
         Ok(Self { conn })
     }
 
@@ -126,75 +170,69 @@ impl SessionJournal {
         )?)
     }
 
-    /// Persist a brand-new job in `Created` state together with its planned chunks.
-    #[allow(clippy::too_many_arguments)] // flat SQL-shaped insert; called in one place
-    pub fn insert_job(
-        &self,
-        id: &str,
-        source_path: &str,
-        source_size: u64,
-        adapter: &str,
-        endpoint: &str,
-        capability_badge: &str,
-        chunks: &[ChunkRow],
-    ) -> Result<JobRecord, JournalError> {
+    /// Persist a brand-new job in `Created` state together with its planned
+    /// chunks. Atomic: a crash between the job row and its chunk plan leaves
+    /// neither.
+    pub fn insert_job(&self, job: NewJob<'_>) -> Result<JobRecord, JournalError> {
         let ts = now_ms();
-        let exists: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM jobs WHERE id=?1", params![id], |r| {
-                    r.get(0)
-                })?;
+        let tx = self.conn.unchecked_transaction()?;
+        let exists: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM jobs WHERE id=?1",
+            params![job.id],
+            |r| r.get(0),
+        )?;
         if exists > 0 {
-            return Err(JournalError::DuplicateJob(id.to_string()));
+            return Err(JournalError::DuplicateJob(job.id.to_string()));
         }
-        self.conn.execute(
+        tx.execute(
             "INSERT INTO jobs (id, source_path, source_size, adapter, endpoint, state, capability_badge, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-            params![id, source_path, source_size as i64, adapter, endpoint, JobState::Created.as_str(), capability_badge, ts],
+            params![job.id, job.source_path, job.source_size as i64, job.adapter, job.endpoint, JobState::Created.as_str(), job.capability_badge, ts],
         )?;
-        self.replace_chunks(id, chunks)?;
+        insert_chunks(&tx, job.id, job.chunks)?;
+        tx.commit()?;
         Ok(JobRecord {
-            id: id.to_string(),
-            source_path: source_path.to_string(),
-            source_size,
-            adapter: adapter.to_string(),
-            endpoint: endpoint.to_string(),
+            id: job.id.to_string(),
+            source_path: job.source_path.to_string(),
+            source_size: job.source_size,
+            adapter: job.adapter.to_string(),
+            endpoint: job.endpoint.to_string(),
             state: JobState::Created,
-            capability_badge: capability_badge.to_string(),
+            capability_badge: job.capability_badge.to_string(),
             created_at: ts,
             updated_at: ts,
         })
     }
 
     /// Journal a state transition — called BEFORE the engine acts on it.
+    /// Fails loudly if the job row vanished (journal corruption / bad id).
     pub fn set_job_state(&self, id: &str, state: JobState) -> Result<(), JournalError> {
-        self.conn.execute(
+        let n = self.conn.execute(
             "UPDATE jobs SET state=?2, updated_at=?3 WHERE id=?1",
             params![id, state.as_str(), now_ms()],
         )?;
+        if n == 0 {
+            return Err(JournalError::UnknownJob(id.to_string()));
+        }
         tracing::debug!(job = id, state = state.as_str(), "state journaled");
         Ok(())
     }
 
     /// Replace the chunk plan for a job (used after resplit / rebuild).
+    /// Fails loudly for unknown jobs (catches id typos and journal races).
     pub fn replace_chunks(&self, job_id: &str, chunks: &[ChunkRow]) -> Result<(), JournalError> {
-        self.conn
-            .execute("DELETE FROM chunks WHERE job_id=?1", params![job_id])?;
-        for c in chunks {
-            self.conn.execute(
-                "INSERT INTO chunks (job_id, idx, offset_begin, offset_end, state, bytes_confirmed, adapter_token)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    job_id,
-                    c.idx as i64,
-                    c.begin as i64,
-                    c.end as i64,
-                    chunk_state_str(c.state),
-                    c.bytes_confirmed as i64,
-                    c.adapter_token
-                ],
-            )?;
+        let job_exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM jobs WHERE id=?1",
+            params![job_id],
+            |r| r.get(0),
+        )?;
+        if job_exists == 0 {
+            return Err(JournalError::UnknownJob(job_id.to_string()));
         }
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM chunks WHERE job_id=?1", params![job_id])?;
+        insert_chunks(&tx, job_id, chunks)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -207,10 +245,13 @@ impl SessionJournal {
         bytes_confirmed: u64,
         adapter_token: Option<&str>,
     ) -> Result<(), JournalError> {
-        self.conn.execute(
+        let n = self.conn.execute(
             "UPDATE chunks SET state=?3, bytes_confirmed=?4, adapter_token=?5 WHERE job_id=?1 AND idx=?2",
             params![job_id, idx as i64, chunk_state_str(state), bytes_confirmed as i64, adapter_token],
         )?;
+        if n == 0 {
+            return Err(JournalError::UnknownChunk(job_id.to_string(), idx));
+        }
         Ok(())
     }
 
@@ -229,23 +270,10 @@ impl SessionJournal {
     }
 
     pub fn load_job(&self, id: &str) -> Result<Option<JobRecord>, JournalError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, source_path, source_size, adapter, endpoint, state, capability_badge, created_at, updated_at
-             FROM jobs WHERE id=?1",
-        )?;
-        let mut rows = stmt.query_map(params![id], |r| {
-            Ok(JobRecord {
-                id: r.get(0)?,
-                source_path: r.get(1)?,
-                source_size: r.get::<_, i64>(2)? as u64,
-                adapter: r.get(3)?,
-                endpoint: r.get(4)?,
-                state: parse_state(&r.get::<_, String>(5)?),
-                capability_badge: r.get(6)?,
-                created_at: r.get(7)?,
-                updated_at: r.get(8)?,
-            })
-        })?;
+        let mut stmt = self
+            .conn
+            .prepare(format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id=?1").as_str())?;
+        let mut rows = stmt.query_map(params![id], row_to_record)?;
         match rows.next() {
             Some(rec) => Ok(Some(rec?)),
             None => Ok(None),
@@ -273,22 +301,9 @@ impl SessionJournal {
 
     pub fn list_jobs(&self) -> Result<Vec<JobRecord>, JournalError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, source_path, source_size, adapter, endpoint, state, capability_badge, created_at, updated_at
-             FROM jobs ORDER BY created_at DESC",
+            format!("SELECT {JOB_COLUMNS} FROM jobs ORDER BY created_at DESC, id").as_str(),
         )?;
-        let rows = stmt.query_map([], |r| {
-            Ok(JobRecord {
-                id: r.get(0)?,
-                source_path: r.get(1)?,
-                source_size: r.get::<_, i64>(2)? as u64,
-                adapter: r.get(3)?,
-                endpoint: r.get(4)?,
-                state: parse_state(&r.get::<_, String>(5)?),
-                capability_badge: r.get(6)?,
-                created_at: r.get(7)?,
-                updated_at: r.get(8)?,
-            })
-        })?;
+        let rows = stmt.query_map([], row_to_record)?;
         let out: Vec<JobRecord> = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(out)
     }
@@ -308,6 +323,39 @@ impl SessionJournal {
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())
     }
+}
+
+fn insert_chunks(conn: &Connection, job_id: &str, chunks: &[ChunkRow]) -> Result<(), JournalError> {
+    for c in chunks {
+        conn.execute(
+            "INSERT INTO chunks (job_id, idx, offset_begin, offset_end, state, bytes_confirmed, adapter_token)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                job_id,
+                c.idx as i64,
+                c.begin as i64,
+                c.end as i64,
+                chunk_state_str(c.state),
+                c.bytes_confirmed as i64,
+                c.adapter_token
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn row_to_record(r: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
+    Ok(JobRecord {
+        id: r.get(0)?,
+        source_path: r.get(1)?,
+        source_size: r.get::<_, i64>(2)? as u64,
+        adapter: r.get(3)?,
+        endpoint: r.get(4)?,
+        state: parse_state(&r.get::<_, String>(5)?),
+        capability_badge: r.get(6)?,
+        created_at: r.get(7)?,
+        updated_at: r.get(8)?,
+    })
 }
 
 fn chunk_state_str(s: ChunkState) -> &'static str {
@@ -369,15 +417,15 @@ mod tests {
     #[test]
     fn job_and_chunks_roundtrip_replays_identically() {
         let j = SessionJournal::open_in_memory().unwrap();
-        j.insert_job(
-            "JOB1",
-            "/tmp/a.iso",
-            200,
-            "s3_multipart",
-            "s3://bucket",
-            "resumable",
-            &sample_chunks(),
-        )
+        j.insert_job(NewJob {
+            id: "JOB1",
+            source_path: "/tmp/a.iso",
+            source_size: 200,
+            adapter: "s3_multipart",
+            endpoint: "s3://bucket",
+            capability_badge: "resumable",
+            chunks: &sample_chunks(),
+        })
         .unwrap();
 
         j.update_chunk("JOB1", 0, ChunkState::Uploaded, 100, Some("part-0"))
@@ -398,10 +446,18 @@ mod tests {
     #[test]
     fn duplicate_job_is_rejected() {
         let j = SessionJournal::open_in_memory().unwrap();
-        j.insert_job("JOB1", "p", 10, "tus", "https://t", "resumable", &[])
-            .unwrap();
+        let job = || NewJob {
+            id: "JOB1",
+            source_path: "p",
+            source_size: 10,
+            adapter: "tus",
+            endpoint: "https://t",
+            capability_badge: "resumable",
+            chunks: &[],
+        };
+        j.insert_job(job()).unwrap();
         assert!(matches!(
-            j.insert_job("JOB1", "p", 10, "tus", "https://t", "resumable", &[]),
+            j.insert_job(job()),
             Err(JournalError::DuplicateJob(_))
         ));
     }
@@ -409,8 +465,16 @@ mod tests {
     #[test]
     fn events_are_appended_in_order() {
         let j = SessionJournal::open_in_memory().unwrap();
-        j.insert_job("JOB1", "p", 10, "tus", "https://t", "resumable", &[])
-            .unwrap();
+        j.insert_job(NewJob {
+            id: "JOB1",
+            source_path: "p",
+            source_size: 10,
+            adapter: "tus",
+            endpoint: "https://t",
+            capability_badge: "resumable",
+            chunks: &[],
+        })
+        .unwrap();
         let a = j
             .append_event("JOB1", "state", &serde_json::json!({"to": "running"}))
             .unwrap();
@@ -424,12 +488,68 @@ mod tests {
     }
 
     #[test]
-    fn wal_checkpoint_succeeds_on_file_backed_journal() {
+    fn writes_to_missing_rows_fail_loudly() {
+        let j = SessionJournal::open_in_memory().unwrap();
+        assert!(matches!(
+            j.set_job_state("GHOST", JobState::Running),
+            Err(JournalError::UnknownJob(_))
+        ));
+        assert!(matches!(
+            j.update_chunk("GHOST", 0, ChunkState::Uploaded, 1, None),
+            Err(JournalError::UnknownChunk(_, 0))
+        ));
+    }
+
+    #[test]
+    fn migrations_are_versioned_and_reopen_safe() {
         let dir = tempfile::tempdir().unwrap();
-        let j = SessionJournal::open(dir.path().join("s.ium.db")).unwrap();
-        j.insert_job("JOB1", "p", 10, "tus", "https://t", "resumable", &[])
+        let path = dir.path().join("s.ium.db");
+
+        let first = {
+            let j = SessionJournal::open(&path).unwrap();
+            j.insert_job(NewJob {
+                id: "JOB1",
+                source_path: "p",
+                source_size: 10,
+                adapter: "tus",
+                endpoint: "https://t",
+                capability_badge: "resumable",
+                chunks: &sample_chunks(),
+            })
             .unwrap();
-        j.checkpoint_wal().unwrap();
+            j.update_chunk("JOB1", 0, ChunkState::Uploaded, 10, None)
+                .unwrap();
+            j.checkpoint_wal().unwrap();
+            j.schema_version().unwrap()
+        };
+        assert_eq!(first, "1");
+
+        // Reopen: migration must not re-run, data must survive.
+        let j = SessionJournal::open(&path).unwrap();
         assert_eq!(j.schema_version().unwrap(), "1");
+        let job = j.load_job("JOB1").unwrap().unwrap();
+        assert_eq!(job.source_size, 10);
+        assert_eq!(j.load_chunks("JOB1").unwrap()[0].bytes_confirmed, 10);
+        // journal stays writable after reopen
+        j.insert_job(NewJob {
+            id: "JOB2",
+            source_path: "p",
+            source_size: 5,
+            adapter: "tus",
+            endpoint: "https://t",
+            capability_badge: "resumable",
+            chunks: &[],
+        })
+        .unwrap();
+        assert_eq!(j.list_jobs().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn replace_chunks_rejects_unknown_job() {
+        let j = SessionJournal::open_in_memory().unwrap();
+        assert!(matches!(
+            j.replace_chunks("GHOST", &[]),
+            Err(JournalError::UnknownJob(_))
+        ));
     }
 }

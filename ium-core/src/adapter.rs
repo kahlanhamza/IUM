@@ -53,7 +53,10 @@ pub struct ProbeReport {
 #[derive(Debug, Clone)]
 pub struct ChunkConfirm {
     pub idx: u32,
-    /// Bytes the SERVER confirmed (spec rule #1).
+    /// Bytes the SERVER confirmed BY THIS CALL, counted over the transferred
+    /// segment `[lease.resume_from, lease.end)` (spec rule #1: never client
+    /// optimism). The manager composes this with the chunk's prior
+    /// confirmations into the absolute in-chunk total.
     pub bytes_confirmed: u64,
     /// Protocol token to reuse on reattach (part number, offset, cursor).
     pub adapter_token: Option<String>,
@@ -108,6 +111,9 @@ impl AdapterError {
 
 /// One protocol family. Implementations must be Send + Sync; the manager may
 /// call `upload_chunk` concurrently from multiple worker tasks (Sprint 1).
+///
+/// Implementations read the bytes they need directly from `spec.source_path`
+/// at the offsets the lease dictates — the core never buffers whole files.
 #[async_trait]
 pub trait TransferAdapter: Send + Sync {
     /// Registry key ("s3_multipart", "tus", "http_range", ...).
@@ -120,12 +126,12 @@ pub trait TransferAdapter: Send + Sync {
     async fn probe(&self, spec: &JobSpec) -> Result<ProbeReport, AdapterError>;
 
     /// Upload one leased chunk, returning only server-confirmed bytes.
-    /// `lease.resume_from` is where the transfer must start.
+    /// `lease.resume_from` (absolute offset) is where the transfer must start;
+    /// the range to move is `[resume_from, lease.end)`.
     async fn upload_chunk(
         &self,
         spec: &JobSpec,
         lease: &Lease,
-        data: std::sync::Arc<Vec<u8>>,
     ) -> Result<ChunkConfirm, AdapterError>;
 
     /// End-of-job integrity gate (pattern #10). Default: pass.
@@ -187,7 +193,6 @@ mod tests {
             &self,
             _spec: &JobSpec,
             lease: &Lease,
-            _data: std::sync::Arc<Vec<u8>>,
         ) -> Result<ChunkConfirm, AdapterError> {
             Ok(ChunkConfirm {
                 idx: lease.idx,
@@ -234,10 +239,7 @@ mod tests {
             resume_from: 0,
             attempt: 0,
         };
-        let confirm = a
-            .upload_chunk(&s, &lease, std::sync::Arc::new(vec![0u8; 10]))
-            .await
-            .unwrap();
+        let confirm = a.upload_chunk(&s, &lease).await.unwrap();
         assert_eq!(confirm.bytes_confirmed, 10);
 
         let v = a.verify(&s).await.unwrap();
