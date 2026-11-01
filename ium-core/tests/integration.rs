@@ -45,7 +45,10 @@ struct UploadLog {
 }
 
 /// Mock adapter that reads its leased range from disk (like the real ones)
-/// and logs every call. Failure modes are switchable per test:
+/// and logs every call AT ENTRY (parity with ScriptedAdapter): a call that
+/// blips, hits a vanished source or never completes stays visible with
+/// `bytes_moved: 0`; the real figure is patched in at completion.
+/// Failure modes are switchable per test:
 /// * `fail_first` — N transient blips before the first success;
 /// * `partial_first_len` — first confirm for a chunk confirms only this many
 ///   bytes (exercises the resume-from-confirmed-offset path).
@@ -103,6 +106,18 @@ impl TransferAdapter for MockAdapter {
         lease: &Lease,
         progress: &ProgressReporter,
     ) -> Result<ChunkConfirm, AdapterError> {
+        // Log at ENTRY: a call that never completes (blip, vanished source,
+        // evicted mid-body) must still be visible to tests. `bytes_moved` is
+        // patched with the real figure at completion, below.
+        let entry = {
+            let mut log = self.log.lock().unwrap();
+            log.push(UploadLog {
+                idx: lease.idx,
+                resume_from: lease.resume_from,
+                bytes_moved: 0,
+            });
+            log.len() - 1
+        };
         if self.chunk_delay_ms > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(self.chunk_delay_ms)).await;
         }
@@ -127,16 +142,17 @@ impl TransferAdapter for MockAdapter {
         // Wire telemetry: every byte read went "onto the wire".
         progress.add(want as u64);
 
+        // Call completed: patch the entry created above with the real figure.
+        self.log.lock().unwrap()[entry].bytes_moved = want as u64;
+
         let full = lease.end - lease.resume_from;
         let confirmed = match self.partial_first_len {
-            Some(p) if p < full && self.log.lock().unwrap().is_empty() => p,
+            // "first call" = the only log entry is the one this call pushed
+            // at entry (len() == 1, not is_empty() — the log is now written
+            // at entry, see above).
+            Some(p) if p < full && self.log.lock().unwrap().len() == 1 => p,
             _ => full,
         };
-        self.log.lock().unwrap().push(UploadLog {
-            idx: lease.idx,
-            resume_from: lease.resume_from,
-            bytes_moved: want as u64,
-        });
         Ok(ChunkConfirm {
             idx: lease.idx,
             bytes_confirmed: confirmed,
@@ -338,6 +354,42 @@ async fn transient_blip_is_retried_and_job_still_completes() {
         snap.chunks.iter().map(|c| c.bytes_confirmed).sum::<u64>(),
         6 * MIB
     );
+}
+
+#[tokio::test]
+async fn mock_adapter_logs_calls_at_entry() {
+    // Observability parity with ScriptedAdapter: a call that FAILS must
+    // still appear in the mock's log — pushed at entry, `bytes_moved == 0`
+    // until patched at completion. The old log-at-completion behavior made
+    // blipped calls invisible (same gap that hid stalled/evicted calls
+    // before the ScriptedAdapter fix).
+    let dir = tempfile::tempdir().unwrap();
+    let path = make_source(dir.path(), "g.bin", 6 * MIB);
+
+    let mock = Arc::new(MockAdapter::failing(
+        Capability::new(Capability::RESUMABLE),
+        u32::MAX, // every call blips; none ever completes
+    ));
+    let mut m = manager_with(Arc::clone(&mock));
+    m.set_policy(ium_core::retry::RetryPolicy {
+        max_attempts: 3,
+        backoff_base_ms: 1,
+        backoff_cap_ms: 2,
+        respect_retry_after: true,
+    });
+
+    let rec = m.create_job(&spec_for(&path, 6 * MIB), 1).unwrap();
+    let out = m.run_job(&rec.id).await.unwrap();
+    assert_eq!(out.state, JobState::Failed);
+
+    // 1 initial + 3 retries = 4 upload calls — ALL visible from entry.
+    let log = mock.log.lock().unwrap().clone();
+    assert_eq!(log.len(), 4, "failed calls must be logged too: {log:?}");
+    assert!(
+        log.iter().all(|l| l.bytes_moved == 0),
+        "a blipped call moved nothing: {log:?}"
+    );
+    assert!(log.iter().all(|l| l.idx == 0), "one chunk, four calls");
 }
 
 #[tokio::test]
