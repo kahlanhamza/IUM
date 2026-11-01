@@ -1,0 +1,20 @@
+[package]
+name = "ium-app"
+description = "IUM desktop shell (Tauri 2)"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["IUM community"]
+
+[lib]
+name = "ium_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ium-core = { path = "../../ium-core" }

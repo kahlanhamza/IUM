@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["ium-core"]
+# NOTE: ium-app/src-tauri is intentionally NOT a workspace member yet.
+# It is compiled on desktop machines (needs WebKitGTK / platform SDKs),
+# while ium-core must stay buildable in minimal CI and sandbox environments.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["IUM community"]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"

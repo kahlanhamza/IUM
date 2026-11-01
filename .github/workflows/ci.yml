@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy -p ium-core --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test -p ium-core
+
+  scaffold:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate manifests
+        run: |
+          node -e "JSON.parse(require('fs').readFileSync('ium-app/package.json','utf8')); console.log('package.json ok')"
+          node -e "JSON.parse(require('fs').readFileSync('ium-app/src-tauri/tauri.conf.json','utf8')); console.log('tauri.conf.json ok')"
+      - name: Scaffold completeness
+        run: |
+          test -f ium-app/src/main.tsx
+          test -f ium-app/src/api.ts
+          test -f ium-app/src-tauri/src/lib.rs
+          echo "scaffold complete"

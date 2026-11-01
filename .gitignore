@@ -17,6 +17,8 @@ agent-ctx/
 
 # --- ephemera ---
 node_modules/
+target/
+ium-app/dist/
 __pycache__/
 *.pyc
 *.log

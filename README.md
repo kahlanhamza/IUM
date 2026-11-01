@@ -3,7 +3,7 @@
 > The missing desktop twin of IDM/aria2/Motrix/FDM — for **uploads**.
 > Resumable, segmented, multi-protocol uploads that survive slow networks, sleep, crashes and reboots.
 
-**Status:** architecture & specification phase (v1.0 spec shipped) · **Repo:** private during bootstrap
+**Status:** Sprint 0 shipped — `ium-core` live (22 unit + 8 integration tests, clippy-clean, 3-OS CI) · Tauri shell scaffolded · **Repo:** private during bootstrap
 
 ## Why
 
@@ -16,6 +16,20 @@ physically cannot resume (`Resumable ✅ / One-shot ⚠️`).
 ## Repo map
 
 ```
+Cargo.toml               cargo workspace (ium-core; ium-app joins on desktop)
+ium-core/src/
+  chunk.rs               chunk algebra: plan/lease/evict/resplit/tail-race (patterns #1,2,3,9)
+  state.rs               supervisor state machine (pattern #5)
+  journal.rs             SQLite WAL session store: jobs/chunks/events (pattern #6)
+  adapter.rs             TransferAdapter trait + Capability flags + registry (pattern #7)
+  manager.rs             JobManager facade: journaled transitions, verify-before-declare (#10)
+  retry.rs               per-error-class policy table (pattern #9)
+  ids.rs                 ULID-shaped job ids
+  tests/integration.rs   mock-adapter drills: run/pause/resume/replay/one-shot/retry
+ium-app/                 Tauri 2 + React shell (source scaffold; desktop builds it)
+  src/api.ts             typed IPC contract (command mirrors)
+  src-tauri/             commands: engine_status/create_job/list_jobs/snapshot/pause/resume
+.github/workflows/ci.yml  fmt + clippy + tests on ubuntu/macos/windows
 docs/
   01_Architecture_Teardown_v2.md   ← REA study: aria2, XDM, Motrix, FDM 6.35, IDM 6.43
   02_IUM_MVP_Spec_v1.md            ← stack decision, architecture, data model, roadmap
@@ -28,6 +42,18 @@ scripts/
   magic_carver.py                  ← installer container carving
   preserve.sh                      ← commit+push snapshot of all work
   gh-push.sh                       ← token-handling push helper (token never in repo)
+```
+
+## Build (desktop)
+
+```bash
+# engine only (works anywhere with rustup stable)
+cargo test -p ium-core
+
+# desktop shell (needs WebKitGTK on Linux / Xcode / MSVC)
+cd ium-app && pnpm install
+pnpm tauri icon path/to/icon.png   # once, before first bundle
+pnpm tauri dev
 ```
 
 ## Method (clean-room REA)
