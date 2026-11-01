@@ -16,16 +16,19 @@
 //!   Endpoints that reject `HEAD` need a protocol-specific adapter — the
 //!   honesty is the point.
 
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use reqwest::header::{ETAG, RETRY_AFTER};
 use reqwest::{Client, Method, StatusCode};
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, ReadBuf};
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::adapter::{
-    AdapterError, Capability, ChunkConfirm, ProbeReport, TransferAdapter, VerifyReport,
+    AdapterError, Capability, ChunkConfirm, ProbeReport, ProgressReporter, TransferAdapter,
+    VerifyReport,
 };
 use crate::chunk::Lease;
 use crate::JobSpec;
@@ -92,6 +95,35 @@ fn req_err(e: reqwest::Error) -> AdapterError {
     AdapterError::Transient(format!("transport: {e}"))
 }
 
+/// AsyncRead passthrough that feeds every byte handed to the transport into
+/// the call's [`ProgressReporter`] — the supervisor's eviction window (spec
+/// §4.2) reads this instead of guessing from timeouts.
+struct Counting<R> {
+    inner: R,
+    progress: ProgressReporter,
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for Counting<R> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        let filled_before = buf.filled().len();
+        match Pin::new(&mut this.inner).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) => {
+                let n = (buf.filled().len() - filled_before) as u64;
+                if n > 0 {
+                    this.progress.add(n);
+                }
+                Poll::Ready(Ok(()))
+            }
+            other => other,
+        }
+    }
+}
+
 #[async_trait]
 impl TransferAdapter for HttpOneShotAdapter {
     fn name(&self) -> &'static str {
@@ -117,6 +149,7 @@ impl TransferAdapter for HttpOneShotAdapter {
         &self,
         spec: &JobSpec,
         lease: &Lease,
+        progress: &ProgressReporter,
     ) -> Result<ChunkConfirm, AdapterError> {
         let span = lease.end - lease.resume_from;
 
@@ -136,7 +169,13 @@ impl TransferAdapter for HttpOneShotAdapter {
             .map_err(io_err)?;
         let reader = file.take(span);
 
-        let body = reqwest::Body::wrap_stream(FramedRead::new(reader, BytesCodec::new()));
+        let body = reqwest::Body::wrap_stream(FramedRead::new(
+            Counting {
+                inner: reader,
+                progress: progress.clone(),
+            },
+            BytesCodec::new(),
+        ));
         let resp = self
             .client
             .put(&spec.endpoint)

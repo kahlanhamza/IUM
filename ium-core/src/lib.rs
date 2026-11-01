@@ -18,6 +18,7 @@
 pub mod adapter;
 pub mod adapter_http;
 pub mod chunk;
+pub mod eviction;
 pub mod ids;
 pub mod journal;
 pub mod manager;
@@ -27,6 +28,7 @@ pub mod state;
 pub use adapter::{AdapterRegistry, Capability, ChunkConfirm, ProbeReport, TransferAdapter};
 pub use adapter_http::HttpOneShotAdapter;
 pub use chunk::{Chunk, ChunkPool, ChunkState, Lease};
+pub use eviction::{below_floor, median, EvictionPolicy, ThroughputWatch};
 pub use ids::new_id;
 pub use journal::{ChunkRow, JobRecord, SessionJournal};
 pub use manager::{JobManager, JobSnapshot};

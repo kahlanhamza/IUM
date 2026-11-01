@@ -3,6 +3,7 @@
 //! rebuilt for uploads).
 
 use async_trait::async_trait;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::chunk::Lease;
@@ -69,6 +70,43 @@ pub struct VerifyReport {
     pub detail: Option<String>,
 }
 
+/// Live byte counter for one in-flight `upload_chunk` call.
+///
+/// This is TELEMETRY, never truth: the journal keeps only server
+/// confirmations (`bytes_confirmed`), while this counter reports what the
+/// adapter pushed onto the wire — exactly what slow-chunk eviction (spec
+/// §4.2) and the future per-chunk speed inspector (spec §8) need.
+///
+/// Segment-relative: counts bytes moved for `[lease.resume_from, lease.end)`.
+/// A fresh reporter is handed to every `upload_chunk` call.
+#[derive(Clone, Default)]
+pub struct ProgressReporter {
+    bytes: Arc<AtomicU64>,
+}
+
+impl ProgressReporter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Record `n` more bytes handed to the transport. Cheap, non-blocking —
+    /// adapters call this on the hot path.
+    pub fn add(&self, n: u64) {
+        self.bytes.fetch_add(n, Ordering::Relaxed);
+    }
+    /// Bytes moved so far in this call.
+    pub fn moved(&self) -> u64 {
+        self.bytes.load(Ordering::Relaxed)
+    }
+}
+
+impl std::fmt::Debug for ProgressReporter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProgressReporter")
+            .field("moved", &self.moved())
+            .finish()
+    }
+}
+
 /// Errors adapters return, already classified for the retry policy.
 #[derive(Debug, thiserror::Error)]
 pub enum AdapterError {
@@ -128,10 +166,15 @@ pub trait TransferAdapter: Send + Sync {
     /// Upload one leased chunk, returning only server-confirmed bytes.
     /// `lease.resume_from` (absolute offset) is where the transfer must start;
     /// the range to move is `[resume_from, lease.end)`.
+    ///
+    /// `progress` receives wire-byte counts as the body streams; implementations
+    /// SHOULD report regularly so the supervisor can evict stalled chunks
+    /// (spec §4.2) instead of waiting for a timeout to guess.
     async fn upload_chunk(
         &self,
         spec: &JobSpec,
         lease: &Lease,
+        progress: &ProgressReporter,
     ) -> Result<ChunkConfirm, AdapterError>;
 
     /// End-of-job integrity gate (pattern #10). Default: pass.
@@ -193,10 +236,13 @@ mod tests {
             &self,
             _spec: &JobSpec,
             lease: &Lease,
+            progress: &ProgressReporter,
         ) -> Result<ChunkConfirm, AdapterError> {
+            let span = lease.end - lease.resume_from;
+            progress.add(span);
             Ok(ChunkConfirm {
                 idx: lease.idx,
-                bytes_confirmed: lease.end - lease.begin,
+                bytes_confirmed: span,
                 adapter_token: None,
             })
         }
@@ -239,8 +285,10 @@ mod tests {
             resume_from: 0,
             attempt: 0,
         };
-        let confirm = a.upload_chunk(&s, &lease).await.unwrap();
+        let progress = ProgressReporter::new();
+        let confirm = a.upload_chunk(&s, &lease, &progress).await.unwrap();
         assert_eq!(confirm.bytes_confirmed, 10);
+        assert_eq!(progress.moved(), 10, "adapter must report wire bytes");
 
         let v = a.verify(&s).await.unwrap();
         assert!(v.ok);
