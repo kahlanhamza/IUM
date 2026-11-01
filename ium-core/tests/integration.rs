@@ -683,6 +683,18 @@ impl TransferAdapter for ScriptedAdapter {
             *c += 1;
             *c
         };
+        // Log at ENTRY: a call that never completes (stall, fatal, evicted
+        // mid-body) must still be visible to tests. `bytes_moved` is patched
+        // with the real figure at completion, below.
+        let entry = {
+            let mut log = self.log.lock().unwrap();
+            log.push(UploadLog {
+                idx: lease.idx,
+                resume_from: lease.resume_from,
+                bytes_moved: 0,
+            });
+            log.len() - 1
+        };
         let behavior = &self.behaviors[lease.idx as usize];
         match behavior {
             Behavior::StallOnce if call == 1 => {
@@ -724,11 +736,7 @@ impl TransferAdapter for ScriptedAdapter {
         if !matches!(behavior, Behavior::Healthy { .. }) {
             progress.add(want as u64);
         }
-        self.log.lock().unwrap().push(UploadLog {
-            idx: lease.idx,
-            resume_from: lease.resume_from,
-            bytes_moved: want as u64,
-        });
+        self.log.lock().unwrap()[entry].bytes_moved = want as u64;
         Ok(ChunkConfirm {
             idx: lease.idx,
             bytes_confirmed: lease.end - lease.resume_from,
@@ -827,7 +835,9 @@ async fn stalled_chunk_is_evicted_and_job_still_completes() {
             strikes_to_evict: 2,
         },
     );
-    let rec = m.create_job(&scripted_spec_for(&path, 10 * MIB), 2).unwrap();
+    let rec = m
+        .create_job(&scripted_spec_for(&path, 10 * MIB), 2)
+        .unwrap();
     assert_eq!(m.snapshot(&rec.id).unwrap().chunks.len(), 2);
 
     let started = std::time::Instant::now();
@@ -852,15 +862,29 @@ async fn stalled_chunk_is_evicted_and_job_still_completes() {
         .unwrap();
     assert_eq!(evicted_idx, 1, "chunk 1 was the stalled one");
 
-    // The stalled lease kept nothing (no server ack while wedged); the
-    // re-lease started from the chunk begin, and the second call completed.
+    // The stalled lease kept nothing (no server ack while wedged), so the
+    // re-lease had to start from chunk 1's begin. Lease.resume_from is the
+    // absolute file offset, and the wedged call itself moved zero bytes.
     let log = mock.log.lock().unwrap().clone();
     let idx1_calls: Vec<&UploadLog> = log.iter().filter(|l| l.idx == 1).collect();
     assert_eq!(idx1_calls.len(), 2, "stalled once, re-leased once: {log:?}");
-    assert_eq!(idx1_calls[0].resume_from, 0);
+    let chunk1_begin = snap.chunks[1].begin;
     assert_eq!(
-        idx1_calls[1].resume_from, 0,
-        "no server-confirmed bytes were lost or faked"
+        idx1_calls[0].resume_from, chunk1_begin,
+        "wedged at chunk begin"
+    );
+    assert_eq!(
+        idx1_calls[0].bytes_moved, 0,
+        "the wedged call moved nothing"
+    );
+    assert_eq!(
+        idx1_calls[1].resume_from, chunk1_begin,
+        "re-lease resumed from chunk begin — no server-confirmed bytes to resume from"
+    );
+    assert_eq!(
+        idx1_calls[1].bytes_moved,
+        5 * MIB,
+        "re-lease completed the chunk"
     );
 
     // Both chunks fully confirmed and verified at the end.

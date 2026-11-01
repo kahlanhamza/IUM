@@ -421,7 +421,13 @@ impl JobManager {
             if !stale.is_empty() {
                 for (idx, confirmed, token) in stale {
                     self.j()
-                        .update_chunk(job_id, idx, ChunkState::Pending, confirmed, token.as_deref())
+                        .update_chunk(
+                            job_id,
+                            idx,
+                            ChunkState::Pending,
+                            confirmed,
+                            token.as_deref(),
+                        )
                         .map_err(EngineError::from)?;
                 }
                 self.j()

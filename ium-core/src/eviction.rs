@@ -93,7 +93,7 @@ pub fn median(samples: &mut [f64]) -> Option<f64> {
     }
     samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mid = samples.len() / 2;
-    Some(if samples.len() % 2 == 0 {
+    Some(if samples.len().is_multiple_of(2) {
         (samples[mid - 1] + samples[mid]) / 2.0
     } else {
         samples[mid]
