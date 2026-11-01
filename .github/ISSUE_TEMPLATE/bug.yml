@@ -1,0 +1,46 @@
+name: Bug report
+description: ium-core does not behave as the spec/invariants require
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - journal
+        - chunk-pool
+        - retry
+        - manager
+        - eviction
+        - adapter
+        - verifier
+        - ci / tooling
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Include the failing test output or command output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior — acceptance criteria
+      description: What must be true when this is fixed? These become the tests.
+    validations:
+      required: true
+  - type: textarea
+    id: failing-test
+    attributes:
+      label: Failing test
+      description: >
+        Per docs/05_Engineering_Process.md step 3: the fix lands only together with a test
+        that failed before it. Paste the test name and the failing output.
+  - type: textarea
+    id: invariant
+    attributes:
+      label: Violated invariant / spec section
+      description: e.g. "journal is truth (ADR-002)", "verify-before-declare (ADR-004)", "spec §4.2".

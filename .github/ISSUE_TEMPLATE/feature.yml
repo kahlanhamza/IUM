@@ -1,0 +1,30 @@
+name: Feature / hardening request
+description: New capability or structural improvement for ium-core
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: story
+    attributes:
+      label: Problem / user story
+      description: What can't be done today? Which milestone (docs/04_Roadmap.md) does this serve?
+    validations:
+      required: true
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Acceptance criteria
+      description: Checkable, testable statements. "Done" means these tests exist and pass.
+    validations:
+      required: true
+  - type: textarea
+    id: non-goals
+    attributes:
+      label: Out of scope
+      description: Explicitly excluded, so scope does not creep.
+  - type: checkboxes
+    id: process
+    attributes:
+      label: Process
+      options:
+        - label: Design note written (if this touches journal schema, state machine, chunk pool, or adapter contract)
+        - label: Acceptance criteria encoded as tests before implementation

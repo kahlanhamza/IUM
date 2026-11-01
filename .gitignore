@@ -22,6 +22,7 @@ ium-app/dist/
 __pycache__/
 *.pyc
 *.log
+tool-results/
 
 # --- local rust toolchain (sandbox-persistent, not part of the repo) ---
 .toolchain/
