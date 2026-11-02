@@ -48,6 +48,25 @@
 -p ium-core` (trust nothing not executed) → pick the top Backlog item.
 **End:** STATUS.md row → push → confirm `git status -sb` shows `0` ahead/behind or note why not.
 
+## Versioning policy (M5, issue #20)
+
+**Semver with explicit 0.x rules** (semver.org §4 — it already defines this, we follow it
+instead of inventing):
+
+- `ium-core` versions live in the workspace `Cargo.toml`; `ium-app/src-tauri` follows the
+  same number while the two are coupled (the shell links one engine facade).
+- **`0.MINOR` may break; `0.PATCH` is fixes/additions only.** Pre-1.0, the MINOR bump is
+  the compatibility line — a consumer pinning `0.3.x` gets no breakage.
+- **A breaking change requires a compile-fail contract test** pinning the break (the
+  trybuild discipline of #1/#12: the old code must fail to compile against the new
+  contract, and that failure is the RED) in the same commit as the `0.MINOR` bump.
+- **Any issue that changes public behavior edits `CHANGELOG.md` in the same commit** —
+  the changelog entry cites the issue number; the issue templates carry the checkbox.
+  Evidence lives in the tracker; the changelog never makes prose promises.
+- **1.0 gate** (future): the frozen facade survives one full milestone with zero
+  contract changes and the real-data drills green on 3 OS — then semver's normal
+  MAJOR/MINOR/PATCH rules take over.
+
 ## Rules of engagement
 
 - **Gates are non-bypassable** (ADR-007), and they run on the **committed tree** (defect #11:

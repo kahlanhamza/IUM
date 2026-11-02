@@ -28,3 +28,4 @@ body:
       options:
         - label: Design note written (if this touches journal schema, state machine, chunk pool, or adapter contract)
         - label: Acceptance criteria encoded as tests before implementation
+        - label: CHANGELOG.md updated (any issue that changes public behavior — docs/05 versioning policy)

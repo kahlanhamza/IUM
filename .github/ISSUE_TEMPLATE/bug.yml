@@ -44,3 +44,10 @@ body:
     attributes:
       label: Violated invariant / spec section
       description: e.g. "journal is truth (ADR-002)", "verify-before-declare (ADR-004)", "spec §4.2".
+  - type: checkboxes
+    id: process
+    attributes:
+      label: Process
+      options:
+        - label: CHANGELOG.md updated (any issue that changes public behavior — docs/05 versioning policy)
+        - label: Acceptance criteria encoded as tests before the fix lands
