@@ -106,9 +106,12 @@ pub(crate) fn median(samples: &mut [f64]) -> Option<f64> {
 
 /// Is `my_bps` below the pool floor this window?
 ///
-/// * fewer than two sampled workers → no verdict (`false`): a lone worker can
-///   never be below its own median, and eviction with nobody to re-lease the
-///   chunk is pointless anyway;
+/// * fewer than two sampled workers → no verdict (`false`): with the #25
+///   fleet votes (completed leases keep voting their measured rate) fewer
+///   than two samples means a TRUE lone fleet — e.g. TUS
+///   `max_parallel = 1` — where a lone worker can never be below its own
+///   median and eviction with nobody to re-lease the chunk is pointless
+///   anyway;
 /// * a fully idle pool (median 0) → no verdict: zero-everything is no signal,
 ///   evicting everyone would just thrash.
 pub(crate) fn below_floor(my_bps: f64, pool_samples: &mut [f64], policy: &EvictionPolicy) -> bool {

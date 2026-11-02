@@ -24,7 +24,7 @@
 //! for a one-shot endpoint the in-flight bytes cannot be re-sent.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -99,6 +99,21 @@ struct DriveShared {
     /// idx → last sampled wire throughput (bytes/sec) per leased chunk; the
     /// eviction floor is the median of these live samples.
     live_bps: Arc<Mutex<HashMap<u32, f64>>>,
+    /// idx → one vote per COMPLETED lease (issue #25): the lease's freshest
+    /// measured rate — the last sampled window bps when one elapsed, else the
+    /// lease mean. Finished chunks keep voting so the floor stays honest when
+    /// the fleet drains (the lone-impaired-worker case the #22 S3 drill
+    /// found: every peer confirmed sub-window, the laggard became the only
+    /// sample, `below_floor` refused to judge, and the wait-out ran ~472 s).
+    done_bps: Arc<Mutex<HashMap<u32, f64>>>,
+    /// The fleet's best LIVE window rate this drive round (f64 bit pattern; 0
+    /// = no window has closed yet). Completed-lease votes are capped at it:
+    /// a sub-window mean may not outrun any rate the round actually sampled,
+    /// or the inflated median would evict HEALTHY streamers into budget
+    /// exhaustion — caught by the integration eviction drill on the first
+    /// draft of #25. Non-negative f64 bit patterns order like the values, so
+    /// a plain integer fetch_max is a float max.
+    best_live_bps: Arc<AtomicU64>,
     abort_tx: watch::Sender<bool>,
     abort_rx: watch::Receiver<bool>,
     /// Set by the worker that hit a fatal error; the driver journals Failed.
@@ -558,6 +573,8 @@ impl JobManager {
         let (abort_tx, abort_rx) = watch::channel(false);
         let attempts: Arc<Mutex<HashMap<u32, u32>>> = Arc::new(Mutex::new(HashMap::new()));
         let live_bps: Arc<Mutex<HashMap<u32, f64>>> = Arc::new(Mutex::new(HashMap::new()));
+        let done_bps: Arc<Mutex<HashMap<u32, f64>>> = Arc::new(Mutex::new(HashMap::new()));
+        let best_live_bps = Arc::new(AtomicU64::new(0));
         let failed = Arc::new(AtomicBool::new(false));
         let paused_seen = Arc::new(AtomicBool::new(false));
 
@@ -629,6 +646,8 @@ impl JobManager {
                 pool: Arc::new(Mutex::new(pool)),
                 attempts: attempts.clone(),
                 live_bps: live_bps.clone(),
+                done_bps: done_bps.clone(),
+                best_live_bps: best_live_bps.clone(),
                 abort_tx: abort_tx.clone(),
                 abort_rx: abort_rx.clone(),
                 failed: failed.clone(),
@@ -750,6 +769,7 @@ impl JobManager {
 
             // -- upload, with per-window progress sampling ------------------
             let progress = ProgressReporter::new();
+            let lease_started = Instant::now();
             let mut watch = ThroughputWatch::new(&self.eviction, Instant::now());
             let mut last_bps: Option<f64> = None;
             let mut last_median: Option<f64> = None;
@@ -781,13 +801,23 @@ impl JobManager {
                         let below = {
                             let mut live = shared.live_bps.lock().expect("live bps poisoned");
                             live.insert(lease.idx, bps);
-                            let mut samples: Vec<f64> = live.values().copied().collect();
+                            // Issue #25: completed leases keep voting — the
+                            // fleet's achieved rate is real knowledge even
+                            // after its chunks finish.
+                            let done = shared.done_bps.lock().expect("done bps poisoned");
+                            let mut samples: Vec<f64> =
+                                live.values().chain(done.values()).copied().collect();
                             let below = below_floor(bps, &mut samples, &self.eviction);
                             last_median = median(&mut samples);
                             below
                         };
                         watch.record_window(below);
                         last_bps = Some(bps);
+                        // Track the fleet's best live window for vote capping
+                        // (non-negative f64 bits order like the values).
+                        shared
+                            .best_live_bps
+                            .fetch_max(bps.to_bits(), Ordering::Relaxed);
                         if watch.exhausted(&self.eviction) {
                             break Step::Evicted;
                         }
@@ -802,6 +832,32 @@ impl JobManager {
 
             match step {
                 Step::Confirmed(confirm) => {
+                    // Issue #25: the completed lease keeps ONE vote — its
+                    // freshest measured rate (last window when one elapsed,
+                    // else the lease mean) — so the eviction floor survives
+                    // fast sub-window peers finishing around an impaired
+                    // laggard. A confirm that moved nothing does not vote: a
+                    // zero must not drag the floor down.
+                    if progress.moved() > 0 {
+                        let mean = progress.moved() as f64
+                            / lease_started.elapsed().as_secs_f64().max(1e-9);
+                        let vote = last_bps.unwrap_or(mean);
+                        // Cap at the fleet's best live window: when a window
+                        // has actually closed, no vote may outrun it — an
+                        // un-capped sub-window mean inflates the median past
+                        // every honest streamer (the integration drill
+                        // caught exactly that on the first draft). When NO
+                        // window ever sampled this round, the mean is the
+                        // only evidence of the path's capability and stands
+                        // uncapped — the lone-impaired-worker drill case.
+                        let best = f64::from_bits(shared.best_live_bps.load(Ordering::Relaxed));
+                        let vote = if best > 0.0 { vote.min(best) } else { vote };
+                        shared
+                            .done_bps
+                            .lock()
+                            .expect("done bps poisoned")
+                            .insert(lease.idx, vote);
+                    }
                     shared
                         .attempts
                         .lock()

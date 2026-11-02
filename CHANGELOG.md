@@ -11,6 +11,19 @@ prose. An entry without verifiable issue numbers does not belong here.
 ## [Unreleased]
 
 ### Fixed
+- #25 — eviction no longer goes blind when the impaired connection is the only one
+  left active. The #22 real-world S3 drill (32 KiB/s victim link) caught it live:
+  every healthy part confirmed sub-window (never sampling a window), finished leases
+  dropped their `live_bps` entry, and `below_floor`'s fewer-than-two-samples guard
+  then refused to judge the lone laggard — the victim part crawled the FULL wait-out
+  (~472 s for a 15.5 MB part at 32 KiB/s) with zero `chunk_evicted`. Fix: completed
+  leases keep ONE vote each (freshest window rate, else the lease mean; zero-progress
+  confirms never vote), the floor computes over live ∪ completed samples, and votes
+  are capped at the fleet's best live window rate — the cap added after the
+  integration eviction drill caught the un-capped first draft evicting HEALTHY
+  streamers (an un-capped sub-window mean inflated the median past every honest
+  rate, exhausting the retry budget). The `len < 2` guard now means "true lone
+  fleet" (e.g. TUS `max_parallel = 1`). Pinned by `tests/lone_worker_eviction.rs`.
 - #24 — verify-repair in the finish gate: when ADR-010 verify REFUSES a resumed
   upload because the SERVER's part list cannot assemble (SeaweedFS keeps a
   duplicate entry for a completed-but-unacknowledged PUT that the resume re-sent),

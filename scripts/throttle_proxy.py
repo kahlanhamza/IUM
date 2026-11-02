@@ -8,10 +8,13 @@ socket reads — not in a test double and not in a test clock.
 
 Impairment model ("one bad Wi-Fi minute"): the FIRST connection ever to carry
 an UploadPart for the victim partNumber is throttled to VICTIM_RATE bytes/s
-(client -> server direction) for IMPAIRMENT_SECONDS, starting when the victim
-request line is seen. Every later connection — including the eviction retry's
-fresh connection — runs at full speed: the network healed, the engine is
-expected to have abandoned the stuck lane and re-driven the span elsewhere.
+(client -> server direction). The impairment binds to that ONE connection
+until its body ends — `--victim-seconds` only windows the internal
+victim_active_until bookkeeping, it does NOT un-throttle the link mid-body
+(the engine is expected to abandon the impaired attempt long before the body
+completes). Every later connection — including the eviction retry's fresh
+connection — runs at full speed: the network healed, the engine is expected
+to have abandoned the stuck lane and re-driven the span elsewhere.
 
 Framing: the proxy forces `connection: close` on forwarded request heads, so
 each connection carries exactly one request/response pair. That keeps the
@@ -123,7 +126,7 @@ class Relay:
             self.state["victim_active_until"] = time.monotonic() + self.victim_seconds
             rate = self.victim_rate
             print(f"[throttle-proxy] VICTIM: {request_line} -> {self.victim_rate} B/s "
-                  f"for {self.victim_seconds}s", flush=True)
+                  f"(binds to this connection's body)", flush=True)
         elif self.state["victim_active_until"] and time.monotonic() < self.state["victim_active_until"]:
             # NOTE: any other request that starts inside the impairment window
             # still moves at full speed — the impairment is bound to the ONE
