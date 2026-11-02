@@ -16,6 +16,10 @@ set -euo pipefail
 VERSION="2.10.1"
 BASE_URL="https://github.com/tus/tusd/releases/download/v${VERSION}"
 WITH_DIR="${TUS_UPLOAD_DIR:-}"
+# --with-drill: also run the kill-9 TUS drill (tests/tus_drill.rs) after the
+# suite — nightly-only: it uploads ~60 MiB across two real processes.
+WITH_DRILL=0
+[ "${1:-}" = "--with-drill" ] && WITH_DRILL=1
 
 say() { echo "[tus-test] $*"; }
 die() { echo "[tus-test] FAIL: $*" >&2; exit 1; }
@@ -96,5 +100,10 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 say "running env-gated TUS suite (adapter_tus)"
 cargo test -p ium-core --test adapter_tus
+
+if [ "$WITH_DRILL" = 1 ]; then
+  say "running kill-9 drill (tus_drill)"
+  cargo test -p ium-core --test tus_drill -- --nocapture
+fi
 
 say "GREEN: TUS tests passed against tusd ${VERSION} on ${os}/${arch}"

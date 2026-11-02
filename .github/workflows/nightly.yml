@@ -68,3 +68,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: ">100 MiB upload + SIGKILL mid-body + zero-re-upload resume"
         run: bash scripts/s3-test.sh --with-drill
+
+  # The TUS kill-9 drill (issue #11): the same shape against tusd, with the
+  # sharper window — SIGKILL after the server ACKed chunk 0 but BEFORE the
+  # journal write, so the fresh process must absorb a full-chunk drift via
+  # the 409 HEAD-realign path (#10) and recover the journaled creation URL
+  # through the manager's Action::Reattach (#12). Byte-level zero re-upload:
+  # the resume process pushes exactly the missing span. Linux nightly only;
+  # the regular TUS suite proves the harness on all 3 OS in ci.yml.
+  tus_drill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: "SIGKILL after ack before journal write + 409-realign resume"
+        run: bash scripts/tus-test.sh --with-drill
