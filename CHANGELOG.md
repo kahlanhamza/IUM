@@ -29,6 +29,21 @@ prose. An entry without verifiable issue numbers does not belong here.
   real-world suite exercises it for real.
 
 ### Added — M5: API freeze, docs & real-data evidence
+- #22 — real-world stress drill: a real 308 MiB 1080p film (Big Buck Bunny, Blender
+  Foundation, CC-BY, archive.org — sha256-pinned) plus two smaller real films through
+  five engine-driven scenarios vs pinned SeaweedFS 4.51 with the production
+  S3MultipartAdapter: S1 plain upload → byte-exact read-back; S2 crash & resume
+  (SIGKILL mid-flight at a real moment, fresh process reattaches); S3 hostile network
+  (transparent TCP throttle proxy in front of the REAL server — KiB/s-scale victim
+  link, `IUM_S3_VICTIM_RATE`/`_SECONDS` tunable to the owner's real uplink; production
+  eviction defaults must fire `chunk_evicted` on live wire numbers); S4 user actions
+  (pause freezes the wire provably, resume → Done; cancel → `Canceled` journaled and
+  the server never completes the object — HEAD 404); S5 concurrent three-film fleet.
+  Every scenario prints one machine-checkable `EVIDENCE {json}` line collected into
+  `rea-lab/realworld/evidence-*.md`. `s3-test.sh --with-realworld FILE...` takes ANY
+  file path (owner-supplied videos drop in with zero code change); a free-cloud
+  `stress.yml` workflow (GitHub Actions, workflow_dispatch + weekly) runs the same
+  suite at full scale.
 - #17 — real-data e2e drill: a REAL playable H.264/AAC video (~23 MiB, ffmpeg-generated
   at test time) through the engine on HTTP loopback, TUS (tusd 2.10.1) and S3 multipart
   (SeaweedFS 4.51); byte-exact (`sha256(received) == sha256(source)`) and ffprobe-verified

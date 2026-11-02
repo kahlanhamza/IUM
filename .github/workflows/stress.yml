@@ -1,0 +1,56 @@
+# Real-world stress bench (issue #22): the free-cloud lane for the full-scale
+# real-world suite. GitHub-hosted runners give the campaign a 14+ GB disk and
+# a clean network — no sandbox ceiling. Manual dispatch anytime; a weekly
+# keep-alive catches drift. Owner mandate 2026-11-03: "we need a solution
+# like a free cloud service for developers to run and test code" — this is
+# that solution, on the service the repo already runs CI on (€0).
+#
+# Assets are REAL films (ADR-009: never committed) fetched fresh per run:
+#  - the 308 MiB 1080p Big Buck Bunny (Blender Foundation, CC-BY) from
+#    archive.org — sha256-pinned, the exact asset the local campaign verified;
+#  - a 30 MiB BBB clip (test-videos.co.uk) as the failure-mode + fleet partner.
+name: stress
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 6" # Saturdays 04:00 UTC
+
+concurrency:
+  group: stress-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  realworld:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch real film assets
+        run: |
+          curl -sL --retry 3 -o /tmp/bbb_1080p.mp4 \
+            "https://archive.org/download/big_buck_bunny_1080p_stereo/big_buck_bunny_1080p_stereo.mp4"
+          echo "5b3c5575ce6248421272aae3f6da87fdeb48b5bfb7e8e99551d8e98b58012885  /tmp/bbb_1080p.mp4" | sha256sum -c -
+          curl -sL --retry 3 -o /tmp/bbb_30mb.mp4 \
+            "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_30MB.mp4"
+          [ "$(stat -c%s /tmp/bbb_1080p.mp4)" = "322866076" ]
+          [ "$(stat -c%s /tmp/bbb_30mb.mp4)" -ge 10000000 ]
+
+      # S1–S5 with the pinned real films: the 308 MiB film carries the size
+      # proof (S1) and joins the fleet (S5); the failure-mode scenarios
+      # (S2 crash, S3 hostile network, S4 user actions) run on the smaller
+      # film — the scenarios are about failure shapes, and SeaweedFS volume
+      # files never shrink, so disk cost scales with the failure asset.
+      - name: Real-world stress suite (S1–S5 vs pinned SeaweedFS 4.51)
+        run: bash scripts/s3-test.sh --with-realworld /tmp/bbb_1080p.mp4 /tmp/bbb_30mb.mp4
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: realworld-stress-evidence
+          path: rea-lab/realworld/evidence-*.md
+          if-no-files-found: error

@@ -18,17 +18,25 @@ BASE_URL="https://github.com/seaweedfs/seaweedfs/releases/download/${VERSION}"
 BUCKET="ium-test"
 WITH_DRILL=0
 WITH_REAL=0
+WITH_REALWORLD=0
+REALWORLD_FILES=()
 say() { echo "[s3-test] $*"; }
 die() { echo "[s3-test] FAIL: $*" >&2; exit 1; }
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --with-drill) WITH_DRILL=1 ;;
     # --with-real: also run the real-data drill (tests/real_data.rs, issue
     # #17) — a REAL ffmpeg-generated video through the engine; skipped loud
     # where ffmpeg is absent.
     --with-real) WITH_REAL=1 ;;
-    *) die "unknown flag: $arg" ;;
+    # --with-realworld FILE [FILE...] — run the real-world stress drill
+    # (issue #22) INSTEAD of the standard suites: real film(s) from disk
+    # through crash-resume, hostile network, pause/cancel, concurrent fleet.
+    --with-realworld)
+      WITH_REALWORLD=1; shift; REALWORLD_FILES=("$@"); break ;;
+    *) die "unknown flag: $1" ;;
   esac
+  shift
 done
 
 PY=python3
@@ -138,10 +146,22 @@ command -v cargo >/dev/null 2>&1 \
 command -v cargo >/dev/null 2>&1 || die "cargo not on PATH"
 
 export IUM_S3_ENDPOINT="http://127.0.0.1:${S3_PORT}/${BUCKET}"
+export IUM_FILER_URL="http://127.0.0.1:8888"
 export IUM_S3_ACCESS_KEY="iumcikey"
 export IUM_S3_SECRET_KEY="iumcisecret00000000000000000000000000000000"
 export IUM_S3_REGION="us-east-1"
 cd "$REPO"
+
+if [ "$WITH_REALWORLD" = 1 ]; then
+  [ "${#REALWORLD_FILES[@]}" -ge 1 ] || die "--with-realworld needs at least one file path"
+  for f in "${REALWORLD_FILES[@]}"; do
+    [ -f "$f" ] || die "real-world asset not found: $f"
+  done
+  say "running real-world stress drill (issue #22) with ${#REALWORLD_FILES[@]} real asset(s)"
+  bash "$SCRIPT_DIR/realworld-stress.sh" "${REALWORLD_FILES[@]}"
+  say "GREEN: real-world stress drill passed against SeaweedFS ${VERSION} on ${os}/${arch}"
+  exit 0
+fi
 
 say "running env-gated S3 suite (adapter_s3)"
 cargo test -p ium-core --test adapter_s3

@@ -10,6 +10,10 @@ rea-lab/targets/
 rea-lab/bin/
 rea-lab/pylib/
 
+# --- real-world stress lab (#22): real multi-hundred-MB films + run logs.
+# Evidence lives in the GitHub issue + STATUS.md, never in git (ADR-009).
+rea-lab/realworld/
+
 # --- sandbox infra (not part of IUM) ---
 skills/
 .env
