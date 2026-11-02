@@ -23,6 +23,7 @@ pub mod ids;
 pub mod journal;
 pub mod manager;
 pub mod retry;
+pub mod sigv4;
 pub mod state;
 
 pub use adapter::{AdapterRegistry, Capability, ChunkConfirm, ProbeReport, TransferAdapter};
