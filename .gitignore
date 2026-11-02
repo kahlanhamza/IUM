@@ -33,3 +33,4 @@ tool-results/
 # --- local S3 test server (Garage rehearsal harness, not part of the repo) ---
 .garage-local/
 .weed-local/
+.tus-local/
