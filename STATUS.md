@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-02** · Phase: **M5 COMPLETE — #17 #18 #19 #20 all closed (real-data evidence + API freeze + versioning)**
+> Last updated: **2026-11-03** · Phase: **M5 COMPLETE + real-world stress campaign GREEN (#22 #24 #25 #26 closed — free-cloud bench proven, all engine invariants re-verified on a real 308 MiB film)**
 
 ---
 
@@ -107,9 +107,29 @@ discipline). M5 milestone complete per docs/04 — every box checked.
    M5; CHANGELOG.md Keep-a-Changelog seeded from the verified record (0.1.0 = the
    frozen facade), versioning policy in docs/05 (0.x rules, trybuild-pinned breaks,
    changelog-in-same-commit rule), both issue templates carry the changelog checkbox).
-18. **M5 milestone complete** — all four issues closed; next tranche per docs/04:
-    more transports (e.g. WebDAV/Drive), accounts/OAuth, or the Sprint-2 UI — owner
-    decides.
+18. ~~**M5 milestone complete**~~ ✅ (2026-11-02, all four issues closed, CI 7/7 green).
+19. ~~**#22 — real-world stress drill: a real 308 MiB film through S1–S5 vs real SeaweedFS**~~
+    ✅ (2026-11-03; free-cloud bench `stress.yml` dispatchable with `victim_rate`/
+    `victim_seconds` KB/s inputs; 3 cloud runs — 2 honest failures caught #26 + the
+    S2 fast-link kill shape; final run ALL GREEN: S1 308 MiB byte-exact 3.1 s,
+    S2 kill at 25% zero-re-upload, S3 32 KiB/s victim evicted → Done 20.1 s vs
+    234 s wait-out, S4 pause 0.027 s latency + cancel → server HEAD 404, S5 fleet
+    byte-exact; harness fixes: throttle-proxy deadlock, 20 MiB failure-asset floor,
+    stdin evidence extractor, deterministic `--allow-calls 1` kill shape).
+20. ~~**#24 — verify-repair sweep in the finish gate**~~ ✅ (2026-11-03, caught by S2
+    live: resumed upload honestly failed verify on a duplicate server entry → ONE
+    counted journaled repair; pinned by `tests/verify_repair.rs`).
+21. ~~**#25 — fleet votes keep the eviction floor alive**~~ ✅ (2026-11-03, caught by
+    S3 live: lone impaired link after fast parts finish went unevaluated; pinned by
+    `tests/lone_worker_eviction.rs`).
+22. ~~**#26 — Cancel honored during the Finishing verify gate**~~ ✅ (2026-11-03,
+    caught by the first cloud run: parallel parts confirm in one step on fast links
+    so the cancel landed on Finishing → refused; `Finishing → Canceled` legal, gate
+    honors cancel at entry before any Complete I/O, razor window journals
+    `complete_after_cancel`, never a false Done; pinned by
+    `tests/finishing_cancel.rs`, RED at the pre-fix HEAD).
+23. **Next tranche per docs/04**: more transports (WebDAV/Drive), accounts/OAuth,
+    or the Sprint-2 UI — owner decides.
 
 ## 5. Defect audit trail
 
@@ -232,6 +252,7 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-02 | **Issue #18 closed** via the full loop (design note → first run RED ×2 → fix → LIVE green stable 3/3). The drill: local S3-shaped loopback server paces its socket READS (part 2 first PUT at 96 KiB/s, others 2 MiB/s — real TCP backpressure, production S3MultipartAdapter + real SigV4, no test clock); real video fixture from #17; 3-worker fleet; `EvictionPolicy` window 500 ms (documented test shrink), ratios/strikes spec-default. RED earned: (1) drill server's first draft didn't drain the Complete body → keep-alive desync → verify HEAD read XML as request line → ADR-010 verify correctly REFUSED Done (the gate worked; the server was wrong); (2) the abandoned impaired request produces NO FIN inside the window (hyper lingers the pooled socket) — replaced EOF-truncation assertion with the honest observable: impaired attempt still in-flight (started, never completed) at Done. LIVE: `chunk_evicted {bps:0.0, median_bps:1736409, strikes:2, idx:1}` — the watch measured the buffered-burst stall; Done in 6.2 s (wait-out would be ~80 s, bound 30 s); part 2 completed once from the retry (`etag-2-a2`); assembled object sha256 == source, ffprobe-playable. Telemetry finding recorded: eviction fires on the progress freeze that follows hyper's initial buffered burst over a throttled link | 130/130 gates; #18 auto-closed by commit | see git log |
 | 2026-11-02 | **Issue #17 closed** via the full loop (survey RED: every fixture in the repo uploads zeros → design note on the issue → `tests/real_data.rs` → LIVE first-attempt green on all three lanes). Real fixture: ffmpeg `testsrc2`+sine → **H.264/AAC MP4, 23,089,475 bytes**, generated at test time (never committed, ADR-009); reality guards on source AND received (ffprobe h264+aac+duration, >64 distinct bytes/64 KiB window — a zeros file holds 1); fidelity invariant `sha256(received)==sha256(source)` + received copy ffprobe-verified PLAYABLE. All lanes ENGINE-driven (create_job→run_job→journal Done): HTTP loopback recorder, TUS vs pinned tusd 2.10.1 (max_conns=4 requested — #13 clamp held), S3 multipart vs pinned SeaweedFS 4.51 (parts reassembled, signed GET read-back). Harness: `--with-real` flag on both server scripts; ci.yml passes it (runner images ship ffmpeg; loud skip elsewhere). Test count 126→129 | LIVE: all 3 lanes byte-exact, same sha256 `1a51b80b…`; #17 auto-closed by commit | see git log |
 | 2026-11-03 | **CI forensics + engine re-proof on owner request (#21)** — "look to CI history, why failed/cancelled; does the engine really work? upload must be fast even on slow connection". All 40 runs audited: **4 failures, all root-caused and already fixed in-tree** (`99ed179` = defect #11 missing dev-dep, institutionalized as the committed-tree gate; `3ac5dd8` = unquoted `>` YAML block-scalar in a step name, fixed `c4ada0c`; `c4ada0c` = Windows-only cleanup race, 23/23 tests PASSED, `rm` hit weed.exe's async handle release, fixed `9ae4be6`; `38d7ead`+`b828d9e` = shell glue compile errors E0433/E0308 caught by CI's 3-OS ium-app job — the lane CI owns by design, fixed `7291606`). **4 cancellations all benign**: `ci.yml` `concurrency: cancel-in-progress: true`; each superseded by a newer main push within 22 s–2 min, every superseding run green. Fresh local execution at `141d9b5` (nothing trusted from history): 130/130 offline; LIVE vs real servers with the real 23 MB H.264/AAC video — S3 23/23 + byte-exact video (sha256 `1a51b80b…`), TUS 11/11 + byte-exact, S3 kill-9 drill zero-re-upload, TUS kill-9 drill realign-resume; **slow-connection eviction drill**: pool median 2,031,033 B/s, impaired 96 KiB/s link measured ~0 B/s in-window → `chunk_evicted` on live wire numbers, impaired attempt abandoned mid-body, retry at full speed, **Done in 5.7 s vs ~80 s wait-out (~14×)**, video byte-identical + playable | CI healthy (last 7 runs green); verdict + tables recorded on the issue | `141d9b5` audit, issue #21 |
+| 2026-11-03 | **Real-world stress campaign GREEN + free-cloud bench proven (#22, + #24 #25 #26 found & fixed)** — owner mandates: real-world stress on a REAL film, a free cloud service if the sandbox disk can't take it, and KB/s-scale honesty ("23.8 MB/s is loopback overhead, not a network; my uplinks are kilobytes per second"). Built & executed: `realworld_stress` scenarios S1–S5 (path-agnostic `--file` — the owner's exact video drops in with zero code change), `throttle_proxy.py` (real TCP choke in front of the REAL server), `scripts/realworld-stress.sh` driver, `stress.yml` **dispatchable free-cloud bench with `victim_rate`/`victim_seconds` inputs** (GitHub Actions = the €0 developer cloud, 14+ GB disk; real 308 MiB 1080p film sha256-pinned per run, never committed). First full local execution caught **three harness defects** (proxy deadlocked every proxied PUT by discarding pipelined body bytes; 10 MiB failure assets plan one chunk so victim part 2 cannot exist → 20 MiB floor; s4pause raced the cooperative-pause contract) — engine clean every time. Cloud run 1: S1 308 MiB byte-exact 2.97 s + S2 + S3 + S4pause GREEN, **S4-cancel failed → #26** (Finishing refused Cancel — real KB/s uplinks spend seconds in verify; fixed: transition legal, gate honors cancel at entry, razor window journals `complete_after_cancel`, never a false Done; pinned RED→GREEN by `tests/finishing_cancel.rs`). Cloud run 2: **S2 racing kills cannot land on fast links** (parallel parts confirm in one step; post-completion kill hit an already-Done journal, resume honestly refused) → deterministic `--allow-calls 1` wedge shape. **Cloud run 3 (41548311010): ALL FIVE SCENARIOS GREEN** — S1 308 MiB byte-exact 3.11 s; S2 kill at exactly 25%, `wire_resent == size − confirmed` (zero re-upload); S3 32 KiB/s victim (≈256 kbps uplink) evicted at 2 strikes vs median 26.2 MB/s → **Done 20.1 s vs 234 s wait-out (~11.6×)**; S4 pause journaled in 0.027 s + wire frozen + cancel → **server HEAD 404 (a canceled upload never completed)**; S5 fleet (308 MiB + 30 MiB, one manager) both byte-exact. Offline suite 135/135 local (incl. new finishing_cancel); gate GREEN on committed tree `5ca7f99`; one gate-discipline slip (pipe masked gate exit → pushed a clippy-red test) fixed forward in `028daab` and the gate is now always run with pipefail | #22 #24 #25 #26 all closed with wire evidence; CHANGELOG entries for #22-harness + #26; weekly keep-alive Saturday 04:00 UTC | `1ad5c8d` `c718a0b` `548cb00` `5c35dee` `93ff6ba` `028daab` `5ca7f99`, issues #22 #24 #25 #26, runs 41545100471 / 41547293634 / 41548311010 |
 
 ## 10. Security
 
