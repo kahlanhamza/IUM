@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-02** · Phase: **M3 — Real transports complete** (M1+M2+M3 done; #12 session-recovery closed)
+> Last updated: **2026-11-02** · Phase: **M3 complete + loop findings closed** (#11 #12 done — M4 tranche decision next)
 
 ---
 
@@ -14,10 +14,11 @@
 cd /home/z/my-project
 git pull                      # remote: github.com/kahlanhamza/IUM (private)
 . scripts/rust-env.sh         # persistent toolchain in .toolchain/ (gitignored)
-cargo test -p ium-core        # expect: 118 passed (56 unit + 23 adapter_s3 + 11 adapter_tus + 5 loopback HTTP + 21 integration + 1 kill-9 drill [env-gated] + 1 compile-fail contract)
+cargo test -p ium-core        # expect: 119 passed (56 unit + 23 adapter_s3 + 11 adapter_tus + 5 loopback HTTP + 21 integration + 1 s3 kill-9 drill [env-gated] + 1 tus kill-9 drill [env-gated] + 1 compile-fail contract)
 bash scripts/gate.sh          # before ANY push: gates on the COMMITTED tree (defect #11 rule)
 bash scripts/s3-test.sh       # live S3 suite vs pinned SeaweedFS 4.51 (downloads ~45 MB per run)
 bash scripts/tus-test.sh      # live TUS suite vs pinned tusd 2.10.1 (downloads ~27 MB per run)
+                              #   --with-drill: also the kill-9 TUS drill (nightly)
 ```
 
 If `.toolchain/` was wiped: `bash scripts/install-toolchain.sh` (installs rustup minimal profile
@@ -52,14 +53,18 @@ the Tauri/React shell (`ium-app/`) is **frozen** until M2+M3 (ADR-006).
 | 2026-11-02 | **Issue #9 closed**: S3 CI harness on 3 OS + kill-9 drill + >100 MiB nightly e2e. Server re-decided: **SeaweedFS 4.51 pinned** (Garage v2.1.0 ships Linux-only official binaries; one product for linux/darwin/windows from GitHub Releases with md5 sidecars). The pin caught a real bug on day one: SeaweedFS emits NUMERIC character references (`&#34;`) where Garage emits named (`&quot;`) → adapter's named-only decode left literal `&#34;` in etags → `Complete` answered `InvalidPart` (RED: 18/20 live). Fixed: `xml_text` = single-pass XML entity decode (named + numeric dec/hex, double-decode-safe), both servers' captured vectors pinned as tests. Harness `scripts/s3-test.sh`: per-OS pinned download + md5 verify, random free port triple (no stale-server hazards, git-bash-portable), throwaway creds via `s3.json`, bucket via `scripts/s3curl.py` (stdlib SigV4 from #6's independent reference), env-gated suite, abort-leftover-multiparts on exit (trap). Kill-9 drill: `src/bin/s3_drill_child.rs` (upload/resume modes, ticket-gated adapter wedges calls at ENTRY — deterministic mid-body state) + `tests/s3_drill.rs` (parent): 112 MiB → first part confirmed → SIGKILL → fresh process reattaches from journaled probe event → `WIRE == 112 MiB − 28 MiB` (zero re-upload) → honest Done after ADR-010 verify. ci.yml: S3 step on all 3 OS; nightly: `s3_drill` job (Linux) | 104/104 gates; LIVE: 23/23 suite + drill vs SeaweedFS 4.51 (`WIRE 88080384 < 117440512`); CI 3-OS green incl. Windows; nightly `s3_drill` dispatch-verified; #9 auto-closed by commit |
 | 2026-11-02 | **Issue #10 closed**: TUS 1.0.0 adapter — byte-level resume. Protocol rehearsed LIVE on tusd v2.10.1 (204 + Upload-Offset acks, 409 offset conflict, 404 bogus session, 412 without Tus-Resumable, NO checksum extension). `adapter_tus`: probe = POST creation (RFC 3986 §5.2 Location resolution); PATCH `[resume_from, end)` streamed from disk; `bytes_confirmed` = server-acked delta ONLY; **409 realign** absorbs drifted-but-server-acked bytes; verify = READ-ONLY HEAD (no commit gate — contrast ADR-010). Harness `scripts/tus-test.sh` (pinned tusd, sha256-verified, random port); ci.yml TUS step on all 3 OS | 115/115 gates; 11/11 LIVE vs tusd incl. 409-realign + byte-level restart drill; #10 auto-closed by commit |
 | 2026-11-02 | **Issue #12 closed**: `Action::Reattach` implemented — the taxonomy's promise kept. `TransferAdapter::reattach(endpoint, token)` is a REQUIRED trait method (no default; trybuild contract regenerated: E0046 lists `verify`, `reattach`). S3/TUS delegate to inherent `restore_session` (map insert, no network, never re-probes — re-probe would orphan the live session); HTTP + doubles explicit no-ops; drill child delegates. Manager: mid-transfer Reattach replays the LAST journaled probe token, journals `reattach`, counts the attempt (same budget as Retry — really-gone session exhausts into Failed, recovery cannot spin); `finish()` opens with the same replay (`finishing_entry`) so ANY fresh process verifies on a journal-reconciled session — the stronger statement of ADR-002. Honest mock (`has_session` starts false, sessionless verify = SessionLost) exposed a third hole for free: the two pre-existing crash-recovery drills also died at verify in a fresh process — fixed by the same Finishing-entry replay; their fixtures now journal the probe event (a mid-flight job without one is impossible) | 118/118 gates (5×RED → green incl. the issue's scratch test); #12 auto-closed by commit |
+| 2026-11-02 | **Issue #11 closed**: TUS kill-9 nightly drill — the s3_drill shape with the sharper window the issue names. `src/bin/tus_drill_child.rs`: upload mode gates every chunk but 0 at entry, and the wrapper **holds chunk 0's server-acked confirmation for 8 s** before handing it to the manager — the parent SIGKILLs inside a window that is provably real (journal `Running` + 0 confirmed while tusd holds 20 MiB). Resume child: FRESH adapter with an EMPTY session map — recovering the journaled creation URL through the manager's `Action::Reattach` (#12: map-miss → SessionLost → token replay) is part of the proof; the re-lease then absorbs the full-chunk drift through the 409 HEAD-realign (#10) with zero re-sent bytes. Chunk ordering is drill-local (TUS = one sequential-offset resource). Parent: `SERVER_ACK == SIZE/2` exact, journal 0 at kill, `SERVER_OFFSET == SIZE/2`, `DONE done` via read-only HEAD verify, byte-level zero re-upload pinned `SIZE/2 ≤ WIRE ≤ SIZE/2 + 64 KiB` (one rejected 409 attempt's buffered body chunk is the only honest slack — exact `==` races on hyper's first body poll). Nightly `tus_drill` job (Linux) via `scripts/tus-test.sh --with-drill`; YAML `safe_load`-validated | 119/119 gates; LIVE 11/11 suite + drill GREEN vs tusd 2.10.1 first attempt; #11 auto-closed by commit |
 
 ## 3. In progress
 
-Next: **#11 — TUS subprocess kill-9 nightly drill** (the s3_drill shape; SIGKILL mid-PATCH
-kill-after-ack-before-journal window → 409-realign e2e in a fresh process; nightly job
-reusing `scripts/tus-test.sh --with-drill`). After that: M4 tranche decision (frozen shell
-vs more transports). #12 (Action::Reattach) closed 2026-11-02; M3 is complete:
-#6 #7 #8 #9 #10 #12 all closed.
+**M4 tranche decision** (frozen shell per ADR-006 vs more transports). The M3 milestone
+and both loop findings are closed: #6 #7 #8 #9 #10 #12 #11 all done. Known follow-up for
+that decision: TUS jobs are planned like any resumable adapter (`max_conns` chunks run
+CONCURRENTLY), but TUS is ONE sequential-offset resource — concurrent chunk PATCHes to
+different offsets 409-realign into `Unresumable` when a later chunk leases before an
+earlier one settles. The drill dodges it with local ordering; the honest fix belongs to
+the planner (TUS ⇒ sequential/1-worker plan, likely an adapter-declared
+`max_parallel` next to ADR-011's `max_chunk_bytes`).
 
 ## 4. Backlog / next (ordered — milestone [M3: Real transports](https://github.com/kahlanhamza/IUM/milestone/2))
 
@@ -70,9 +75,11 @@ vs more transports). #12 (Action::Reattach) closed 2026-11-02; M3 is complete:
    SeaweedFS 4.51 pinned; MinIO premise dead, Garage Linux-only).
 5. ~~#10 — TUS 1.0.0 adapter~~ ✅ (2026-11-02, tusd v2.10.1 pinned, 3-OS CI).
 6. ~~**#12 — implement Action::Reattach**~~ ✅ (2026-11-02, required trait method + manager
-   mid-transfer & Finishing-entry replay); **#11 — TUS subprocess kill-9 nightly drill**
-   (blocked by #10 ✅, unblocked by #12 ✅) — NEXT.
-7. M4 tranche decision (frozen shell per ADR-006 vs more transports).
+   mid-transfer & Finishing-entry replay).
+7. ~~**#11 — TUS subprocess kill-9 nightly drill**~~ ✅ (2026-11-02, kill-after-ack-
+   before-journal window; nightly `tus_drill` job).
+8. **M4 tranche decision** (frozen shell per ADR-006 vs more transports) — NEXT; see the
+   TUS sequential-planning follow-up in §3.
 
 ## 5. Defect audit trail
 
@@ -179,11 +186,13 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-02 | **Issue #10 closed**: TUS 1.0.0 adapter — byte-level resume. Protocol rehearsed LIVE on tusd v2.10.1 before any Rust (204 + Upload-Offset acks, 409 offset conflict, 404 bogus session, 412 without Tus-Resumable, NO checksum extension offered). `adapter_tus`: probe = POST creation (Location resolved RFC 3986 §5.2, absolute + relative); PATCH `[resume_from, end)` streamed from disk; `bytes_confirmed` = server-acked delta ONLY; **409 realign** absorbs drifted-but-server-acked bytes (HEAD → re-PATCH from server offset → journal converges to server truth; behind-journal = Unresumable, beyond-chunk = Unknown, one attempt only); verify is READ-ONLY HEAD (no commit gate — contrast ADR-010); empty `[(0,0)]` chunk confirms via HEAD. `PatchFailure::Conflict` exposes 409 as data, no string matching. Harness `scripts/tus-test.sh` (pinned tusd, sha256-verified, random port, temp upload dir); ci.yml TUS step on all 3 OS. Two test bugs caught by the server itself (cannot PATCH ahead of server offset; partial-confirm needs real server state) + one telemetry finding pinned: a call containing a failed 409 attempt may buffer ~24 KiB before the rejection — that test asserts the wire floor, the no-failed-attempt drill keeps exact bytes. Loop finding → #12: `Action::Reattach` promised by the taxonomy but fails the job; Finishing-entry verify has an empty session map (pre-existing, S3 included; RED captured on #12) | 115/115 gates; 11/11 LIVE vs tusd incl. 409-realign + byte-level restart drill; #10 auto-closed by commit |
 | 2026-11-02 | Issues #11 + #12 filed from loop findings: #11 = TUS subprocess kill-9 nightly drill (the s3_drill shape; blocked by #10); #12 = implement Action::Reattach (mid-transfer SessionLost recovery + Finishing-entry session replay; scratch-test RED captured: job Failed where taxonomy promises recovery) | findings are issues, not drive-bys | — |
 | 2026-11-02 | Issue #12 via the full loop (design note → 5×RED — the issue's scratch test + the bounded-recovery count + TWO pre-existing crash drills exposed by the honest session-gated mock → required `reattach` trait method + manager mid-transfer/Finishing-entry journal replay → 118/118); trybuild snapshot regenerated | taxonomy's Reattach promise kept; session truth reconciled from the journal before verify | `96efe6a` |
+| 2026-11-02 | Issue #11 via the full loop (drill child with an 8 s ack-hold window → parent asserts the window from the journal itself → resume proves #12 reattach + #10 realign in one fresh process → LIVE GREEN vs tusd 2.10.1 first attempt → nightly `tus_drill` job) | byte-level zero re-upload pinned; kill-after-ack-before-journal provably hit | `fc0d6d6` |
 
 ## 10. Security
 
 - Token state: fine-grained PAT restored into `.secrets/gh_token` on 2026-11-02 (gitignored,
-  chmod 600). **It has now been pasted into chat twice — rotate it at
+  chmod 600). **It has now been pasted into chat three times — the owner says it will be
+  revoked; rotate it at
   <https://github.com/settings/personal-access-tokens> when convenient.** After rotating:
   `mkdir -p .secrets && chmod 700 .secrets && echo 'NEW_TOKEN' > .secrets/gh_token && chmod 600 .secrets/gh_token`
   (never commit this file; scopes needed: repo contents read/write, issues read/write,
