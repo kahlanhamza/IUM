@@ -11,6 +11,28 @@ prose. An entry without verifiable issue numbers does not belong here.
 ## [Unreleased]
 
 ### Fixed
+- #22 (harness, first full execution) — the committed drill had never actually run
+  end-to-end; its first real run caught three harness defects, engine clean every
+  time. (1) `throttle_proxy.py` deadlocked EVERY proxied PUT: it parsed the request
+  head and silently discarded `rest` — the first body slice that arrives glued to
+  the head in one TCP read — then waited for body bytes the client had already sent
+  while the client waited for a response that could never complete (240 s probe:
+  frontier 0, no `VICTIM:` line ever). Fix: `rest` is forwarded first and counted
+  in the pacing budget; client-mid-body abandonment (the eviction path) tears both
+  ends down instantly; response reads are bounded. (2) A 10 MiB failure asset plans
+  ONE chunk (`min(4 workers, floor(size / 5 MiB CHUNK_MIN))`), so the victim part
+  `partNumber=2` cannot exist and the hostile-network scenario silently runs
+  unimpeded — the driver now fails loud below a 20 MiB failure-asset floor.
+  (3) `s4pause` raced the cooperative-pause contract ("takes effect between
+  leases"): it asserted journaled `Paused` immediately and later let a terminal job
+  reach `pause()`. Fix: one journal snapshot (state AND frontier) is the decision
+  input; terminal-before-pause is the honest loud "upload too fast" outcome; the
+  Paused wait is bounded and records the observed pause latency as evidence.
+  Also: the evidence elapsed-extractor now reads stdin (string interpolation
+  mangled the eviction payloads' escaped quotes), and the `stress.yml` free-cloud
+  bench gained dispatch inputs (`victim_rate`, `victim_seconds`) so any real KB/s
+  uplink can be modeled per run. Full local S1–S5 GREEN vs pinned SeaweedFS 4.51
+  at the owner's 32 KiB/s anchor; evidence on the issue.
 - #25 — eviction no longer goes blind when the impaired connection is the only one
   left active. The #22 real-world S3 drill (32 KiB/s victim link) caught it live:
   every healthy part confirmed sub-window (never sampling a window), finished leases

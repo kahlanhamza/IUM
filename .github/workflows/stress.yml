@@ -9,10 +9,23 @@
 #  - the 308 MiB 1080p Big Buck Bunny (Blender Foundation, CC-BY) from
 #    archive.org — sha256-pinned, the exact asset the local campaign verified;
 #  - a 30 MiB BBB clip (test-videos.co.uk) as the failure-mode + fleet partner.
+#
+# Dispatch inputs model the OWNER'S REAL LINK (2026-11-03: uplinks are
+# KILOBYTES per second — never MB/s): victim_rate is BYTES/s, so 32768 is a
+# 32 KiB/s (~256 kbps) uplink and the 98304 default is 96 KiB/s (~768 kbps).
 name: stress
 
 on:
   workflow_dispatch:
+    inputs:
+      victim_rate:
+        description: "S3 victim-link rate in BYTES/s (32768 = 32 KiB/s ~256 kbps uplink; default 98304 = 96 KiB/s)"
+        required: false
+        default: "98304"
+      victim_seconds:
+        description: "Seconds the victim link stays choked"
+        required: false
+        default: "45"
   schedule:
     - cron: "0 4 * * 6" # Saturdays 04:00 UTC
 
@@ -45,6 +58,9 @@ jobs:
       # film — the scenarios are about failure shapes, and SeaweedFS volume
       # files never shrink, so disk cost scales with the failure asset.
       - name: Real-world stress suite (S1–S5 vs pinned SeaweedFS 4.51)
+        env:
+          IUM_S3_VICTIM_RATE: ${{ inputs.victim_rate || '98304' }}
+          IUM_S3_VICTIM_SECONDS: ${{ inputs.victim_seconds || '45' }}
         run: bash scripts/s3-test.sh --with-realworld /tmp/bbb_1080p.mp4 /tmp/bbb_30mb.mp4
 
       - name: Upload evidence

@@ -174,38 +174,58 @@ async fn s4pause(journal: &str, file: &str, endpoint: &str) -> Result<serde_json
     sup.drive(&rec.id);
 
     // pause once ≥10% is confirmed (whole parts are atomic, so the frontier
-    // moves in part-sized steps)
+    // moves in part-sized steps). ONE snapshot is the decision input: state
+    // AND frontier from the same journal view — a terminal job must never
+    // reach pause(); that outcome is the honest "upload too fast" failure.
     let frontier_at_pause = loop {
-        let f = frontier_of(&m, &rec.id)?;
+        let snap = m.snapshot(&rec.id).map_err(|e| e.to_string())?;
+        let f: u64 = snap.chunks.iter().map(|c| c.bytes_confirmed).sum();
+        if matches!(
+            snap.job.state,
+            JobState::Done | JobState::Failed | JobState::Canceled
+        ) {
+            return Err(format!(
+                "s4pause: job reached state {:?} before the 10% pause point \
+                        (upload too fast on this link for a mid-flight pause)",
+                snap.job.state
+            ));
+        }
         if f * 10 >= size {
             sup.pause(&rec.id).map_err(|e| e.to_string())?;
             break f;
-        }
-        if !sup.is_driving(&rec.id) {
-            // drive exited without pause landing (too-fast upload): fail loud
-            return Err(
-                "s4pause: job reached a terminal state before the pause landed \
-                        (upload too fast for the 10% frontier) — rerun on a slower path"
-                    .into(),
-            );
         }
         if t0.elapsed() > Duration::from_secs(120) {
             return Err("s4pause: timeout waiting for the 10% frontier".into());
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     };
-    let paused_state = m.snapshot(&rec.id).map_err(|e| e.to_string())?.job.state;
-    if paused_state != JobState::Paused {
-        return Err(format!(
-            "s4pause: state after pause is {paused_state:?} (must be Paused)"
-        ));
-    }
-    // the wire must be frozen: 2.5 s later the frontier is byte-identical
+    // Pause is COOPERATIVE ("takes effect between leases" — supervisor.rs):
+    // the drive task journals Paused at the next lease boundary, and on a
+    // real KB/s uplink one lease can run for minutes. The journaled state is
+    // the only authority — wait for it, bounded; never assume it is instant.
+    let pause_t0 = Instant::now();
+    let (paused_state, frontier_at_paused) = loop {
+        let snap = m.snapshot(&rec.id).map_err(|e| e.to_string())?;
+        if snap.job.state == JobState::Paused {
+            break (snap.job.state, frontier_of(&m, &rec.id)?);
+        }
+        if pause_t0.elapsed() > Duration::from_secs(120) {
+            return Err(format!(
+                "s4pause: pause never landed in the journal (state {:?} after 120 s)",
+                snap.job.state
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    let pause_latency_s = pause_t0.elapsed().as_secs_f64();
+    // the wire must be frozen: 2.5 s after the JOURNALED Paused the frontier
+    // is byte-identical. (The pre-Paused grace lease landing is expected and
+    // recorded — the freeze proof starts at the journaled state.)
     tokio::time::sleep(Duration::from_secs(2) + Duration::from_millis(500)).await;
     let frontier_frozen = frontier_of(&m, &rec.id)?;
-    if frontier_frozen != frontier_at_pause {
+    if frontier_frozen != frontier_at_paused {
         return Err(format!(
-            "s4pause: frontier moved while Paused ({frontier_at_pause} → {frontier_frozen})"
+            "s4pause: frontier moved while Paused ({frontier_at_paused} → {frontier_frozen})"
         ));
     }
     sup.resume_signal(&rec.id).map_err(|e| e.to_string())?;
@@ -214,8 +234,10 @@ async fn s4pause(journal: &str, file: &str, endpoint: &str) -> Result<serde_json
         return Err(format!("s4pause: resumed job ended {final_state:?}"));
     }
     Ok(serde_json::json!({
-        "scenario": "s4pause", "paused_state": "Paused",
-        "frontier_at_pause": frontier_at_pause,
+        "scenario": "s4pause", "paused_state": format!("{paused_state:?}"),
+        "frontier_at_pause_call": frontier_at_pause,
+        "frontier_at_journaled_paused": frontier_at_paused,
+        "pause_latency_s": pause_latency_s,
         "frontier_after_2_5s": frontier_frozen,
         "final_state": "Done",
         "size": size, "total_elapsed_s": t0.elapsed().as_secs_f64(),

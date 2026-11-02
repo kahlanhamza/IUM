@@ -69,10 +69,22 @@ class Relay:
         return request_line, headers, rest
 
     async def pump(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter,
-                   count: int, rate: int | None) -> None:
-        """Move exactly `count` bytes; pace reads when a rate is set."""
+                   count: int, rate: int | None, pre: bytes = b"") -> bool:
+        """Move exactly `count` body bytes; pace reads when a rate is set.
+
+        `pre` carries body bytes ALREADY consumed from the wire (they arrived
+        glued to the request head in one TCP read). They are written first and
+        count toward the pacing budget — dropping them deadlocks both sides:
+        the proxy then waits for bytes the client already sent, while the
+        client waits for a response that can never complete.
+        """
         moved = 0
         start = time.monotonic()
+        if pre:
+            n = min(len(pre), count)
+            dst.write(pre[:n])
+            await dst.drain()
+            moved += n
         while moved < count:
             n = min(CHUNK, count - moved)
             b = await src.read(n)
@@ -86,11 +98,15 @@ class Relay:
                 behind = target_t - time.monotonic()
                 if behind > 0:
                     await asyncio.sleep(behind)
+        return moved == count  # False = client vanished before the full body
 
     async def pump_until_eof(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter,
-                             rate: int | None) -> None:
-        moved = 0
+                             rate: int | None, pre: bytes = b"") -> None:
+        moved = len(pre)
         start = time.monotonic()
+        if pre:
+            dst.write(pre)
+            await dst.drain()
         while True:
             b = await src.read(CHUNK)
             if not b:
@@ -112,11 +128,12 @@ class Relay:
         if head is None:
             self.w.close()
             return
-        request_line, headers, _ = head
+        request_line, headers, rest = head
         method = request_line.split(" ")[0] if " " in request_line else ""
         path = request_line.split(" ")[1] if " " in request_line else ""
         length = int(headers.get("content-length", "0"))
         te = "chunked" in headers.get("transfer-encoding", "").lower()
+        print(f"[throttle-proxy] req {request_line}", flush=True)
 
         # --- victim selection: first connection EVER carrying the victim part
         rate: int | None = None
@@ -152,17 +169,33 @@ class Relay:
         uwriter.write(lines.encode("latin-1"))
         await uwriter.drain()
 
-        # --- forward the body (paced iff victim)
+        # --- forward the body (paced iff victim) ---------------------------
+        # `rest` is the body's first slice, read together with the head in one
+        # TCP read. It MUST go upstream first and count in the pacing budget.
         if te:
-            await self.pump_until_eof(self.r, uwriter, rate)  # best effort
+            await self.pump_until_eof(self.r, uwriter, rate, pre=rest)  # best effort
         elif length:
-            await self.pump(self.r, uwriter, length, rate)
+            body_complete = await self.pump(self.r, uwriter, length, rate, pre=rest)
+            if not body_complete:
+                # The client abandoned this connection mid-body — this is the
+                # engine's eviction tearing the impaired attempt off the wire.
+                # The server can never finish this request; relay nothing.
+                # Close BOTH ends now so the upstream sees a real disconnect
+                # instead of a proxy that quietly waits forever.
+                print(f"[throttle-proxy] client abandoned {request_line.split(' ')[0]} "
+                      f"{path} mid-body (partial of {length} B) — tearing the link down", flush=True)
+                for wr in (uwriter, self.w):
+                    try:
+                        wr.close()
+                    except OSError:
+                        pass
+                return
 
         # --- relay the response head + body back, then close both ends
         try:
             resp_head = bytearray()
             while b"\r\n\r\n" not in resp_head:
-                b = await ureader.read(CHUNK)
+                b = await asyncio.wait_for(ureader.read(CHUNK), timeout=IDLE_TIMEOUT)
                 if not b:
                     break
                 resp_head += b
@@ -184,9 +217,10 @@ class Relay:
             else:
                 # chunked or close-delimited: the connection closes anyway
                 await self.pump_until_eof(ureader, self.w, None)
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, asyncio.TimeoutError) as e:
             print(f"[throttle-proxy] response relay error: {e}", file=sys.stderr)
         finally:
+            print(f"[throttle-proxy] done {method} {path}", flush=True)
             for wr in (uwriter, self.w):
                 try:
                     wr.close()

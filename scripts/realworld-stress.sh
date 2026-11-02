@@ -43,6 +43,19 @@ F3="${FILES[2]:-}"
 # film: the scenarios are about the failure modes, and SeaweedFS volume
 # files never shrink, so multi-scenario disk cost scales with the asset.
 FF="${F2:-$F1}"
+# The failure-mode scenarios need a MULTI-PART plan: the hostile-network
+# victim is partNumber=2 (it must EXIST and be surrounded by healthy peers),
+# and S2's kill window needs a frontier that moves in several part-sized
+# steps. The planner (chunk.rs) splits with 4 workers and CHUNK_MIN = 5 MiB:
+# chunks = min(4, floor(size / 5 MiB)). So the failure asset must be >= 20
+# MiB — smaller files plan 1–3 chunks and the drill would silently run
+# unimpeded (observed: a 10 MiB asset plans ONE chunk → no partNumber=2 → no
+# victim → no eviction possible). Fail loud instead of lying.
+FF_SIZE="$(stat -c%s "$FF")"
+if [ "$FF_SIZE" -lt $((20 * 1024 * 1024)) ]; then
+  die "failure asset $(basename "$FF") is ${FF_SIZE} B — below the 20 MiB floor \
+(4 workers x 5 MiB CHUNK_MIN): the plan would not even contain a victim part 2"
+fi
 BASE="${IUM_S3_ENDPOINT:?IUM_S3_ENDPOINT not set}"
 AK="${IUM_S3_ACCESS_KEY:?}"
 SK="${IUM_S3_SECRET_KEY:?}"
@@ -253,7 +266,13 @@ kill "$PROXY_PID" 2>/dev/null || true
 wait "$PROXY_PID" 2>/dev/null || true
 if [ "$S3_EXIT" != 0 ]; then die "S3 bin failed: $OUT_S3"; fi
 collect "$OUT_S3"
-ELAPSED="$($PY3 -c "import json,sys; line=[l for l in '''$OUT_S3'''.splitlines() if l.startswith('EVIDENCE ')][0]; print(json.loads(line[9:])['elapsed_s'])")"
+# Extract elapsed_s WITHOUT string interpolation — the evidence line carries
+# escaped inner quotes (the eviction payloads), and embedding captured output
+# inside a python -c triple-quote mangles them (JSONDecodeError). stdin is
+# quote-proof.
+ELAPSED="$($PY3 -c 'import json, sys
+line = [l for l in sys.stdin.read().splitlines() if l.startswith("EVIDENCE ")][0]
+print(json.loads(line[9:])["elapsed_s"])' <<<"$OUT_S3")"
 $PY3 - "$ELAPSED" <<'EOF'
 import sys
 e = float(sys.argv[1])
