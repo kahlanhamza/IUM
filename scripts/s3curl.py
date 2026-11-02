@@ -16,6 +16,7 @@ import datetime
 import hashlib
 import hmac
 import http.client
+import re
 import sys
 import urllib.parse
 

@@ -10,6 +10,12 @@ prose. An entry without verifiable issue numbers does not belong here.
 
 ## [Unreleased]
 
+### Fixed
+- #23 — `s3curl.py --abort-multiparts` crashed on `NameError: re` (module never
+  imported `re`; the `s3-test.sh` exit trap discarded the crash via `|| true`) —
+  multipart exit-hygiene has silently never worked; it now actually runs and the
+  real-world suite exercises it for real.
+
 ### Added — M5: API freeze, docs & real-data evidence
 - #17 — real-data e2e drill: a REAL playable H.264/AAC video (~23 MiB, ffmpeg-generated
   at test time) through the engine on HTTP loopback, TUS (tusd 2.10.1) and S3 multipart
