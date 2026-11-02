@@ -1,13 +1,16 @@
 //! The kill-9 drill child (issue #9). One binary, two modes, driven by the
 //! env-gated parent test `tests/s3_drill.rs`:
 //!
-//! * `upload --journal J --file F [--wedge-after N]` — create a real S3 job
-//!   through the real manager and drive it. After N *completed* upload calls,
-//!   every later call wedges at entry (`pending!()` — the MockAdapter
-//!   entry-log discipline: nothing moves, nothing confirms), so the job can
-//!   never finish. The parent watches `CONFIRMED` lines from the journal and
-//!   SIGKILLs this process mid-body. Deliberately stateless beyond the
-//!   journal — that is the point.
+//! * `upload --journal J --file F [--allow-calls N] [--workers N]` — create a
+//!   real S3 job through the real manager and drive it. After N *completed*
+//!   upload calls, every later call wedges at entry (`pending!()` — the
+//!   MockAdapter entry-log discipline: nothing moves, nothing confirms), so
+//!   the job can never finish. `--allow-calls 1` is the real-world crash
+//!   drill's deterministic mid-flight shape (one part confirmed, the rest
+//!   frozen at entry — the kill window is unbounded on ANY link speed).
+//!   `--workers` sizes the chunk plan (default 4). The parent watches
+//!   `CONFIRMED` lines from the journal and SIGKILLs this process mid-body.
+//!   Deliberately stateless beyond the journal — that is the point.
 //!
 //! * `resume --journal J` — a FRESH process reopens the same SQLite WAL
 //!   journal, replays the journaled probe event into `restore_session` (the
@@ -102,7 +105,12 @@ fn endpoint() -> String {
     std::env::var("IUM_S3_ENDPOINT").expect("IUM_S3_ENDPOINT must be set (harness provides it)")
 }
 
-async fn run_upload(journal_path: &str, file: &str, allow_calls: u32) -> Result<(), String> {
+async fn run_upload(
+    journal_path: &str,
+    file: &str,
+    allow_calls: u32,
+    workers: u32,
+) -> Result<(), String> {
     let source = std::fs::metadata(file)
         .map_err(|e| format!("source: {e}"))?
         .len();
@@ -126,7 +134,7 @@ async fn run_upload(journal_path: &str, file: &str, allow_calls: u32) -> Result<
     let mgr = Arc::new(mgr);
 
     let rec = mgr
-        .create_job(&spec, 4)
+        .create_job(&spec, workers)
         .map_err(|e| format!("create_job: {e}"))?;
     println!("JOB {}", rec.id);
 
@@ -209,9 +217,13 @@ fn main() {
             let allow_calls = arg_of(&args, "--allow-calls")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0);
+            let workers = arg_of(&args, "--workers")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(4)
+                .max(1);
             tokio::runtime::Runtime::new()
                 .expect("runtime")
-                .block_on(run_upload(&journal, &file, allow_calls))
+                .block_on(run_upload(&journal, &file, allow_calls, workers))
         }
         "resume" => tokio::runtime::Runtime::new()
             .expect("runtime")

@@ -44,7 +44,13 @@ prose. An entry without verifiable issue numbers does not belong here.
   Also: the evidence elapsed-extractor now reads stdin (string interpolation
   mangled the eviction payloads' escaped quotes), and the `stress.yml` free-cloud
   bench gained dispatch inputs (`victim_rate`, `victim_seconds`) so any real KB/s
-  uplink can be modeled per run. Full local S1–S5 GREEN vs pinned SeaweedFS 4.51
+  uplink can be modeled per run. The second cloud run also showed plain racing
+  kills cannot land on fast links (parallel parts confirm in ONE step; all 3
+  attempts finished before the kill, the post-completion kill hitting an
+  already-Done journal) — S2 now uses the child's `--allow-calls 1` wedge for a
+  DETERMINISTIC mid-flight shape (one part confirmed, the rest frozen at entry,
+  kill window unbounded on any link), and `s3_drill_child` gained `--workers`.
+  Full local S1–S5 GREEN vs pinned SeaweedFS 4.51
   at the owner's 32 KiB/s anchor; evidence on the issue.
 - #25 — eviction no longer goes blind when the impaired connection is the only one
   left active. The #22 real-world S3 drill (32 KiB/s victim link) caught it live:

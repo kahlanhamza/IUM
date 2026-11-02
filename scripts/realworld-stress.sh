@@ -178,7 +178,18 @@ S2_DONE=0
 for ATTEMPT in 1 2 3; do
   JDB="$RUN/s2-$ATTEMPT.journal.db"
   say "S2 attempt $ATTEMPT: child uploads plainly, parent kills mid-flight"
-  "$CHILD_BIN" upload --journal "$JDB" --file "$FF" > "$RUN/s2-$ATTEMPT-child.log" 2>&1 &
+  # --allow-calls 1: DETERMINISTIC mid-flight crash shape. Exactly one part
+  # completes; every later upload call wedges at ENTRY (bytes sent: zero) so
+  # the journal sits stable at 25% confirmed with three spans unconfirmed —
+  # the kill lands whenever the parent polls, on ANY link speed. (Plain
+  # racing kills cannot work on fast links: with parallel workers all parts
+  # confirm in ONE step, and the first cloud run burned all 3 attempts that
+  # way, the post-completion kill hitting an already-Done journal.) A frozen
+  # then killed process IS the "laptop died" shape; the resume still exercises
+  # the real path: reattach from the journaled probe, zero re-upload of the
+  # confirmed part, verify-repair if the server holds a duplicate.
+  "$CHILD_BIN" upload --journal "$JDB" --file "$FF" --allow-calls 1 \
+    > "$RUN/s2-$ATTEMPT-child.log" 2>&1 &
   CHILD=$!
   KILLED=0
   FRONTIER=0
