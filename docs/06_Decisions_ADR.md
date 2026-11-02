@@ -58,7 +58,19 @@ lifecycle rule, not a manager hook (YAGNI until TUS proves the need). Accepted w
 evidence: 20/20 env-gated tests green live against a real S3 server, including
 `verify-refuses-to-lie` (5 of 12 MiB present → ok:false, upload left incomplete).
 
-## ADR-011 — Adapter declares, planner obeys 📝 proposed (M3 spike, docs/07 §2)
-`ProbeReport.max_chunk_bytes` must constrain planning (n ≥ ceil(total/max)) — today it is
-discovered but never consumed. The chunk pool stays the single planning authority; adapters
-contribute constraints, never plans. Ratified when #8 lands with the evidence.
+## ADR-011 — Adapter declares, planner obeys ✅ accepted (issue #8, 2026-11-02)
+`ProbeReport.max_chunk_bytes` constrains planning: the manager re-plans at the
+probe boundary with `n >= ceil(total/cap)` whenever the declared ceiling binds
+(`ChunkPool::plan_capped`). The chunk pool stays the single planning authority;
+adapters contribute constraints, never plans. The cap is a HARD constraint — it
+composes as `n_final = max(min(n, floor(total/chunk_min)), ceil(total/cap))`, so
+when `cap < chunk_min` the cap wins and chunks dip below the policy floor: a
+violated limit fails uploads, a violated floor only costs requests. One-shot
+endpoints are never re-planned (chunking a non-resumable stream would imply a
+capability the protocol does not have) — a binding cap on a one-shot adapter
+fails loudly at the adapter instead. The re-plan is journaled (`replan_cap`
+event + `replace_chunks`) and only runs while every chunk is still `Pending`
+with zero confirmed bytes, verified from the journal (ADR-002). Accepted with
+issue #8's evidence: RED (`got 2` on a 4 MiB cap) → GREEN, 100/100 gates
+including not-binding-is-byte-identical, cap-vs-chunk_min conflict, boundary
+and 0-byte invariants.

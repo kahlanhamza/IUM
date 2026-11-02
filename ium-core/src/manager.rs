@@ -366,6 +366,14 @@ impl JobManager {
                     return Ok(record);
                 }
             }
+            // ADR-011 (issue #8): adapter declares, planner obeys. A cap that
+            // binds re-plans the pool before the first worker runs — nothing
+            // confirmed can be lost. One-shot endpoints are never re-planned:
+            // chunking a stream that cannot resume would imply a capability
+            // the protocol does not have (see `create_job`).
+            if let Some(cap) = probe.max_chunk_bytes.filter(|_| probe.resumable) {
+                self.apply_chunk_cap(job_id, cap)?;
+            }
             record.state = self.transition(job_id, JobState::Running).await?;
         } else if record.state == JobState::Paused {
             // Resuming a paused job: journal Paused→Running before touching chunks.
@@ -381,6 +389,42 @@ impl JobManager {
             record.state = self.finish(job_id, &spec, adapter.as_ref()).await?;
         }
         self.require_job(job_id)
+    }
+
+    /// Consume `ProbeReport.max_chunk_bytes` (issue #8, ADR-011): when the
+    /// declared per-call cap binds — some planned chunk exceeds it — re-plan
+    /// with `n >= ceil(total/cap)` and journal the new plan (`replan_cap`).
+    /// Runs at the probe boundary: every chunk must still be `Pending` with
+    /// zero confirmed bytes, verified from the journal (ADR-002), not
+    /// assumed. A cap that does not bind is a no-op: byte-identical
+    /// behavior for adapters that never declare a binding ceiling.
+    fn apply_chunk_cap(&self, job_id: &str, cap: u64) -> Result<()> {
+        let chunks = self.j().load_chunks(job_id).map_err(EngineError::from)?;
+        let untouched = chunks
+            .iter()
+            .all(|c| c.state == ChunkState::Pending && c.bytes_confirmed == 0);
+        let binds = chunks.iter().any(|c| c.end - c.begin > cap);
+        if !untouched || !binds {
+            return Ok(());
+        }
+        let before = chunks.len() as u32;
+        let job = self.require_job(job_id)?;
+        let pool = ChunkPool::new_capped(job.source_size, before, Some(cap));
+        self.j()
+            .replace_chunks(job_id, &pool.rows())
+            .map_err(EngineError::from)?;
+        self.j()
+            .append_event(
+                job_id,
+                "replan_cap",
+                &serde_json::json!({
+                    "cap": cap,
+                    "before": before,
+                    "after": pool.chunks().len(),
+                }),
+            )
+            .map_err(EngineError::from)?;
+        Ok(())
     }
 
     /// The transfer loop (Sprint 1: concurrent workers over one shared pool).

@@ -77,16 +77,54 @@ impl ChunkPool {
             return vec![(0, 0)];
         }
         let n = n.max(1);
-        let n = if chunk_min > 0 {
-            let max_by_min = if total_len >= chunk_min {
-                (total_len / chunk_min) as u32
-            } else {
-                1
-            };
-            n.min(max_by_min)
-        } else {
-            n
+        let n = Self::clamp_by_chunk_min(total_len, n, chunk_min);
+        Self::even_split(total_len, n)
+    }
+
+    /// ADR-011 (issue #8) — adapter declares, planner obeys. Same even split
+    /// as [`ChunkPool::plan`], with the adapter-declared per-call ceiling as
+    /// a HARD constraint: `n` is raised to at least `ceil(total_len / cap)`
+    /// so no planned chunk can exceed the cap. The existing `chunk_min`
+    /// clamp still applies to the requested count, but the cap wins when the
+    /// two conflict — `chunk_min` is an efficiency preference, the cap is a
+    /// protocol limit; a violated limit fails uploads, a violated floor only
+    /// costs requests. `None` (or a nonsensical 0) delegates to [`plan`].
+    pub fn plan_capped(
+        total_len: u64,
+        n: u32,
+        chunk_min: u64,
+        cap: Option<u64>,
+    ) -> Vec<(u64, u64)> {
+        let Some(cap) = cap.filter(|c| *c > 0) else {
+            return Self::plan(total_len, n, chunk_min);
         };
+        if total_len == 0 {
+            // Issue #5 invariant (see `plan`).
+            return vec![(0, 0)];
+        }
+        let n = n.max(1);
+        let n_soft = Self::clamp_by_chunk_min(total_len, n, chunk_min);
+        let n_hard = total_len.div_ceil(cap).min(u32::MAX as u64) as u32;
+        Self::even_split(total_len, n_soft.max(n_hard))
+    }
+
+    /// The existing policy clamp: never more chunks than keep every chunk
+    /// ≥ `chunk_min` (where the total length allows any at all).
+    fn clamp_by_chunk_min(total_len: u64, n: u32, chunk_min: u64) -> u32 {
+        if chunk_min == 0 {
+            return n;
+        }
+        let max_by_min = if total_len >= chunk_min {
+            (total_len / chunk_min) as u32
+        } else {
+            1
+        };
+        n.min(max_by_min)
+    }
+
+    /// One even split of `[0, total_len)` into exactly `n` ranges — the
+    /// first `total_len % n` ranges one byte longer than the rest.
+    fn even_split(total_len: u64, n: u32) -> Vec<(u64, u64)> {
         let base = total_len / n as u64;
         let rem = total_len % n as u64;
         let mut ranges = Vec::with_capacity(n as usize);
@@ -101,7 +139,13 @@ impl ChunkPool {
     }
 
     pub fn new(total_len: u64, max_conns: u32) -> Self {
-        let ranges = Self::plan(total_len, max_conns, CHUNK_MIN);
+        Self::new_capped(total_len, max_conns, None)
+    }
+
+    /// ADR-011 (issue #8): pool planned under the adapter-declared per-call
+    /// cap. `cap = None` is exactly [`ChunkPool::new`].
+    pub fn new_capped(total_len: u64, max_conns: u32, cap: Option<u64>) -> Self {
+        let ranges = Self::plan_capped(total_len, max_conns, CHUNK_MIN, cap);
         let chunks = ranges
             .into_iter()
             .enumerate()
@@ -414,6 +458,95 @@ mod tests {
         pool.complete(idx);
         assert!(pool.all_uploaded());
         assert_eq!(pool.remaining_unconfirmed(), 0);
+    }
+
+    #[test]
+    fn plan_capped_raises_n_when_the_cap_binds() {
+        // Issue #8 AC: 10 MiB file, max 4 MiB → >= 3 chunks, none over cap.
+        const MIB: u64 = 1024 * 1024;
+        let ranges = ChunkPool::plan_capped(10 * MIB, 16, CHUNK_MIN, Some(4 * MIB));
+        assert!(ranges.len() >= 3, "got {} chunks", ranges.len());
+        assert!(ranges.iter().all(|(b, e)| e - b <= 4 * MIB));
+        assert!(ranges.iter().all(|(b, e)| e - b > 0));
+        let sum: u64 = ranges.iter().map(|(b, e)| e - b).sum();
+        assert_eq!(sum, 10 * MIB);
+        let mut offset = 0;
+        for (b, e) in &ranges {
+            assert_eq!(*b, offset, "chunks must tile [0, total) with no gaps");
+            offset = *e;
+        }
+        assert_eq!(offset, 10 * MIB);
+    }
+
+    #[test]
+    fn plan_capped_not_binding_is_byte_identical_to_plan() {
+        const MIB: u64 = 1024 * 1024;
+        // A cap above CHUNK_MAX can never bind: output equals `plan`.
+        for &(total, n) in &[
+            (20 * MIB, 4u32),
+            (3 * CHUNK_MIN, 2u32),
+            (1024, 16u32),
+            (0, 8u32),
+            (CHUNK_MAX + 1, 2u32),
+        ] {
+            assert_eq!(
+                ChunkPool::plan_capped(total, n, CHUNK_MIN, Some(512 * MIB)),
+                ChunkPool::plan(total, n, CHUNK_MIN),
+                "total={total} n={n}"
+            );
+            // `None` delegates to `plan` too.
+            assert_eq!(
+                ChunkPool::plan_capped(total, n, CHUNK_MIN, None),
+                ChunkPool::plan(total, n, CHUNK_MIN),
+                "total={total} n={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_capped_cap_wins_over_chunk_min_conflict() {
+        const MIB: u64 = 1024 * 1024;
+        // cap 4 MiB < chunk_min 5 MiB: the hard protocol limit wins; chunks
+        // dip below the policy floor rather than exceed the cap.
+        let ranges = ChunkPool::plan_capped(50 * MIB, 2, CHUNK_MIN, Some(4 * MIB));
+        assert!(
+            ranges.len() >= 13,
+            "n >= ceil(50/4) = 13, got {}",
+            ranges.len()
+        );
+        assert!(ranges.iter().all(|(b, e)| e - b <= 4 * MIB));
+        let sum: u64 = ranges.iter().map(|(b, e)| e - b).sum();
+        assert_eq!(sum, 50 * MIB);
+    }
+
+    #[test]
+    fn plan_capped_cap_equal_to_chunk_min_boundary() {
+        const MIB: u64 = 1024 * 1024;
+        // cap == chunk_min: every chunk is exactly the boundary value.
+        let ranges = ChunkPool::plan_capped(10 * MIB, 16, CHUNK_MIN, Some(CHUNK_MIN));
+        assert!(ranges.iter().all(|(b, e)| e - b <= CHUNK_MIN));
+        let sum: u64 = ranges.iter().map(|(b, e)| e - b).sum();
+        assert_eq!(sum, 10 * MIB);
+    }
+
+    #[test]
+    fn plan_capped_zero_byte_file_still_plans_one_chunk() {
+        // Issue #5 invariant survives the cap: [(0, 0)] regardless of cap.
+        assert_eq!(
+            ChunkPool::plan_capped(0, 8, CHUNK_MIN, Some(1)),
+            vec![(0, 0)]
+        );
+    }
+
+    #[test]
+    fn new_capped_pool_respects_the_cap() {
+        const MIB: u64 = 1024 * 1024;
+        let pool = ChunkPool::new_capped(10 * MIB, 2, Some(4 * MIB));
+        assert!(pool.chunks().len() >= 3);
+        assert!(pool.chunks().iter().all(|c| c.len() <= 4 * MIB));
+        // `new` stays exactly the uncapped planner.
+        let plain = ChunkPool::new(10 * MIB, 2);
+        assert_eq!(plain.chunks().len(), 2);
     }
 
     #[test]

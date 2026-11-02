@@ -57,6 +57,9 @@ struct MockAdapter {
     fail_first: AtomicU32,
     partial_first_len: Option<u64>,
     chunk_delay_ms: u64,
+    /// Per-call ceiling the probe declares (issue #8: adapter declares,
+    /// planner obeys). `None` = undeclared, today's behavior.
+    probe_cap: Option<u64>,
     log: Mutex<Vec<UploadLog>>,
 }
 
@@ -67,8 +70,14 @@ impl MockAdapter {
             fail_first: AtomicU32::new(0),
             partial_first_len: None,
             chunk_delay_ms: 0,
+            probe_cap: None,
             log: Mutex::new(Vec::new()),
         }
+    }
+    /// Declare `max_chunk_bytes` from the probe (issue #8).
+    fn with_probe_cap(mut self, cap: Option<u64>) -> Self {
+        self.probe_cap = cap;
+        self
     }
     fn failing(cap: Capability, n: u32) -> Self {
         Self {
@@ -96,7 +105,7 @@ impl TransferAdapter for MockAdapter {
         // Probe honesty mirrors the declared capability (spec §5).
         Ok(ProbeReport {
             resumable: self.cap.has(Capability::RESUMABLE),
-            max_chunk_bytes: None,
+            max_chunk_bytes: self.probe_cap,
             session_token: Some("mock-session".into()),
         })
     }
@@ -165,6 +174,49 @@ impl TransferAdapter for MockAdapter {
             detail: Some("mock hash ok".into()),
         })
     }
+}
+
+#[tokio::test]
+async fn probe_max_chunk_bytes_caps_the_plan() {
+    // Issue #8: the adapter declares a per-call ceiling at probe time; the
+    // planner must obey (ADR-011). A 10 MiB source with max_conns = 2 plans
+    // two 5 MiB chunks; a 4 MiB adapter cap must force >= 3 chunks, none
+    // larger than the declared cap, and the re-plan must be journaled.
+    let dir = tempfile::tempdir().unwrap();
+    let path = make_source(dir.path(), "capped.bin", 10 * MIB);
+    let mock = Arc::new(
+        MockAdapter::new(Capability::new(Capability::RESUMABLE)).with_probe_cap(Some(4 * MIB)),
+    );
+    let m = manager_with(mock);
+
+    let rec = m.create_job(&spec_for(&path, 10 * MIB), 2).unwrap();
+    assert_eq!(
+        m.snapshot(&rec.id).unwrap().chunks.len(),
+        2,
+        "pre-probe plan is unconstrained (cap is not known yet)"
+    );
+
+    let done = m.run_job(&rec.id).await.unwrap();
+    assert_eq!(done.state, JobState::Done);
+
+    let snap = m.snapshot(&rec.id).unwrap();
+    assert!(
+        snap.chunks.len() >= 3,
+        "cap 4 MiB on 10 MiB must raise n to >= 3, got {}",
+        snap.chunks.len()
+    );
+    assert!(
+        snap.chunks.iter().all(|c| c.end - c.begin <= 4 * MIB),
+        "no chunk may exceed the adapter-declared cap"
+    );
+    assert_eq!(
+        snap.chunks.iter().map(|c| c.bytes_confirmed).sum::<u64>(),
+        10 * MIB
+    );
+    assert!(
+        snap.events.iter().any(|(_, k, _)| k == "replan_cap"),
+        "the cap re-plan must be journaled like every write"
+    );
 }
 
 fn spec_for(path: &std::path::Path, size: u64) -> JobSpec {
@@ -490,6 +542,7 @@ async fn pause_between_chunks_returns_paused_then_resume_completes() {
         fail_first: AtomicU32::new(0),
         partial_first_len: None,
         chunk_delay_ms: 20,
+        probe_cap: None,
         log: Mutex::new(Vec::new()),
     });
     let m = Arc::new(manager_with(mock));
@@ -629,6 +682,7 @@ async fn double_run_is_rejected_not_raced() {
         fail_first: AtomicU32::new(0),
         partial_first_len: None,
         chunk_delay_ms: 30, // keep the first driver busy so the second lands mid-run
+        probe_cap: None,
         log: Mutex::new(Vec::new()),
     });
     let m = Arc::new(manager_with(mock));
@@ -850,6 +904,7 @@ async fn concurrent_workers_upload_each_chunk_exactly_once() {
         fail_first: AtomicU32::new(0),
         partial_first_len: None,
         chunk_delay_ms: 15,
+        probe_cap: None,
         log: Mutex::new(Vec::new()),
     });
     let m = manager_with(Arc::clone(&mock));
