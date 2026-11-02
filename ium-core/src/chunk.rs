@@ -11,22 +11,36 @@ pub const CHUNK_MIN: u64 = 5 * 1024 * 1024;
 /// Largest chunk target (256 MiB, spec §4.1).
 pub const CHUNK_MAX: u64 = 256 * 1024 * 1024;
 
+use crate::journal::ChunkRow;
+
+/// One chunk's lifecycle within a job. Serialized to the journal's chunk
+/// table; `state`/`bytes_confirmed`/`adapter_token` are journal truth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChunkState {
+    /// Not yet leased (or returned to the pool after an eviction/error).
     Pending,
+    /// A worker holds a lease and is transferring its span.
     Leased,
+    /// Server confirmed the whole span (the adapter's token is recorded).
     Uploaded,
+    /// The verify gate accepted it (ADR-004) — the final per-chunk state.
     Verified,
 }
 
+/// One planned byte range plus its transfer progress. The unit the pool
+/// leases, evicts and verifies; the union of all chunks covers the source
+/// exactly (no gaps, no overlaps — invariant fuzz-pinned).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Chunk {
+    /// Stable index within the job (0-based, journal key); renumbered only
+    /// by an explicit resplit.
     pub idx: u32,
     /// Inclusive begin offset.
     pub begin: u64,
     /// Exclusive end offset.
     pub end: u64,
+    /// Lifecycle state (journal truth).
     pub state: ChunkState,
     /// Server-confirmed bytes within this chunk.
     pub bytes_confirmed: u64,
@@ -35,9 +49,11 @@ pub struct Chunk {
 }
 
 impl Chunk {
+    /// Planned span length in bytes (0 for the 0-byte job's single chunk).
     pub fn len(&self) -> u64 {
         self.end - self.begin
     }
+    /// True for the 0-byte job's single zero-length chunk.
     pub fn is_empty(&self) -> bool {
         self.begin == self.end
     }
@@ -46,16 +62,23 @@ impl Chunk {
 /// What a worker receives when it leases a chunk.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Lease {
+    /// The leased chunk's index.
     pub idx: u32,
+    /// Inclusive begin offset of the chunk's span.
     pub begin: u64,
+    /// Exclusive end offset of the chunk's span.
     pub end: u64,
     /// The worker MUST start transferring at this offset (server-confirmed).
     pub resume_from: u64,
+    /// Pool-global attempt counter (diagnostics; the retry budget counts
+    /// separately in the manager).
     pub attempt: u32,
 }
 
-use crate::journal::ChunkRow;
-
+/// The in-memory chunk algebra over one job: planning, leasing, eviction,
+/// resplit, tail race. Every mutation keeps the cover invariant (the union
+/// of chunks is exactly `[0, total_len)`); the manager journals each
+/// mutation's effect through `ChunkRow`s.
 #[derive(Debug)]
 pub struct ChunkPool {
     total_len: u64,
@@ -88,7 +111,8 @@ impl ChunkPool {
     /// clamp still applies to the requested count, but the cap wins when the
     /// two conflict — `chunk_min` is an efficiency preference, the cap is a
     /// protocol limit; a violated limit fails uploads, a violated floor only
-    /// costs requests. `None` (or a nonsensical 0) delegates to [`plan`].
+    /// costs requests. `None` (or a nonsensical 0) delegates to
+    /// [`ChunkPool::plan`].
     pub fn plan_capped(
         total_len: u64,
         n: u32,
@@ -138,6 +162,9 @@ impl ChunkPool {
         ranges
     }
 
+    /// Build a pool for `[0, total_len)` split into up to `max_conns`
+    /// chunks (each ≥ `CHUNK_MIN` where the total allows). No adapter cap —
+    /// see [`ChunkPool::new_capped`] for the ADR-011 form.
     pub fn new(total_len: u64, max_conns: u32) -> Self {
         Self::new_capped(total_len, max_conns, None)
     }
@@ -372,15 +399,20 @@ impl ChunkPool {
         raw.clamp(chunk_min, CHUNK_MAX)
     }
 
+    /// The job's total source length the pool was built for.
     pub fn total_len(&self) -> u64 {
         self.total_len
     }
+    /// The chunk list (index order) — snapshot/inspector projection.
     pub fn chunks(&self) -> &[Chunk] {
         &self.chunks
     }
+    /// Is any live lease held on this chunk (tail race may hold several)?
     pub fn is_leased(&self, idx: u32) -> bool {
         self.leases.contains_key(&idx)
     }
+    /// Bytes not yet server-confirmed across the whole job — journal-truth
+    /// adjacent progress math (never client optimism).
     pub fn remaining_unconfirmed(&self) -> u64 {
         self.chunks
             .iter()
@@ -388,14 +420,18 @@ impl ChunkPool {
             .map(|c| c.len() - c.bytes_confirmed)
             .sum()
     }
+    /// Every chunk has full server confirmation — the manager may enter
+    /// Finishing (verify still gates Done).
     pub fn all_uploaded(&self) -> bool {
         self.chunks
             .iter()
             .all(|c| c.state == ChunkState::Uploaded || c.state == ChunkState::Verified)
     }
+    /// Record the verify gate's acceptance for one chunk (ADR-004).
     pub fn mark_verified(&mut self, idx: u32) {
         self.chunks[idx as usize].state = ChunkState::Verified;
     }
+    /// Persistable rows for the journal (order = idx order).
     pub fn rows(&self) -> Vec<ChunkRow> {
         self.chunks
             .iter()

@@ -26,6 +26,7 @@ pub enum ErrorKind {
     Unknown,
 }
 
+/// What the policy decided for one failure (spec §5's taxonomy output).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     /// Retry after this delay; the chunk resumes from its confirmed offset.
@@ -38,11 +39,19 @@ pub enum Action {
     Fail,
 }
 
+/// Retry tuning (spec §5). Defaults: 8 attempts, exponential backoff
+/// 500 ms → 30 s cap, server `Retry-After` honored when present.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RetryPolicy {
+    /// Per-chunk attempt budget — errors AND evictions count toward it
+    /// (issue #11-era rule: a chunk that never succeeds must fail
+    /// deterministically, not spin forever).
     pub max_attempts: u32,
+    /// First backoff delay in milliseconds; doubles per attempt.
     pub backoff_base_ms: u64,
+    /// Backoff ceiling in milliseconds (jitter apart, the largest nap).
     pub backoff_cap_ms: u64,
+    /// Honor the server's own `Retry-After` over local backoff (spec §5).
     pub respect_retry_after: bool,
 }
 

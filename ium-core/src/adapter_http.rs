@@ -33,11 +33,16 @@ use crate::adapter::{
 use crate::chunk::Lease;
 use crate::JobSpec;
 
+/// One-shot HTTP PUT adapter (spec §5's 'single request' family): streams
+/// `[resume_from, end)` straight from disk over reqwest+rustls and gates
+/// Done on a HEAD verify. Not resumable across processes — declared
+/// honestly via capabilities (no RESUMABLE bit).
 pub struct HttpOneShotAdapter {
     client: Client,
 }
 
 impl HttpOneShotAdapter {
+    /// Production constructor: 10 s connect / 1 h request timeouts.
     pub fn new() -> Result<Self, AdapterError> {
         Self::with_client_config(Duration::from_secs(10), Duration::from_secs(60 * 60))
     }

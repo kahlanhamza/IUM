@@ -18,8 +18,12 @@ use std::time::{Duration, Instant};
 /// 0.4×median, eviction on the 2nd consecutive below-floor window.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EvictionPolicy {
+    /// How often each worker's wire progress is sampled.
     pub window: Duration,
+    /// A worker is below the floor when its measured B/s < floor_ratio ×
+    /// median(pool) (workers without a finished window do not vote).
     pub floor_ratio: f64,
+    /// Consecutive below-floor windows that revoke a lease.
     pub strikes_to_evict: u32,
 }
 
@@ -35,7 +39,7 @@ impl Default for EvictionPolicy {
 
 /// Per-worker sliding-window throughput watch. One per lease.
 #[derive(Debug)]
-pub struct ThroughputWatch {
+pub(crate) struct ThroughputWatch {
     window: Duration,
     window_start: Instant,
     last_total: u64,
@@ -54,7 +58,7 @@ impl ThroughputWatch {
 
     /// Feed the call's cumulative wire bytes. Returns the finished window's
     /// throughput (bytes/sec) when a full window has elapsed, else `None`.
-    pub fn sample(&mut self, now: Instant, total_wire_bytes: u64) -> Option<f64> {
+    pub(crate) fn sample(&mut self, now: Instant, total_wire_bytes: u64) -> Option<f64> {
         let elapsed = now.duration_since(self.window_start);
         if elapsed < self.window {
             return None;
@@ -66,12 +70,12 @@ impl ThroughputWatch {
         Some(bps)
     }
 
-    pub fn strikes(&self) -> u32 {
+    pub(crate) fn strikes(&self) -> u32 {
         self.strikes
     }
 
     /// Account one evaluated window against the strike counter.
-    pub fn record_window(&mut self, below_floor: bool) {
+    pub(crate) fn record_window(&mut self, below_floor: bool) {
         if below_floor {
             self.strikes += 1;
         } else {
@@ -80,14 +84,14 @@ impl ThroughputWatch {
     }
 
     /// Enough consecutive below-floor windows to revoke this lease?
-    pub fn exhausted(&self, policy: &EvictionPolicy) -> bool {
+    pub(crate) fn exhausted(&self, policy: &EvictionPolicy) -> bool {
         self.strikes >= policy.strikes_to_evict
     }
 }
 
 /// Median of a sample set (workers that have not finished a window yet do not
 /// vote — a fresh lease must not drag the floor down and kill healthy peers).
-pub fn median(samples: &mut [f64]) -> Option<f64> {
+pub(crate) fn median(samples: &mut [f64]) -> Option<f64> {
     if samples.is_empty() {
         return None;
     }
@@ -107,7 +111,7 @@ pub fn median(samples: &mut [f64]) -> Option<f64> {
 ///   chunk is pointless anyway;
 /// * a fully idle pool (median 0) → no verdict: zero-everything is no signal,
 ///   evicting everyone would just thrash.
-pub fn below_floor(my_bps: f64, pool_samples: &mut [f64], policy: &EvictionPolicy) -> bool {
+pub(crate) fn below_floor(my_bps: f64, pool_samples: &mut [f64], policy: &EvictionPolicy) -> bool {
     if pool_samples.len() < 2 {
         return false;
     }

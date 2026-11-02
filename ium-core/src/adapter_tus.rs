@@ -94,6 +94,9 @@ pub struct TusAdapter {
 }
 
 impl TusAdapter {
+    /// A fresh adapter with its own HTTP client and an EMPTY session map —
+    /// sessions are restored from the journal via `reattach` (#12), never
+    /// guessed.
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::builder()

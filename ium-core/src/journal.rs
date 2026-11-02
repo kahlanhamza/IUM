@@ -63,58 +63,99 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX IF NOT EXISTS idx_events_job ON events(job_id, seq);",
 ];
 
+/// Journal-layer failures. Write paths fail LOUDLY here (defect #2's rule:
+/// a silent no-op UPDATE/DELETE is a corruption vector, never acceptable).
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
+    /// Underlying SQLite failure (IO, WAL, SQL).
     #[error("sqlite: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    /// `insert_job` on an id that already exists.
     #[error("job {0} already exists")]
     DuplicateJob(String),
+    /// The job id is not in the journal.
     #[error("job {0} not found in journal")]
     UnknownJob(String),
+    /// The (job, chunk) pair is not in the journal.
     #[error("job {0}: chunk {1} not found in journal")]
     UnknownChunk(String, u32),
+    /// `replace_chunks` on a job that already has a plan (re-plan must go
+    /// through the manager's probe-boundary path).
     #[error("job {0} already has chunks")]
     ChunksExist(String),
+    /// A job row exists with ZERO chunk rows — the #5 invariant forbids
+    /// planless jobs (every committed job has ≥ 1 chunk, 0-byte included).
     #[error("job {0} has no chunk rows in journal")]
     ChunksMissing(String),
+    /// An insert/re-plan was handed an empty chunk list (#5 invariant).
     #[error("empty chunk plan for job {0}")]
     EmptyPlan(String),
 }
 
+/// One job row as the journal stores it — the UI's job-list projection and
+/// the state machine's read-back source (ADR-002: never trust caller args,
+/// re-read from here).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct JobRecord {
+    /// Job id (the engine generates it; also the journal's primary key).
     pub id: String,
+    /// From the [`crate::JobSpec`] — the file being uploaded.
     pub source_path: String,
+    /// From the [`crate::JobSpec`] — the size the journal believes.
     pub source_size: u64,
+    /// Adapter registry key.
     pub adapter: String,
+    /// Normalized endpoint.
     pub endpoint: String,
+    /// Current lifecycle state (journal truth).
     pub state: JobState,
+    /// Honest capability badge captured at creation ("resumable"/"one_shot").
     pub capability_badge: String,
+    /// Row creation time (ms since the epoch).
     pub created_at: i64,
+    /// Last successful write (ms since the epoch).
     pub updated_at: i64,
 }
 
+/// One chunk row as the journal stores it — per-chunk truth for snapshots,
+/// crash recovery and the inspector drawer.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ChunkRow {
+    /// Chunk index within the job (journal key is (job_id, idx)).
     pub idx: u32,
+    /// Inclusive begin offset.
     pub begin: u64,
+    /// Exclusive end offset.
     pub end: u64,
+    /// Lifecycle state.
     pub state: ChunkState,
+    /// Server-confirmed bytes within the chunk.
     pub bytes_confirmed: u64,
+    /// Opaque protocol token (e.g. S3 `"N:etag"`), if any.
     pub adapter_token: Option<String>,
 }
 
 /// Flat, borrow-heavy description of a job row to insert.
 pub struct NewJob<'a> {
+    /// Job id (engine-generated, unique).
     pub id: &'a str,
+    /// File to upload (absolute path).
     pub source_path: &'a str,
+    /// Size in bytes at creation time.
     pub source_size: u64,
+    /// Adapter registry key.
     pub adapter: &'a str,
+    /// Normalized endpoint.
     pub endpoint: &'a str,
+    /// Honest badge from the adapter's capabilities.
     pub capability_badge: &'a str,
+    /// The planned chunks (≥ 1 — the #5 invariant; empty plans are rejected).
     pub chunks: &'a [ChunkRow],
 }
 
+/// The crash-safe session store: SQLite in WAL mode, versioned migrations,
+/// loud write failures. One job per row; chunks and append-only events hang
+/// off it. This is the ONLY state the engine trusts (ADR-002).
 pub struct SessionJournal {
     conn: Connection,
 }
@@ -138,6 +179,8 @@ impl SessionJournal {
         Self::migrate(conn)
     }
 
+    /// Open an in-memory journal (tests, drills). Same schema and migration
+    /// rules; contents die with the process.
     pub fn open_in_memory() -> Result<Self, JournalError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
@@ -166,6 +209,8 @@ impl SessionJournal {
         Ok(Self { conn })
     }
 
+    /// The meta table's schema version (diagnostics; migrations themselves
+    /// are tracked by `PRAGMA user_version`).
     pub fn schema_version(&self) -> Result<String, JournalError> {
         Ok(self.conn.query_row(
             "SELECT value FROM meta WHERE key='schema_version'",
@@ -214,7 +259,8 @@ impl SessionJournal {
     }
 
     /// Journal a state transition — called BEFORE the engine acts on it.
-    /// Fails loudly if the job row vanished (journal corruption / bad id).
+    /// Fails loudly if the job row vanished (journal corruption / bad id;
+    /// defect #2's rows-affected rule).
     pub fn set_job_state(&self, id: &str, state: JobState) -> Result<(), JournalError> {
         let n = self.conn.execute(
             "UPDATE jobs SET state=?2, updated_at=?3 WHERE id=?1",
@@ -229,10 +275,11 @@ impl SessionJournal {
 
     /// Replace the chunk plan for a job (used after resplit / rebuild).
     /// Fails loudly for: an empty replacement plan (`EmptyPlan` — caller bug,
-    /// checked before job lookup), unknown jobs, and jobs whose existing plan
-    /// is missing (`ChunksMissing` — job + plan commit atomically, so 0 rows
-    /// removed is journal corruption or an out-of-band deletion; issue #2,
-    /// its documented special case collapsed by the #5 invariant).
+    /// never a legal re-plan), a job that does not exist, and a job whose
+    /// existing plan is missing (`ChunksMissing` — job + plan commit
+    /// atomically, so 0 rows removed is journal corruption or an
+    /// out-of-band deletion; issue #2, its special case collapsed by the
+    /// #5 invariant into a loud error).
     pub fn replace_chunks(&self, job_id: &str, chunks: &[ChunkRow]) -> Result<(), JournalError> {
         if chunks.is_empty() {
             return Err(JournalError::EmptyPlan(job_id.to_string()));
@@ -255,7 +302,9 @@ impl SessionJournal {
         Ok(())
     }
 
-    /// Persist a server-confirmed chunk checkpoint (the crash-safety heart).
+    /// Persist a server-confirmed chunk checkpoint (the crash-safety heart):
+    /// state, server-confirmed bytes, adapter token. Fails loudly if the
+    /// (job, chunk) row is missing.
     pub fn update_chunk(
         &self,
         job_id: &str,
@@ -274,7 +323,9 @@ impl SessionJournal {
         Ok(())
     }
 
-    /// Append a journal event (state transitions, confirms, retries...).
+    /// Append a journal event (probe, state transitions, confirms, retries,
+    /// chunk_error, chunk_evicted, reattach, verify_failed, ...); `payload`
+    /// is JSON. Returns the event's seq.
     pub fn append_event(
         &self,
         job_id: &str,
@@ -288,6 +339,8 @@ impl SessionJournal {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Read one job row; `None` if the id is unknown (not an error — the
+    /// manager distinguishes "absent" from "broken journal").
     pub fn load_job(&self, id: &str) -> Result<Option<JobRecord>, JournalError> {
         let mut stmt = self
             .conn
@@ -299,6 +352,7 @@ impl SessionJournal {
         }
     }
 
+    /// Read a job's chunk rows in idx order (crash recovery's input).
     pub fn load_chunks(&self, job_id: &str) -> Result<Vec<ChunkRow>, JournalError> {
         let mut stmt = self.conn.prepare(
             "SELECT idx, offset_begin, offset_end, state, bytes_confirmed, adapter_token
@@ -318,6 +372,7 @@ impl SessionJournal {
         Ok(out)
     }
 
+    /// All job rows, newest first (the UI's job list).
     pub fn list_jobs(&self) -> Result<Vec<JobRecord>, JournalError> {
         let mut stmt = self.conn.prepare(
             format!("SELECT {JOB_COLUMNS} FROM jobs ORDER BY created_at DESC, id").as_str(),
@@ -327,6 +382,9 @@ impl SessionJournal {
         Ok(out)
     }
 
+    /// A job's append-only event trail: `(seq, kind, payload_json)` in
+    /// journal order — the inspector drawer's event list and the drills'
+    /// evidence source.
     pub fn events_for(&self, job_id: &str) -> Result<Vec<(i64, String, String)>, JournalError> {
         let mut stmt = self
             .conn
@@ -336,7 +394,8 @@ impl SessionJournal {
         Ok(out)
     }
 
-    /// Flush WAL on graceful shutdown (spec §6).
+    /// Flush WAL on graceful shutdown (spec §6): checkpoint into the main
+    /// database file. WAL + NORMAL already survives process crash.
     pub fn checkpoint_wal(&self) -> Result<(), JournalError> {
         self.conn
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;

@@ -15,16 +15,25 @@ use crate::JobSpec;
 pub struct Capability(u8);
 
 impl Capability {
+    /// The endpoint can resume an interrupted transfer into an existing
+    /// session (S3 multipart, TUS, HTTP range). Drives the honest badge.
     pub const RESUMABLE: u8 = 1 << 0;
+    /// The endpoint accepts independently-sized chunks — the planner may
+    /// re-split at probe boundaries (#8) instead of a fixed grid.
     pub const DYNAMIC_CHUNKS: u8 = 1 << 1;
+    /// The endpoint tolerates a racing tail request (spec §4.2's tail-race
+    /// optimization: the last chunk re-requested while finishing).
     pub const TAIL_RACE: u8 = 1 << 2;
 
+    /// Build a capability set from raw bits (adapters declare at construction).
     pub const fn new(bits: u8) -> Self {
         Capability(bits)
     }
+    /// Does this set contain every bit in `bit`?
     pub const fn has(self, bit: u8) -> bool {
         self.0 & bit == bit
     }
+    /// Raw bits (journal serialization, tests).
     pub const fn bits(self) -> u8 {
         self.0
     }
@@ -59,6 +68,7 @@ pub struct ProbeReport {
 /// A chunk that completed with a server acknowledgment.
 #[derive(Debug, Clone)]
 pub struct ChunkConfirm {
+    /// Index of the chunk this confirm belongs to (journal key).
     pub idx: u32,
     /// Bytes the SERVER confirmed BY THIS CALL, counted over the transferred
     /// segment `[lease.resume_from, lease.end)` (spec rule #1: never client
@@ -72,7 +82,11 @@ pub struct ChunkConfirm {
 /// Result of the end-of-job integrity gate (pattern #10).
 #[derive(Debug, Clone)]
 pub struct VerifyReport {
+    /// `true` only when the adapter confirmed the destination holds exactly
+    /// the source's bytes (or its own ADR-010-equivalent gate passed).
     pub ok: bool,
+    /// Human-readable evidence: what was checked, or why it failed — this
+    /// goes into the journal's `verify_failed` event verbatim.
     pub detail: Option<String>,
 }
 
@@ -91,6 +105,7 @@ pub struct ProgressReporter {
 }
 
 impl ProgressReporter {
+    /// A fresh counter at zero — one per `upload_chunk` call.
     pub fn new() -> Self {
         Self::default()
     }
@@ -116,28 +131,47 @@ impl std::fmt::Debug for ProgressReporter {
 /// Errors adapters return, already classified for the retry policy.
 #[derive(Debug, thiserror::Error)]
 pub enum AdapterError {
+    /// Temporary failure (network blip, 5xx) — the retry policy backs off
+    /// and re-attempts the same lease.
     #[error("transient: {0}")]
     Transient(String),
+    /// The endpoint asked us to slow down (429). Carries the server's own
+    /// `Retry-After` when it declared one — honored before local backoff.
     #[error("throttled: {message}")]
     Throttled {
+        /// Server-declared delay in milliseconds, if any.
         retry_after_ms: Option<u64>,
+        /// Human-readable context (status line, body excerpt).
         message: String,
     },
+    /// The session existed but the endpoint expired it — recoverable via
+    /// `reattach` from the journaled token (Action::ExpiredSession).
     #[error("expired session: {0}")]
     ExpiredSession(String),
+    /// The session is gone from the adapter's memory — recoverable via
+    /// `reattach` replaying the journaled probe token (#12).
     #[error("session lost: {0}")]
     SessionLost(String),
+    /// The endpoint cannot resume this session at all (e.g. TUS 404 on a
+    /// creation URL whose server offset is behind the journal) — the job
+    /// fails honestly instead of re-uploading from zero silently.
     #[error("unresumable: {0}")]
     Unresumable(String),
+    /// The source or the protocol state changed underneath the job
+    /// (file resized, session moved). Never retried — the facts changed.
     #[error("corruption: {0}")]
     Corruption(String),
+    /// Credentials are missing or rejected — user action required.
     #[error("auth required: {0}")]
     AuthRequired(String),
+    /// Anything the classification cannot name honestly.
     #[error("unknown: {0}")]
     Unknown(String),
 }
 
 impl AdapterError {
+    /// The retry-policy classification of this error (spec §5's taxonomy:
+    /// which failures are retryable, which terminate the job).
     pub fn kind(&self) -> crate::retry::ErrorKind {
         use crate::retry::ErrorKind;
         match self {
@@ -214,18 +248,23 @@ pub struct AdapterRegistry {
 }
 
 impl AdapterRegistry {
+    /// An empty registry — register adapters before handing it to a manager.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Add an adapter; its [`TransferAdapter::name`] becomes its registry key.
     pub fn register(&mut self, adapter: Arc<dyn TransferAdapter>) {
         self.adapters.push(adapter);
     }
 
+    /// Resolve by registry key (`JobSpec.adapter`).
     pub fn get(&self, name: &str) -> Option<Arc<dyn TransferAdapter>> {
         self.adapters.iter().find(|a| a.name() == name).cloned()
     }
 
+    /// All registered keys, in registration order (the UI's adapter select
+    /// reflects this list — #16; the UI never hard-codes protocols).
     pub fn names(&self) -> Vec<&'static str> {
         self.adapters.iter().map(|a| a.name()).collect()
     }

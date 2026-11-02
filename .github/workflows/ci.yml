@@ -38,6 +38,12 @@ jobs:
         run: cargo clippy -p ium-core --all-targets -- -D warnings
       - name: Tests
         run: cargo test -p ium-core
+      # Issue #19 (M5 API freeze): the public surface stays documented —
+      # rustdoc must build warning-free on every push.
+      - name: Docs (warnings as errors)
+        run: cargo doc -p ium-core --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
       # Issue #9: the S3 wire suite needs a live S3-compatible server on
       # every OS we ship on. `services:` containers are Linux-only (docs/07
       # §6), so the harness downloads the pinned SeaweedFS single binary per

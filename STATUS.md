@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-02** · Phase: **M5 in progress — #17 #18 (real-data + slow-connection drills) closed; #19 #20 open**
+> Last updated: **2026-11-02** · Phase: **M5 in progress — #17 #18 #19 closed (drills + API freeze); #20 (semver + changelog) open**
 
 ---
 
@@ -65,9 +65,10 @@ the Tauri/React shell (`ium-app/`) is **frozen** until M2+M3 (ADR-006).
 
 **M5 — API freeze, docs & real-data evidence** (owner mandate 2026-11-02 folded in:
 "always test on real data" — standing rule in docs/05 "Real data only"). Milestone 4
-filed on GitHub with four issues. #17 CLOSED (real video through HTTP+TUS+S3) and #18
-CLOSED (real throttled socket, eviction fired on live wire evidence). Remaining: #19
-(API freeze: missing_docs + cargo doc clean) → #20 (semver + CHANGELOG discipline).
+filed on GitHub with four issues. #17 CLOSED (real video through HTTP+TUS+S3), #18
+CLOSED (real throttled socket, eviction fired on live wire evidence), #19 CLOSED
+(API freeze: surface shrunk ~26 items, `#![deny(missing_docs)]`, cargo doc lane in
+gate + CI). Remaining: #20 (semver + CHANGELOG discipline).
 
 ## 4. Backlog / next (ordered — milestone [M3: Real transports](https://github.com/kahlanhamza/IUM/milestone/2))
 
@@ -98,7 +99,10 @@ CLOSED (real throttled socket, eviction fired on live wire evidence). Remaining:
 15. ~~**#18 — real slow-connection drill: throttled socket, live eviction**~~ ✅
    (2026-11-02, M5; S3-shaped throttled loopback server, `chunk_evicted` with real
    bps 0 vs median 1.74 MB/s, Done in 6.2 s vs ~80 s wait-out, video intact).
-16. **#19 — API freeze: public surface reviewed, missing_docs enforced, cargo doc clean**.
+16. ~~**#19 — API freeze: public surface reviewed, missing_docs enforced, cargo doc clean**~~
+   ✅ (2026-11-02, M5; RED 166 undocumented items → all documented; `sigv4`/`ids` private,
+   `below_floor`/`median`/`ThroughputWatch` pub(crate); `#![deny(missing_docs)]`; doc lane
+   in gate.sh + ci.yml with RUSTDOCFLAGS="-D warnings").
 17. **#20 — semver versioning policy + CHANGELOG.md discipline**.
 
 ## 5. Defect audit trail
@@ -217,6 +221,7 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-02 | Issue #16 via the full loop (vitest RED: `./logic` unresolvable → pure logic.ts (badges, engine-mirrored action rules, journal-snapshot math) + dumb components (CreateJobForm via dialog plugin, JobsTable, InspectorDrawer) + list_adapters command → 9/9 vitest + tsc strict + vite build; vitest added to gate + CI) | M4 complete: the app slice renders journal truth with engine-gated actions; UI logic tested locally for real | `b828d9e` |
 | 2026-11-02 | **CI shell-lane catches on `b828d9e`** (all 3 OS, frontend+vitest already green): E0433 tokio missing from ium-app deps (watcher sleeps), E0308 `Engine(Arc<Supervisor>)` wrap, unused import under `-D warnings` — the sandbox structurally cannot compile the Tauri crate, so CI is the lane's compiler, and it did its job; fixed forward in `7291606`, **CI GREEN all 7 jobs** (core + ium-app × 3 OS + fmt). M4 milestone closed (4/4 issues); M5 (API freeze & docs) is next per docs/04 | M4 COMPLETE — engine 126/126, shell compiles natively everywhere, UI logic tested | `7291606` |
 | 2026-11-02 | **M5 filed** (milestone 4, `scripts/file_m5.py`): #17 real-data e2e drill (owner mandate: a REAL video through all three transports), #18 real slow-connection drill (throttled socket, live eviction), #19 API freeze (missing_docs + cargo doc), #20 semver + CHANGELOG. Roadmap M5 amended; docs/05 gains the standing **"Real data only"** rule | M5 backlog live on GitHub; mandate institutionalized | — |
+| 2026-11-02 | **Issue #19 closed** via the full loop (design note → RED: `RUSTFLAGS="-D missing_docs" cargo check` = 166 undocumented public items → surface review → docs → enforcement). Shrink: `pub mod sigv4` (22 items) and `pub mod ids` → private modules (zero external users, verified by grep over app + tests); `below_floor`/`median`/`ThroughputWatch` → `pub(crate)` (only `EvictionPolicy` stays on the facade); net ~26 items off the public API. Everything remaining documented with real guarantees + ADR/invariant links (crate-level docs rewritten: 5 invariants, facade map). Enforcement: `#![deny(missing_docs)]` in lib.rs (clippy lane fails on any new undocumented item), `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` added to gate.sh and ci.yml on all 3 OS; YAML safe_load-validated. 2 rustdoc link warnings fixed (private MAX_WORKERS link, stale `plan` link). Docs + visibility only — zero behavior change | 130/130 + doc lane green; #19 auto-closed by commit | see git log |
 | 2026-11-02 | **Issue #18 closed** via the full loop (design note → first run RED ×2 → fix → LIVE green stable 3/3). The drill: local S3-shaped loopback server paces its socket READS (part 2 first PUT at 96 KiB/s, others 2 MiB/s — real TCP backpressure, production S3MultipartAdapter + real SigV4, no test clock); real video fixture from #17; 3-worker fleet; `EvictionPolicy` window 500 ms (documented test shrink), ratios/strikes spec-default. RED earned: (1) drill server's first draft didn't drain the Complete body → keep-alive desync → verify HEAD read XML as request line → ADR-010 verify correctly REFUSED Done (the gate worked; the server was wrong); (2) the abandoned impaired request produces NO FIN inside the window (hyper lingers the pooled socket) — replaced EOF-truncation assertion with the honest observable: impaired attempt still in-flight (started, never completed) at Done. LIVE: `chunk_evicted {bps:0.0, median_bps:1736409, strikes:2, idx:1}` — the watch measured the buffered-burst stall; Done in 6.2 s (wait-out would be ~80 s, bound 30 s); part 2 completed once from the retry (`etag-2-a2`); assembled object sha256 == source, ffprobe-playable. Telemetry finding recorded: eviction fires on the progress freeze that follows hyper's initial buffered burst over a throttled link | 130/130 gates; #18 auto-closed by commit | see git log |
 | 2026-11-02 | **Issue #17 closed** via the full loop (survey RED: every fixture in the repo uploads zeros → design note on the issue → `tests/real_data.rs` → LIVE first-attempt green on all three lanes). Real fixture: ffmpeg `testsrc2`+sine → **H.264/AAC MP4, 23,089,475 bytes**, generated at test time (never committed, ADR-009); reality guards on source AND received (ffprobe h264+aac+duration, >64 distinct bytes/64 KiB window — a zeros file holds 1); fidelity invariant `sha256(received)==sha256(source)` + received copy ffprobe-verified PLAYABLE. All lanes ENGINE-driven (create_job→run_job→journal Done): HTTP loopback recorder, TUS vs pinned tusd 2.10.1 (max_conns=4 requested — #13 clamp held), S3 multipart vs pinned SeaweedFS 4.51 (parts reassembled, signed GET read-back). Harness: `--with-real` flag on both server scripts; ci.yml passes it (runner images ship ffmpeg; loud skip elsewhere). Test count 126→129 | LIVE: all 3 lanes byte-exact, same sha256 `1a51b80b…`; #17 auto-closed by commit | see git log |
 

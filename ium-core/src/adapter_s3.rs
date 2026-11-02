@@ -78,8 +78,11 @@ const EMPTY_SHA: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991
 /// Adapter-level credentials + signing scope. Never derived from job specs.
 #[derive(Debug, Clone)]
 pub struct S3MultipartConfig {
+    /// SigV4 access key id (harness/CI throws one away per run).
     pub access_key: String,
+    /// SigV4 secret key.
     pub secret_key: String,
+    /// AWS region — scope of the signature (path-style addressing).
     pub region: String,
 }
 
@@ -103,8 +106,11 @@ impl S3MultipartConfig {
 /// One completed part as the server listed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListedPart {
+    /// 1-based part number.
     pub number: u32,
+    /// Part size in bytes (reconcile checks Σ sizes == source size).
     pub size: u64,
+    /// The server's ETag for the part (quoted, as returned).
     pub etag: String,
 }
 
@@ -114,8 +120,11 @@ pub struct ListedPart {
 /// classification ever sees it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCtx {
+    /// CreateMultipartUpload / pre-flight calls.
     Probe,
+    /// UploadPart / PutObject.
     Chunk,
+    /// ListParts / CompleteMultipartUpload.
     Finalize,
 }
 
@@ -126,9 +135,14 @@ pub enum ErrorCtx {
 /// The target of one S3 operation, parsed from `JobSpec.endpoint`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct S3Target {
+    /// `host[:port]` — no scheme.
     pub host: String,
+    /// HTTPS requested?
     pub https: bool,
+    /// Path-style bucket (first path segment).
     pub bucket: String,
+    /// Raw object key (remaining path segments; None = bucket-only spec,
+    /// key derived from the source file name).
     pub key: String,
 }
 
@@ -416,6 +430,8 @@ struct S3Request<'a> {
 }
 
 impl S3MultipartAdapter {
+    /// Build the adapter over real SigV4 credentials (the `sigv4` module —
+    /// hmac/sha2/hex only, pinned against official AWS vectors, issue #6).
     pub fn new(config: S3MultipartConfig) -> Result<Self, AdapterError> {
         let signer = SigV4Signer::new(
             Credentials {

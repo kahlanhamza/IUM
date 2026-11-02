@@ -16,7 +16,7 @@
 //!   is nothing to resume, so chunking would be a lie.
 //!
 //! Concurrency model (Sprint 1): a drive round spawns up to
-//! [`MAX_WORKERS`] cooperative workers over ONE shared [`ChunkPool`]. Each
+//! up to `MAX_WORKERS` cooperative workers over ONE shared [`ChunkPool`]. Each
 //! worker leases, uploads (streaming progress reported per window), and
 //! journals its own chunks; a fatal error aborts the fleet via a watch
 //! channel and the driver journals `Failed` exactly once. Pausing is
@@ -45,14 +45,23 @@ use crate::{EngineError, JobSpec, Result};
 /// plans one chunk per configured connection, spec §4.1) normally binds first.
 const MAX_WORKERS: usize = 32;
 
-/// UI-facing snapshot of a job (spec §8 transparency).
+/// UI-facing snapshot of a job (spec §8 transparency): the journal's job
+/// row, its chunk rows and its event trail, read fresh — the UI NEVER
+/// computes transfer state itself (spec §2.3).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct JobSnapshot {
+    /// The job's journal record (state included — journal truth).
     pub job: JobRecord,
+    /// Per-chunk rows in idx order (the inspector drawer's table).
     pub chunks: Vec<crate::journal::ChunkRow>,
+    /// The append-only event trail `(seq, kind, payload_json)`.
     pub events: Vec<(i64, String, String)>,
 }
 
+/// The orchestrator facade: drives jobs over the registry's adapters with
+/// the journal as the only source of truth (ADR-002). Cooperative workers
+/// lease from one shared [`crate::chunk::ChunkPool`]; every transition is
+/// journaled before it executes.
 pub struct JobManager {
     journal: Mutex<SessionJournal>,
     registry: AdapterRegistry,
@@ -103,6 +112,9 @@ struct DriveShared {
 }
 
 impl JobManager {
+    /// Open (creating or migrating) the journal at `path` and build a
+    /// manager over it. No adapters registered yet — see
+    /// [`JobManager::register_adapter`].
     pub fn open(journal_path: impl AsRef<std::path::Path>) -> Result<Self> {
         Ok(Self {
             journal: Mutex::new(SessionJournal::open(journal_path).map_err(EngineError::from)?),
@@ -115,6 +127,8 @@ impl JobManager {
         })
     }
 
+    /// Build a manager over an already-open journal (tests, drills, and
+    /// any host that owns the journal's lifecycle).
     pub fn with_journal(journal: SessionJournal) -> Result<Self> {
         Ok(Self {
             journal: Mutex::new(journal),
@@ -127,10 +141,13 @@ impl JobManager {
         })
     }
 
+    /// Register an adapter under its [`TransferAdapter::name`]; `JobSpec`
+    /// adapter keys resolve here. Register every adapter BEFORE `create_job`.
     pub fn register_adapter(&mut self, adapter: Arc<dyn TransferAdapter>) {
         self.registry.register(adapter);
     }
 
+    /// Replace the retry policy (spec §5's per-error-class decisions).
     pub fn set_policy(&mut self, policy: RetryPolicy) {
         self.policy = policy;
     }
@@ -216,6 +233,7 @@ impl JobManager {
         })
     }
 
+    /// All job rows, newest first (the UI's job list).
     pub fn list_jobs(&self) -> Result<Vec<JobRecord>> {
         self.j().list_jobs().map_err(EngineError::from)
     }
@@ -237,6 +255,9 @@ impl JobManager {
         Ok(())
     }
 
+    /// Clear the pause flag (cooperative resume): the next drive loop —
+    /// whether still parked mid-round or re-driven by the host — continues
+    /// leasing. Does not start a drive task by itself (see `Supervisor`).
     pub fn resume_signal(&self, job_id: &str) -> Result<()> {
         self.require_job(job_id)?;
         if let Some(tx) = self.pause_flags.lock().unwrap().get(job_id) {

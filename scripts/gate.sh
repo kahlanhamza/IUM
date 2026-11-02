@@ -35,6 +35,12 @@ cargo fmt --all -- --check
 cargo clippy -p ium-core --all-targets -- -D warnings
 cargo test -p ium-core
 
+# ---- public API docs lane (issue #19, M5 API freeze) -----------------------
+# The frozen surface must stay documented: missing_docs is #![deny] in lib.rs
+# (clippy enforces it above); rustdoc must build warning-free.
+echo "== gate: cargo doc (warnings as errors) =="
+RUSTDOCFLAGS="-D warnings" cargo doc -p ium-core --no-deps --quiet
+
 # ---- ium-app lane (ADR-006 amendment, issue #14) --------------------------
 # The frontend lane (tsc strict + vite build) runs EVERYWHERE and is
 # unconditional. The Rust shell lane needs platform libraries: native where

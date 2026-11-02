@@ -4,16 +4,27 @@
 
 use serde::{Deserialize, Serialize};
 
+/// One job's lifecycle state (spec §3.1). Stored in the journal as its
+/// snake_case name; an unknown string is a LOUD parse failure, never a
+/// silent resurrection (issue #15's corruption fix).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobState {
+    /// Inserted with the job; no adapter contact yet.
     Created,
+    /// Probe in flight (endpoint validated, session opened, plan constrained).
     Probing,
+    /// Workers are leasing and uploading chunks.
     Running,
+    /// User-requested pause; workers idle, journal retains all confirmations.
     Paused,
+    /// Verify gate in flight (verify-before-declare, ADR-004).
     Finishing,
+    /// The adapter verified the destination; the job is honestly complete.
     Done,
+    /// The endpoint cannot be resumed (one-shot + lost session) — terminal.
     Unresumable,
+    /// Retry budget exhausted or an unrecoverable error — terminal.
     Failed,
     /// User canceled (issue #15): a first-class terminal state — a cancel
     /// must never be recorded as `Failed` (honest endings rule). Legal from
@@ -23,10 +34,14 @@ pub enum JobState {
     Canceled,
 }
 
+/// A transition the state machine forbids — the engine refuses to lie about
+/// where a job is.
 #[derive(Debug, thiserror::Error)]
 #[error("{from:?} -> {to:?} is not a legal transition")]
 pub struct StateError {
+    /// The job's journal state at the time of the attempt.
     pub from: JobState,
+    /// The state the caller tried to move to.
     pub to: JobState,
 }
 
@@ -62,6 +77,8 @@ impl JobState {
         }
     }
 
+    /// Is this state final? Terminal states accept no further transitions —
+    /// a reopened job in a terminal state is reported, never re-driven.
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
@@ -69,6 +86,8 @@ impl JobState {
         )
     }
 
+    /// The journal's snake_case name for this state (the journal stores
+    /// strings; this is the single source of the mapping).
     pub fn as_str(self) -> &'static str {
         match self {
             JobState::Created => "created",

@@ -28,12 +28,16 @@ struct Inner {
     tasks: Mutex<HashMap<String, JoinHandle<()>>>,
 }
 
+/// Spawn/pause/resume/cancel over one shared [`JobManager`] — the engine
+/// side of the shell's runtime wiring (#15). All semantics live here so
+/// they are testable without a webview; Tauri glue stays thin.
 #[derive(Clone)]
 pub struct Supervisor {
     inner: Arc<Inner>,
 }
 
 impl Supervisor {
+    /// Wrap a manager; drive tasks are spawned per job on demand.
     pub fn new(manager: Arc<JobManager>) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -43,6 +47,7 @@ impl Supervisor {
         }
     }
 
+    /// The wrapped manager (for create_job/snapshot/cancel plumbing).
     pub fn manager(&self) -> &Arc<JobManager> {
         &self.inner.manager
     }
@@ -76,6 +81,8 @@ impl Supervisor {
         tasks.insert(job_id.to_string(), handle);
     }
 
+    /// Ask the manager to pause (cooperative; takes effect between leases).
+    /// Errors on unknown/terminal jobs.
     pub fn pause(&self, job_id: &str) -> Result<()> {
         self.inner.manager.pause(job_id)
     }
