@@ -46,6 +46,12 @@ pub struct ProbeReport {
     pub resumable: bool,
     /// Server-side size limit for one request/chunk, if it declares one.
     pub max_chunk_bytes: Option<u64>,
+    /// How many workers may upload CONCURRENTLY against one session, if the
+    /// protocol constrains it (issue #13, same declaration channel as
+    /// `max_chunk_bytes` per ADR-011: adapter declares, planner obeys).
+    /// `None` = no declared limit. TUS is ONE sequential-offset resource and
+    /// declares `Some(1)`; S3 parts are independent and declare `None`.
+    pub max_parallel: Option<u32>,
     /// Opaque session descriptor to carry across confirms.
     pub session_token: Option<String>,
 }
@@ -243,6 +249,7 @@ mod tests {
             Ok(ProbeReport {
                 resumable: false,
                 max_chunk_bytes: None,
+                max_parallel: None,
                 session_token: None,
             })
         }

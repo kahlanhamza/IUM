@@ -350,6 +350,12 @@ impl JobManager {
                     &serde_json::json!({
                         "resumable": probe.resumable,
                         "session_token": probe.session_token,
+                        // Issue #13: the declaration channel is journaled with
+                        // the probe so every future drive round (resume,
+                        // crash recovery) re-derives the clamp from the
+                        // journal — never from a live re-probe, which would
+                        // orphan the session (ADR-002, #12).
+                        "max_parallel": probe.max_parallel,
                     }),
                 )
                 .map_err(EngineError::from)?;
@@ -427,11 +433,32 @@ impl JobManager {
         Ok(())
     }
 
+    /// Consume `ProbeReport.max_parallel` (issue #13, ADR-011 channel):
+    /// read the LAST journaled probe event for this job and return the
+    /// adapter-declared concurrency ceiling, if any. The clamp is re-derived
+    /// from the journal on EVERY drive round — resume and crash recovery
+    /// included — so no drive round can exceed what the adapter declared,
+    /// and none needs a live re-probe (which would orphan the session).
+    /// Pre-#13 journals (events without the key) declare nothing: `None`.
+    fn declared_max_parallel(&self, job_id: &str) -> Option<u32> {
+        self.j()
+            .events_for(job_id)
+            .ok()?
+            .into_iter()
+            .rev()
+            .find(|(_, kind, _)| kind == "probe")
+            .and_then(|(_, _, payload)| serde_json::from_str::<serde_json::Value>(&payload).ok())
+            .and_then(|v| v.get("max_parallel").cloned())
+            .and_then(|v| v.as_u64().map(|n| n as u32))
+    }
+
     /// The transfer loop (Sprint 1: concurrent workers over one shared pool).
     ///
     /// Each round: reload the pool from the journal (reclaiming leases left
-    /// by a crashed driver), then run up to `min(pending, MAX_WORKERS)`
-    /// cooperative workers concurrently. Every worker leases, streams its
+    /// by a crashed driver), then run up to
+    /// `min(pending, MAX_WORKERS, declared_max_parallel)` cooperative workers
+    /// concurrently — the third bound is the adapter's probe declaration
+    /// (issue #13), re-read from the journal each round. Every worker leases, streams its
     /// chunk with per-window progress sampling (slow-chunk eviction, spec
     /// §4.2), and journals its own confirms/errors. A fatal adapter error
     /// aborts the whole fleet; the driver journals `Failed` exactly once.
@@ -496,6 +523,17 @@ impl JobManager {
             }
             let before = pool.remaining_unconfirmed();
 
+            // Issue #13 (ADR-011 channel): the adapter's declared concurrency
+            // ceiling is a HARD bound on the fleet, re-read from the journal
+            // probe event each round. A declared 0 is nonsense and clamps to
+            // 1 — a violated floor costs requests, a violated limit fails
+            // uploads, so a nonsensical declaration cannot spin the fleet.
+            let declared = self
+                .declared_max_parallel(job_id)
+                .unwrap_or(MAX_WORKERS as u32)
+                .max(1) as usize;
+            let fleet = pending.min(MAX_WORKERS).min(declared);
+
             let shared = DriveShared {
                 pool: Arc::new(Mutex::new(pool)),
                 attempts: attempts.clone(),
@@ -506,7 +544,7 @@ impl JobManager {
                 paused_seen: paused_seen.clone(),
                 paused_rx: paused_rx.clone(),
             };
-            let futs: Vec<_> = (0..pending.min(MAX_WORKERS))
+            let futs: Vec<_> = (0..fleet)
                 .map(|w| {
                     let worker_id = format!("w{w}");
                     // Borrow, don't move: every future shares one fleet state.

@@ -426,3 +426,40 @@ async fn tus_zero_byte_upload_verifies_without_a_patch() {
     let v = adapter.verify(&s).await.unwrap();
     assert!(v.ok, "0 == 0 verifies");
 }
+
+#[tokio::test]
+async fn manager_drives_a_multi_chunk_tus_job_planned_concurrently_to_done() {
+    // Issue #13, live shape: TUS is ONE sequential-offset resource, but
+    // create_job(max_conns = 4) plans multiple chunks and (before the fix)
+    // drives them CONCURRENTLY — the second PATCH lands at a stale offset
+    // and the job dies in the 409 realign path. The adapter now DECLARES
+    // max_parallel = 1; the manager must clamp the drive round to one
+    // worker so this job finishes Done with every byte confirmed exactly
+    // once.
+    let Some((_adapter, endpoint)) = live() else {
+        return;
+    };
+    let size: u64 = 16 * MIB;
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_source(&dir, "concurrent-plan.bin", size);
+
+    let journal_path = dir.path().join("tus-conc.db");
+    let mut m = ium_core::JobManager::open(&journal_path).unwrap();
+    m.register_adapter(std::sync::Arc::new(ium_core::TusAdapter::new()));
+
+    let rec = m.create_job(&spec(&endpoint, &path, size), 4).unwrap();
+    let planned = m.snapshot(&rec.id).unwrap().chunks.len();
+    assert!(
+        planned > 1,
+        "16 MiB / max_conns 4 must plan >1 chunk, got {planned}"
+    );
+
+    let done = m.run_job(&rec.id).await.unwrap();
+    assert_eq!(done.state, ium_core::state::JobState::Done);
+    let snap = m.snapshot(&rec.id).unwrap();
+    assert_eq!(
+        snap.chunks.iter().map(|c| c.bytes_confirmed).sum::<u64>(),
+        size,
+        "every byte server-acknowledged exactly once"
+    );
+}

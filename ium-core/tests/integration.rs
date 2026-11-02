@@ -6,7 +6,7 @@
 //! HTTP end-to-end lives in `http_one_shot.rs`; this file owns the
 //! supervisor semantics (resume, retry exhaustion, pause, crash recovery).
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ium_core::adapter::{
@@ -44,6 +44,27 @@ struct UploadLog {
     bytes_moved: u64,
 }
 
+/// RAII seat in `upload_chunk`: bumps `in_flight` on construction, records
+/// the high-water mark, releases the seat on drop (every exit path — blip,
+/// session loss, wedge — must give the seat back).
+struct InFlightGuard<'a> {
+    count: &'a AtomicUsize,
+}
+
+impl<'a> InFlightGuard<'a> {
+    fn new(count: &'a AtomicUsize, max: &'a AtomicUsize) -> Self {
+        let now = count.fetch_add(1, Ordering::SeqCst) + 1;
+        max.fetch_max(now, Ordering::SeqCst);
+        Self { count }
+    }
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// Mock adapter that reads its leased range from disk (like the real ones)
 /// and logs every call AT ENTRY (parity with ScriptedAdapter): a call that
 /// blips, hits a vanished source or never completes stays visible with
@@ -70,11 +91,23 @@ struct MockAdapter {
     /// Per-call ceiling the probe declares (issue #8: adapter declares,
     /// planner obeys). `None` = undeclared, today's behavior.
     probe_cap: Option<u64>,
+    /// Concurrency ceiling the probe declares (issue #13). `None` =
+    /// undeclared.
+    probe_max_parallel: Option<u32>,
     log: Mutex<Vec<UploadLog>>,
     has_session: std::sync::atomic::AtomicBool,
     fail_session_at_call: AtomicU32,
     fail_session_forever: std::sync::atomic::AtomicBool,
     reattach_count: AtomicU32,
+    /// Upload calls currently inside `upload_chunk` (issue #13 RED probe).
+    in_flight: AtomicUsize,
+    /// High-water mark of `in_flight` — the observed fleet concurrency.
+    max_in_flight: AtomicUsize,
+    /// When `lease.idx == wedge_idx` the call parks at entry until released
+    /// through `wedge_release` (deterministic mid-body state, drill style).
+    wedge_idx: AtomicU32,
+    wedge_release: Arc<tokio::sync::Notify>,
+    wedge_engaged: Arc<AtomicBool>,
 }
 
 impl MockAdapter {
@@ -85,17 +118,42 @@ impl MockAdapter {
             partial_first_len: None,
             chunk_delay_ms: 0,
             probe_cap: None,
+            probe_max_parallel: None,
             log: Mutex::new(Vec::new()),
             has_session: std::sync::atomic::AtomicBool::new(false),
             fail_session_at_call: AtomicU32::new(0),
             fail_session_forever: std::sync::atomic::AtomicBool::new(false),
             reattach_count: AtomicU32::new(0),
+            in_flight: AtomicUsize::new(0),
+            max_in_flight: AtomicUsize::new(0),
+            wedge_idx: AtomicU32::new(u32::MAX),
+            wedge_release: Arc::new(tokio::sync::Notify::new()),
+            wedge_engaged: Arc::new(AtomicBool::new(false)),
         }
     }
     /// Declare `max_chunk_bytes` from the probe (issue #8).
     fn with_probe_cap(mut self, cap: Option<u64>) -> Self {
         self.probe_cap = cap;
         self
+    }
+    /// Declare `max_parallel` from the probe (issue #13).
+    fn with_probe_max_parallel(mut self, n: Option<u32>) -> Self {
+        self.probe_max_parallel = n;
+        self
+    }
+    /// Park the call for `idx` at entry until `release()` is notified.
+    /// Returns the release handle and the engaged flag (observable from the
+    /// test without polling the log).
+    fn arm_wedge(&self, idx: u32) -> (Arc<tokio::sync::Notify>, Arc<AtomicBool>) {
+        self.wedge_idx.store(idx, Ordering::SeqCst);
+        (self.wedge_release.clone(), self.wedge_engaged.clone())
+    }
+    fn release_wedge(&self) {
+        self.wedge_release.notify_one();
+    }
+    /// Observed peak concurrency of `upload_chunk` calls.
+    fn max_concurrent_seen(&self) -> usize {
+        self.max_in_flight.load(Ordering::SeqCst)
     }
     /// Upload call `call` returns `SessionLost` (issue #12).
     fn with_session_loss_at(self, call: u32) -> Self {
@@ -142,6 +200,7 @@ impl TransferAdapter for MockAdapter {
         Ok(ProbeReport {
             resumable: self.cap.has(Capability::RESUMABLE),
             max_chunk_bytes: self.probe_cap,
+            max_parallel: self.probe_max_parallel,
             session_token: Some("mock-session".into()),
         })
     }
@@ -163,6 +222,14 @@ impl TransferAdapter for MockAdapter {
             });
             log.len() - 1
         };
+        // Issue #13 instrumentation: take a concurrency seat (tracks the
+        // observed fleet peak), then honor the entry wedge if armed for
+        // this chunk — a deterministic mid-body hold, drill style.
+        let _in_flight = InFlightGuard::new(&self.in_flight, &self.max_in_flight);
+        if self.wedge_idx.load(Ordering::SeqCst) == lease.idx {
+            self.wedge_engaged.store(true, Ordering::SeqCst);
+            self.wedge_release.notified().await;
+        }
         if self.chunk_delay_ms > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(self.chunk_delay_ms)).await;
         }
@@ -460,6 +527,65 @@ async fn probe_max_chunk_bytes_caps_the_plan() {
     assert!(
         snap.events.iter().any(|(_, k, _)| k == "replan_cap"),
         "the cap re-plan must be journaled like every write"
+    );
+}
+
+#[tokio::test]
+async fn probe_declared_max_parallel_one_forbids_a_concurrent_second_lease() {
+    // Issue #13: TUS is ONE sequential-offset resource. An adapter that
+    // declares max_parallel = Some(1) at probe time must clamp the drive
+    // round to a single worker. Deterministic RED shape: chunk 0's call
+    // parks at entry; while it is parked NO other upload call may exist.
+    // Today's fleet spawns min(pending, MAX_WORKERS) workers regardless of
+    // the declaration, so worker 2 leases chunk 1 mid-wedge and the
+    // observed concurrency high-water mark reaches 2 — the assertion below
+    // fails until the manager consumes the declaration.
+    let dir = tempfile::tempdir().unwrap();
+    let path = make_source(dir.path(), "sequential.bin", 16 * MIB);
+
+    let mock = Arc::new(
+        MockAdapter::new(Capability::new(Capability::RESUMABLE)).with_probe_max_parallel(Some(1)),
+    );
+    let (_release, _engaged) = mock.arm_wedge(0);
+    let m = manager_with(Arc::clone(&mock));
+
+    // 16 MiB with max_conns = 4 plans multiple chunks; only the DRIVE round
+    // may be clamped — the plan itself stays untouched (lease order is
+    // lowest-idx-first, so one worker walks a TUS session in offset order).
+    let rec = m.create_job(&spec_for(&path, 16 * MIB), 4).unwrap();
+    assert!(
+        m.snapshot(&rec.id).unwrap().chunks.len() > 1,
+        "pre-probe plan is unconstrained — the clamp is a drive-round property"
+    );
+
+    // Release the wedge as soon as it engages, after a settle window that
+    // gives a buggy concurrent lease ample time to show up (the buggy fleet
+    // leases chunk 1 within microseconds of the round starting).
+    let mock2 = Arc::clone(&mock);
+    tokio::spawn(async move {
+        for _ in 0..500 {
+            if mock2.wedge_engaged.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        mock2.release_wedge();
+    });
+
+    let done = m.run_job(&rec.id).await.unwrap();
+    assert_eq!(done.state, JobState::Done);
+    assert_eq!(
+        mock.max_concurrent_seen(),
+        1,
+        "a probe that declares max_parallel=1 must never see two upload calls in flight"
+    );
+    let log = mock.log.lock().unwrap().clone();
+    assert_eq!(log.len(), m.snapshot(&rec.id).unwrap().chunks.len());
+    assert_eq!(
+        log.iter().map(|l| l.bytes_moved).sum::<u64>(),
+        16 * MIB,
+        "all bytes still moved — exactly once, sequentially"
     );
 }
 
@@ -787,11 +913,17 @@ async fn pause_between_chunks_returns_paused_then_resume_completes() {
         partial_first_len: None,
         chunk_delay_ms: 20,
         probe_cap: None,
+        probe_max_parallel: None,
         log: Mutex::new(Vec::new()),
         has_session: std::sync::atomic::AtomicBool::new(false),
         fail_session_at_call: AtomicU32::new(0),
         fail_session_forever: std::sync::atomic::AtomicBool::new(false),
         reattach_count: AtomicU32::new(0),
+        in_flight: AtomicUsize::new(0),
+        max_in_flight: AtomicUsize::new(0),
+        wedge_idx: AtomicU32::new(u32::MAX),
+        wedge_release: Arc::new(tokio::sync::Notify::new()),
+        wedge_engaged: Arc::new(AtomicBool::new(false)),
     });
     let m = Arc::new(manager_with(mock));
     let rec = m.create_job(&spec_for(&path, 15 * MIB), 3).unwrap();
@@ -948,11 +1080,17 @@ async fn double_run_is_rejected_not_raced() {
         partial_first_len: None,
         chunk_delay_ms: 30, // keep the first driver busy so the second lands mid-run
         probe_cap: None,
+        probe_max_parallel: None,
         log: Mutex::new(Vec::new()),
         has_session: std::sync::atomic::AtomicBool::new(false),
         fail_session_at_call: AtomicU32::new(0),
         fail_session_forever: std::sync::atomic::AtomicBool::new(false),
         reattach_count: AtomicU32::new(0),
+        in_flight: AtomicUsize::new(0),
+        max_in_flight: AtomicUsize::new(0),
+        wedge_idx: AtomicU32::new(u32::MAX),
+        wedge_release: Arc::new(tokio::sync::Notify::new()),
+        wedge_engaged: Arc::new(AtomicBool::new(false)),
     });
     let m = Arc::new(manager_with(mock));
 
@@ -1060,6 +1198,7 @@ impl TransferAdapter for ScriptedAdapter {
         Ok(ProbeReport {
             resumable: self.cap.has(Capability::RESUMABLE),
             max_chunk_bytes: None,
+            max_parallel: None,
             session_token: Some("mock-scripted".into()),
         })
     }
@@ -1178,11 +1317,17 @@ async fn concurrent_workers_upload_each_chunk_exactly_once() {
         partial_first_len: None,
         chunk_delay_ms: 15,
         probe_cap: None,
+        probe_max_parallel: None,
         log: Mutex::new(Vec::new()),
         has_session: std::sync::atomic::AtomicBool::new(false),
         fail_session_at_call: AtomicU32::new(0),
         fail_session_forever: std::sync::atomic::AtomicBool::new(false),
         reattach_count: AtomicU32::new(0),
+        in_flight: AtomicUsize::new(0),
+        max_in_flight: AtomicUsize::new(0),
+        wedge_idx: AtomicU32::new(u32::MAX),
+        wedge_release: Arc::new(tokio::sync::Notify::new()),
+        wedge_engaged: Arc::new(AtomicBool::new(false)),
     });
     let m = manager_with(Arc::clone(&mock));
     let rec = m.create_job(&spec_for(&path, 20 * MIB), 4).unwrap();

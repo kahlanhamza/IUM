@@ -74,3 +74,19 @@ with zero confirmed bytes, verified from the journal (ADR-002). Accepted with
 issue #8's evidence: RED (`got 2` on a 4 MiB cap) → GREEN, 100/100 gates
 including not-binding-is-byte-identical, cap-vs-chunk_min conflict, boundary
 and 0-byte invariants.
+
+## ADR-012 — Parallelism is declared too ✅ accepted (issue #13, 2026-11-02)
+`ProbeReport.max_parallel` extends the ADR-011 channel to CONCURRENCY: the
+manager's drive round runs `min(pending, MAX_WORKERS, declared_max_parallel)`
+workers, and TUS — one sequential-offset resource — declares `Some(1)`
+(S3 parts are independent and declare `None`). The declaration is journaled
+inside the probe event and re-derived from the journal on every drive round
+(resume and crash recovery included, never a live re-probe — that would orphan
+the session, ADR-002/#12); pre-#13 journals without the key declare nothing and
+behave byte-identically. The clamp bounds the FLEET, not the plan: chunk plans
+stay untouched because lease order is lowest-idx-first, so a single worker
+walks a TUS session in ascending offset order. Evidence that shaped it: the
+offline RED (2 concurrent calls against a declared-1 session) and the honest
+live finding that tusd's per-upload lock happens to serialize concurrent
+ascending chunks — server mercy, not protocol honesty; the engine obeys the
+declaration regardless of which compliant server it meets.

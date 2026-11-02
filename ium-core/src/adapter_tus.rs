@@ -273,6 +273,12 @@ impl TransferAdapter for TusAdapter {
                 Ok(ProbeReport {
                     resumable: true,
                     max_chunk_bytes: None,
+                    // Issue #13: TUS is ONE sequential-offset resource.
+                    // Concurrent PATCHes to different offsets 409-realign
+                    // into Unresumable — the protocol itself caps parallel
+                    // uploads at 1 per session, so the adapter DECLARES it
+                    // (ADR-011 channel) and the planner obeys.
+                    max_parallel: Some(1),
                     session_token: Some(location),
                 })
             }

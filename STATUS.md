@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-02** · Phase: **M3 complete + loop findings closed** (#11 #12 done — M4 tranche decision next)
+> Last updated: **2026-11-02** · Phase: **M4 app shell — #13 closed (max_parallel), #14–#16 open**
 
 ---
 
@@ -14,7 +14,7 @@
 cd /home/z/my-project
 git pull                      # remote: github.com/kahlanhamza/IUM (private)
 . scripts/rust-env.sh         # persistent toolchain in .toolchain/ (gitignored)
-cargo test -p ium-core        # expect: 119 passed (56 unit + 23 adapter_s3 + 11 adapter_tus + 5 loopback HTTP + 21 integration + 1 s3 kill-9 drill [env-gated] + 1 tus kill-9 drill [env-gated] + 1 compile-fail contract)
+cargo test -p ium-core        # expect: 121 passed (56 unit + 23 adapter_s3 + 12 adapter_tus + 5 loopback HTTP + 22 integration + 1 s3 kill-9 drill [env-gated] + 1 tus kill-9 drill [env-gated] + 1 compile-fail contract)
 bash scripts/gate.sh          # before ANY push: gates on the COMMITTED tree (defect #11 rule)
 bash scripts/s3-test.sh       # live S3 suite vs pinned SeaweedFS 4.51 (downloads ~45 MB per run)
 bash scripts/tus-test.sh      # live TUS suite vs pinned tusd 2.10.1 (downloads ~27 MB per run)
@@ -54,17 +54,18 @@ the Tauri/React shell (`ium-app/`) is **frozen** until M2+M3 (ADR-006).
 | 2026-11-02 | **Issue #10 closed**: TUS 1.0.0 adapter — byte-level resume. Protocol rehearsed LIVE on tusd v2.10.1 (204 + Upload-Offset acks, 409 offset conflict, 404 bogus session, 412 without Tus-Resumable, NO checksum extension). `adapter_tus`: probe = POST creation (RFC 3986 §5.2 Location resolution); PATCH `[resume_from, end)` streamed from disk; `bytes_confirmed` = server-acked delta ONLY; **409 realign** absorbs drifted-but-server-acked bytes; verify = READ-ONLY HEAD (no commit gate — contrast ADR-010). Harness `scripts/tus-test.sh` (pinned tusd, sha256-verified, random port); ci.yml TUS step on all 3 OS | 115/115 gates; 11/11 LIVE vs tusd incl. 409-realign + byte-level restart drill; #10 auto-closed by commit |
 | 2026-11-02 | **Issue #12 closed**: `Action::Reattach` implemented — the taxonomy's promise kept. `TransferAdapter::reattach(endpoint, token)` is a REQUIRED trait method (no default; trybuild contract regenerated: E0046 lists `verify`, `reattach`). S3/TUS delegate to inherent `restore_session` (map insert, no network, never re-probes — re-probe would orphan the live session); HTTP + doubles explicit no-ops; drill child delegates. Manager: mid-transfer Reattach replays the LAST journaled probe token, journals `reattach`, counts the attempt (same budget as Retry — really-gone session exhausts into Failed, recovery cannot spin); `finish()` opens with the same replay (`finishing_entry`) so ANY fresh process verifies on a journal-reconciled session — the stronger statement of ADR-002. Honest mock (`has_session` starts false, sessionless verify = SessionLost) exposed a third hole for free: the two pre-existing crash-recovery drills also died at verify in a fresh process — fixed by the same Finishing-entry replay; their fixtures now journal the probe event (a mid-flight job without one is impossible) | 118/118 gates (5×RED → green incl. the issue's scratch test); #12 auto-closed by commit |
 | 2026-11-02 | **Issue #11 closed**: TUS kill-9 nightly drill — the s3_drill shape with the sharper window the issue names. `src/bin/tus_drill_child.rs`: upload mode gates every chunk but 0 at entry, and the wrapper **holds chunk 0's server-acked confirmation for 8 s** before handing it to the manager — the parent SIGKILLs inside a window that is provably real (journal `Running` + 0 confirmed while tusd holds 20 MiB). Resume child: FRESH adapter with an EMPTY session map — recovering the journaled creation URL through the manager's `Action::Reattach` (#12: map-miss → SessionLost → token replay) is part of the proof; the re-lease then absorbs the full-chunk drift through the 409 HEAD-realign (#10) with zero re-sent bytes. Chunk ordering is drill-local (TUS = one sequential-offset resource). Parent: `SERVER_ACK == SIZE/2` exact, journal 0 at kill, `SERVER_OFFSET == SIZE/2`, `DONE done` via read-only HEAD verify, byte-level zero re-upload pinned `SIZE/2 ≤ WIRE ≤ SIZE/2 + 64 KiB` (one rejected 409 attempt's buffered body chunk is the only honest slack — exact `==` races on hyper's first body poll). Nightly `tus_drill` job (Linux) via `scripts/tus-test.sh --with-drill`; YAML `safe_load`-validated | 119/119 gates; LIVE 11/11 suite + drill GREEN vs tusd 2.10.1 first attempt; #11 auto-closed by commit |
+| 2026-11-02 | **Issue #13 closed** (first M4 item): `ProbeReport.max_parallel` — adapter declares CONCURRENCY on the ADR-011 channel, planner obeys (ADR-012 accepted). RED (offline, deterministic): declared-1 session saw **2 concurrent upload calls** (chunk 0 wedged at entry on a Notify; worker 2 leased chunk 1 mid-wedge). Honest live finding recorded on the issue: tusd 2.10.1's per-upload lock serializes concurrent ascending-offset PATCHes, so the live 16 MiB/max_conns=4 job passed even pre-fix — server mercy, not protocol honesty; the engine now obeys the declaration regardless of server. Fix: drive round runs `min(pending, MAX_WORKERS, declared_max_parallel)`; declaration journaled in the probe event, re-derived from the journal every round (resume/crash-recovery included, never a live re-probe); TUS declares `Some(1)`, S3/HTTP `None`; pre-#13 journals byte-identical; fleet-clamp only — plans untouched (lease order = lowest-idx-first walks TUS in offset order) | 121/121 gates; LIVE 12/12 vs tusd post-fix; #13 auto-closed by commit |
 
 ## 3. In progress
 
-**M4 tranche decision** (frozen shell per ADR-006 vs more transports). The M3 milestone
-and both loop findings are closed: #6 #7 #8 #9 #10 #12 #11 all done. Known follow-up for
-that decision: TUS jobs are planned like any resumable adapter (`max_conns` chunks run
-CONCURRENTLY), but TUS is ONE sequential-offset resource — concurrent chunk PATCHes to
-different offsets 409-realign into `Unresumable` when a later chunk leases before an
-earlier one settles. The drill dodges it with local ordering; the honest fix belongs to
-the planner (TUS ⇒ sequential/1-worker plan, likely an adapter-declared
-`max_parallel` next to ADR-011's `max_chunk_bytes`).
+**M4 — App shell** (tranche decision made by "Go for M4": the frozen shell per ADR-006
+unlocks now that M2+M3 are done; more transports stay future work). Milestone filed on
+GitHub (M4: App shell) with four issues. Known follow-up folded into #13 and CLOSED:
+TUS jobs planned concurrently 409-realign into `Unresumable` on protocol-honest servers —
+fixed by adapter-declared `max_parallel` (ADR-012). Remaining: #14 unfreeze the shell
+(builds on 3 OS, ADR-006 amendment) → #15 runtime wiring (run_job spawn, `job_updated`
+events, honest `Canceled` state) → #16 Sprint-1 UI slice (spec §8: jobs table, progress,
+badges, per-chunk inspector).
 
 ## 4. Backlog / next (ordered — milestone [M3: Real transports](https://github.com/kahlanhamza/IUM/milestone/2))
 
@@ -78,8 +79,14 @@ the planner (TUS ⇒ sequential/1-worker plan, likely an adapter-declared
    mid-transfer & Finishing-entry replay).
 7. ~~**#11 — TUS subprocess kill-9 nightly drill**~~ ✅ (2026-11-02, kill-after-ack-
    before-journal window; nightly `tus_drill` job).
-8. **M4 tranche decision** (frozen shell per ADR-006 vs more transports) — NEXT; see the
-   TUS sequential-planning follow-up in §3.
+8. ~~**M4 tranche decision**~~ ✅ resolved 2026-11-02: "Go for M4" — app shell tranche;
+   milestone 3 filed with #13–#16 (see §3).
+9. ~~**#13 — `ProbeReport.max_parallel` (TUS ⇒ 1)**~~ ✅ (2026-11-02, ADR-012 accepted).
+10. **#14 — unfreeze the shell: ium-app builds green on 3 OS (ADR-006 amendment)** — NEXT.
+11. **#15 — runtime wiring: the shell actually uploads (run_job spawn, job_updated,
+    Canceled state)** — blocked by #13 ✅ + #14.
+12. **#16 — Sprint-1 UI slice: jobs table, live progress, badges, per-chunk inspector** —
+   blocked by #14 + #15.
 
 ## 5. Defect audit trail
 
@@ -187,6 +194,9 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-02 | Issues #11 + #12 filed from loop findings: #11 = TUS subprocess kill-9 nightly drill (the s3_drill shape; blocked by #10); #12 = implement Action::Reattach (mid-transfer SessionLost recovery + Finishing-entry session replay; scratch-test RED captured: job Failed where taxonomy promises recovery) | findings are issues, not drive-bys | — |
 | 2026-11-02 | Issue #12 via the full loop (design note → 5×RED — the issue's scratch test + the bounded-recovery count + TWO pre-existing crash drills exposed by the honest session-gated mock → required `reattach` trait method + manager mid-transfer/Finishing-entry journal replay → 118/118); trybuild snapshot regenerated | taxonomy's Reattach promise kept; session truth reconciled from the journal before verify | `96efe6a` |
 | 2026-11-02 | Issue #11 via the full loop (drill child with an 8 s ack-hold window → parent asserts the window from the journal itself → resume proves #12 reattach + #10 realign in one fresh process → LIVE GREEN vs tusd 2.10.1 first attempt → nightly `tus_drill` job) | byte-level zero re-upload pinned; kill-after-ack-before-journal provably hit | `fc0d6d6` |
+| 2026-11-02 | Session bootstrap: sandbox overlay disk-full (ENOSPC on **mkdir only** — file writes still worked) made `journal::tests::migrations_are_versioned_and_reopen_safe` fail at HEAD; environment defect, not code. Freed ~1.4G (`target/debug/incremental` 505M + `rea-lab/binaries` 933M vendor installers — scan inputs, re-downloadable; evidence `rea-lab/out/` kept per ADR-009). Suite re-verified 119/119 | tests green again at `0ddaaf0`; vendor binaries evicted, re-downloadable via scan scripts | — |
+| 2026-11-02 | **M4 milestone filed** ("Go for M4"): milestone 3 + issues #13–#16 with design-note bodies via `scripts/file_m4.py` (idempotent, GitHub REST) | #13 max_parallel (TUS sequential prerequisite), #14 unfreeze, #15 wiring, #16 UI | — |
+| 2026-11-02 | Issue #13 via the full loop (design note in body → offline RED `left: 2, right: 1` with Notify-wedged chunk 0 + in-flight high-water mock → honest live finding: tusd's per-upload lock chains ascending chunks, server mercy not protocol honesty, recorded on the issue → manager consumes the journaled declaration each drive round → ADR-012 → 121/121 + LIVE 12/12) | TUS can no longer be driven concurrently against its own declaration | this commit |
 
 ## 10. Security
 
