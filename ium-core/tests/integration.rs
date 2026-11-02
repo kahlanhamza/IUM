@@ -52,6 +52,16 @@ struct UploadLog {
 /// * `fail_first` — N transient blips before the first success;
 /// * `partial_first_len` — first confirm for a chunk confirms only this many
 ///   bytes (exercises the resume-from-confirmed-offset path).
+/// * `fail_session_at_call` — upload call N returns `SessionLost` (the
+///   server lost the session mid-transfer); every other call succeeds.
+/// * `fail_session_forever` — EVERY upload call returns `SessionLost`
+///   (the session is really gone; recovery must exhaust, not spin).
+///
+/// Session semantics model the real S3/TUS adapters (issue #12):
+/// `has_session` starts **false** — a fresh process's adapter session map is
+/// EMPTY; `probe` sets it (probe = CreateMultipartUpload / POST creation);
+/// and `verify` errors `SessionLost` when it is false — exactly what
+/// `adapter_s3`/`adapter_tus` do when their session map misses.
 struct MockAdapter {
     cap: Capability,
     fail_first: AtomicU32,
@@ -61,6 +71,10 @@ struct MockAdapter {
     /// planner obeys). `None` = undeclared, today's behavior.
     probe_cap: Option<u64>,
     log: Mutex<Vec<UploadLog>>,
+    has_session: std::sync::atomic::AtomicBool,
+    fail_session_at_call: AtomicU32,
+    fail_session_forever: std::sync::atomic::AtomicBool,
+    reattach_count: AtomicU32,
 }
 
 impl MockAdapter {
@@ -72,12 +86,30 @@ impl MockAdapter {
             chunk_delay_ms: 0,
             probe_cap: None,
             log: Mutex::new(Vec::new()),
+            has_session: std::sync::atomic::AtomicBool::new(false),
+            fail_session_at_call: AtomicU32::new(0),
+            fail_session_forever: std::sync::atomic::AtomicBool::new(false),
+            reattach_count: AtomicU32::new(0),
         }
     }
     /// Declare `max_chunk_bytes` from the probe (issue #8).
     fn with_probe_cap(mut self, cap: Option<u64>) -> Self {
         self.probe_cap = cap;
         self
+    }
+    /// Upload call `call` returns `SessionLost` (issue #12).
+    fn with_session_loss_at(self, call: u32) -> Self {
+        self.fail_session_at_call.store(call, Ordering::SeqCst);
+        self
+    }
+    /// Every upload call returns `SessionLost` (issue #12).
+    fn with_session_lost_forever(self) -> Self {
+        self.fail_session_forever
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self
+    }
+    fn reattach_count(&self) -> u32 {
+        self.reattach_count.load(Ordering::SeqCst)
     }
     fn failing(cap: Capability, n: u32) -> Self {
         Self {
@@ -102,7 +134,11 @@ impl TransferAdapter for MockAdapter {
         self.cap
     }
     async fn probe(&self, _spec: &JobSpec) -> Result<ProbeReport, AdapterError> {
-        // Probe honesty mirrors the declared capability (spec §5).
+        // Probe honesty mirrors the declared capability (spec §5). Probe
+        // CREATES the session on resumable endpoints (S3 CreateMultipartUpload,
+        // TUS POST creation) — the fresh map is no longer empty.
+        self.has_session
+            .store(self.cap.has(Capability::RESUMABLE), Ordering::SeqCst);
         Ok(ProbeReport {
             resumable: self.cap.has(Capability::RESUMABLE),
             max_chunk_bytes: self.probe_cap,
@@ -133,6 +169,17 @@ impl TransferAdapter for MockAdapter {
         if self.fail_first.load(Ordering::SeqCst) > 0 {
             self.fail_first.fetch_sub(1, Ordering::SeqCst);
             return Err(AdapterError::Transient("mock network blip".into()));
+        }
+        // Issue #12 failure modes: the server lost the session.
+        let call_no = (entry + 1) as u32; // entry log order == arrival order
+        if self
+            .fail_session_forever
+            .load(std::sync::atomic::Ordering::SeqCst)
+            || self.fail_session_at_call.load(Ordering::SeqCst) == call_no
+        {
+            return Err(AdapterError::SessionLost(format!(
+                "mock: server lost the session (call {call_no})"
+            )));
         }
 
         // Read the REAL byte range from disk — [resume_from, lease.end).
@@ -169,11 +216,208 @@ impl TransferAdapter for MockAdapter {
         })
     }
     async fn verify(&self, _spec: &JobSpec) -> Result<VerifyReport, AdapterError> {
+        // Model the real adapters: verify without a session (fresh process,
+        // map empty) is SessionLost — never a silent pass (issue #12).
+        if !self.has_session.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AdapterError::SessionLost(
+                "mock: no session in the fresh process's adapter map".into(),
+            ));
+        }
         Ok(VerifyReport {
             ok: true,
             detail: Some("mock hash ok".into()),
         })
     }
+    async fn reattach(&self, _endpoint: &str, _token: &str) -> Result<(), AdapterError> {
+        // Model restore_session: the journaled token resurrects the session
+        // in this (possibly fresh) adapter's map (issue #12).
+        self.has_session
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.reattach_count.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn session_lost_mid_transfer_reattaches_instead_of_failing() {
+    // Issue #12, hole 1 — the scratch test from the issue, committed for
+    // real. The taxonomy promises `Action::Reattach` for SessionLost; the
+    // manager used to treat it exactly like Fail, killing an otherwise
+    // healthy resumable upload whose state is fully recoverable from the
+    // journaled probe event. Mock: probe ok, upload call 2 SessionLost
+    // (server lost the session), everything after succeeds; 8 attempts.
+    let dir = tempfile::tempdir().unwrap();
+    let path = make_source(dir.path(), "sesslost.bin", 10 * MIB);
+    let mock =
+        Arc::new(MockAdapter::new(Capability::new(Capability::RESUMABLE)).with_session_loss_at(2));
+    let mut m = manager_with(Arc::clone(&mock));
+    fast_policy(&mut m);
+
+    let rec = m.create_job(&spec_for(&path, 10 * MIB), 2).unwrap();
+    let done = m.run_job(&rec.id).await.unwrap();
+    assert_eq!(
+        done.state,
+        JobState::Done,
+        "a recoverable SessionLost must not fail the job"
+    );
+
+    // The recovery is journaled and the token really replayed.
+    let snap = m.snapshot(&rec.id).unwrap();
+    assert!(
+        snap.events.iter().any(|(_, k, _)| k == "reattach"),
+        "the reattach must be journaled like every write"
+    );
+    assert!(
+        mock.reattach_count() >= 1,
+        "manager must have replayed the journaled token into the adapter"
+    );
+
+    // Wire proof: exactly 3 calls — ok, lost, recovered. The lost call
+    // carries no confirmation, so its chunk re-leased from its BEGIN and
+    // re-sent its full span (a SessionLost confirms zero bytes).
+    let log = mock.log.lock().unwrap().clone();
+    assert_eq!(log.len(), 3, "ok + lost + recovered: {log:?}");
+    assert_eq!(log[1].bytes_moved, 0, "the SessionLost call moved nothing");
+    let lost_idx = log[1].idx;
+    assert_ne!(log[0].idx, lost_idx, "the sibling chunk completed: {log:?}");
+    assert_eq!(log[2].idx, lost_idx, "the lost chunk was re-leased");
+    assert_eq!(
+        log[2].resume_from,
+        lost_idx as u64 * 5 * MIB,
+        "re-lease restarts at the chunk begin — zero server-confirmed bytes to keep"
+    );
+    assert_eq!(
+        log[2].bytes_moved,
+        5 * MIB,
+        "full span re-sent, nothing more"
+    );
+    assert_eq!(
+        snap.chunks.iter().map(|c| c.bytes_confirmed).sum::<u64>(),
+        10 * MIB
+    );
+}
+
+#[tokio::test]
+async fn finishing_entry_session_replay_verifies_in_fresh_process() {
+    // Issue #12, hole 2: a crash between the last confirm and verify leaves
+    // the job at `Finishing` with a journaled probe event; a fresh process's
+    // adapter has an EMPTY session map, so verify used to SessionLost one
+    // step before Done. The Finishing-entry replay must reattach from the
+    // journal, then verify.
+    let dir = tempfile::tempdir().unwrap();
+    let path = make_source(dir.path(), "finishing.bin", 10 * MIB);
+    let db = dir.path().join("ium.db");
+
+    // Session 1: really probe + upload everything (the probe event hits the
+    // journal), then rewind to the crash window: all chunks Uploaded with
+    // full bytes, job Finishing — exactly what a kill between the last
+    // confirm and verify leaves behind.
+    {
+        let journal = SessionJournal::open(&db).unwrap();
+        let mut m = JobManager::with_journal(journal).unwrap();
+        m.register_adapter(Arc::new(MockAdapter::new(Capability::new(
+            Capability::RESUMABLE,
+        ))));
+        let rec = m.create_job(&spec_for(&path, 10 * MIB), 2).unwrap();
+        m.run_job(&rec.id).await.unwrap();
+        m.journal()
+            .set_job_state(&rec.id, JobState::Finishing)
+            .unwrap();
+        for c in m.snapshot(&rec.id).unwrap().chunks {
+            m.journal()
+                .update_chunk(
+                    &rec.id,
+                    c.idx,
+                    ium_core::chunk::ChunkState::Uploaded,
+                    c.end - c.begin,
+                    c.adapter_token.as_deref(),
+                )
+                .unwrap();
+        }
+        m.journal().checkpoint_wal().unwrap();
+    }
+
+    // Session 2: FRESH manager + FRESH adapter — session map empty, exactly
+    // like a restarted process.
+    let mock2 = Arc::new(MockAdapter::new(Capability::new(Capability::RESUMABLE)));
+    let journal = SessionJournal::open(&db).unwrap();
+    let mut m2 = JobManager::with_journal(journal).unwrap();
+    m2.register_adapter(Arc::clone(&mock2) as Arc<dyn TransferAdapter>);
+
+    let jobs = m2.list_jobs().unwrap();
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].state, JobState::Finishing);
+
+    let out = m2.run_job(&jobs[0].id.clone()).await.unwrap();
+    assert_eq!(
+        out.state,
+        JobState::Done,
+        "verify must run on a replayed session, not die one step before Done"
+    );
+    assert_eq!(
+        mock2.reattach_count(),
+        1,
+        "exactly one Finishing-entry replay from the journaled probe token"
+    );
+    let snap = m2.snapshot(&jobs[0].id).unwrap();
+    assert!(
+        snap.events
+            .iter()
+            .any(|(_, k, p)| k == "reattach" && p.contains("finishing_entry")),
+        "the Finishing-entry replay must be journaled"
+    );
+    // Zero re-upload: everything was already confirmed in the journal.
+    assert!(
+        mock2.log.lock().unwrap().is_empty(),
+        "a fresh Finishing-entry process must not upload a single byte"
+    );
+    assert_eq!(
+        snap.chunks.iter().map(|c| c.bytes_confirmed).sum::<u64>(),
+        10 * MIB
+    );
+}
+
+#[tokio::test]
+async fn session_lost_forever_terminates_failed_not_spins() {
+    // Issue #12 acceptance: `SessionLost`-for-real (token invalid even after
+    // reattach) still terminates in Failed — recovery must not spin. The
+    // reattach action consumes the SAME per-chunk retry budget as retries,
+    // so the loop is bounded by max_attempts exactly like blips.
+    let dir = tempfile::tempdir().unwrap();
+    let path = make_source(dir.path(), "sessgone.bin", 10 * MIB);
+    let mock = Arc::new(
+        MockAdapter::new(Capability::new(Capability::RESUMABLE)).with_session_lost_forever(),
+    );
+    let mut m = manager_with(Arc::clone(&mock));
+    m.set_policy(ium_core::retry::RetryPolicy {
+        max_attempts: 2,
+        backoff_base_ms: 1,
+        backoff_cap_ms: 2,
+        respect_retry_after: true,
+    });
+
+    let rec = m.create_job(&spec_for(&path, 10 * MIB), 1).unwrap();
+    let out = m.run_job(&rec.id).await.unwrap();
+    assert_eq!(
+        out.state,
+        JobState::Failed,
+        "recovery exhausted into Failed"
+    );
+
+    // Bounded: max_attempts reattach cycles for the chunk, then Fail.
+    let snap = m.snapshot(&rec.id).unwrap();
+    let reattaches = snap
+        .events
+        .iter()
+        .filter(|(_, k, _)| k == "reattach")
+        .count();
+    assert_eq!(
+        reattaches, 2,
+        "reattach cycles are counted against the budget, not free"
+    );
+    let log = mock.log.lock().unwrap().clone();
+    assert_eq!(log.len(), 3, "attempt 1 + 2 reattach cycles = 3 calls");
+    assert!(log.iter().all(|l| l.bytes_moved == 0));
 }
 
 #[tokio::test]
@@ -544,6 +788,10 @@ async fn pause_between_chunks_returns_paused_then_resume_completes() {
         chunk_delay_ms: 20,
         probe_cap: None,
         log: Mutex::new(Vec::new()),
+        has_session: std::sync::atomic::AtomicBool::new(false),
+        fail_session_at_call: AtomicU32::new(0),
+        fail_session_forever: std::sync::atomic::AtomicBool::new(false),
+        reattach_count: AtomicU32::new(0),
     });
     let m = Arc::new(manager_with(mock));
     let rec = m.create_job(&spec_for(&path, 15 * MIB), 3).unwrap();
@@ -605,9 +853,18 @@ async fn crash_mid_running_recovers_without_reuploading_confirmed_bytes() {
         ))));
         let rec = m.create_job(&spec_for(&path, 10 * MIB), 2).unwrap();
 
-        // simulate: chunk 0 done, supervisor died before chunk 1
+        // simulate: chunk 0 done, supervisor died before chunk 1. The crash
+        // window ALWAYS contains a probe event (run_job journals it before
+        // Running) — the session token is what recovery replays (#12).
         m.journal()
             .set_job_state(&rec.id, JobState::Running)
+            .unwrap();
+        m.journal()
+            .append_event(
+                &rec.id,
+                "probe",
+                &serde_json::json!({ "resumable": true, "session_token": "mock-session" }),
+            )
             .unwrap();
         m.journal()
             .update_chunk(
@@ -658,9 +915,17 @@ async fn stale_lease_from_crashed_driver_is_reclaimed() {
     ))));
     let rec = m.create_job(&spec_for(&path, 5 * MIB), 1).unwrap();
 
-    // simulate the crash window: chunk leased, half confirmed, confirm lost
+    // simulate the crash window: chunk leased, half confirmed, confirm lost.
+    // The journaled probe event is part of that window (see #12).
     m.journal()
         .set_job_state(&rec.id, JobState::Running)
+        .unwrap();
+    m.journal()
+        .append_event(
+            &rec.id,
+            "probe",
+            &serde_json::json!({ "resumable": true, "session_token": "mock-session" }),
+        )
         .unwrap();
     m.journal()
         .update_chunk(&rec.id, 0, ium_core::chunk::ChunkState::Leased, MIB, None)
@@ -684,6 +949,10 @@ async fn double_run_is_rejected_not_raced() {
         chunk_delay_ms: 30, // keep the first driver busy so the second lands mid-run
         probe_cap: None,
         log: Mutex::new(Vec::new()),
+        has_session: std::sync::atomic::AtomicBool::new(false),
+        fail_session_at_call: AtomicU32::new(0),
+        fail_session_forever: std::sync::atomic::AtomicBool::new(false),
+        reattach_count: AtomicU32::new(0),
     });
     let m = Arc::new(manager_with(mock));
 
@@ -872,6 +1141,10 @@ impl TransferAdapter for ScriptedAdapter {
             detail: Some("mock scripted ok".into()),
         })
     }
+    async fn reattach(&self, _endpoint: &str, _token: &str) -> Result<(), AdapterError> {
+        // Test double: no real session map to restore (issue #12).
+        Ok(())
+    }
 }
 
 fn scripted_manager(
@@ -906,6 +1179,10 @@ async fn concurrent_workers_upload_each_chunk_exactly_once() {
         chunk_delay_ms: 15,
         probe_cap: None,
         log: Mutex::new(Vec::new()),
+        has_session: std::sync::atomic::AtomicBool::new(false),
+        fail_session_at_call: AtomicU32::new(0),
+        fail_session_forever: std::sync::atomic::AtomicBool::new(false),
+        reattach_count: AtomicU32::new(0),
     });
     let m = manager_with(Arc::clone(&mock));
     let rec = m.create_job(&spec_for(&path, 20 * MIB), 4).unwrap();

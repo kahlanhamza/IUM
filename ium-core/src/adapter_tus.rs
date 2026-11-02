@@ -293,6 +293,15 @@ impl TransferAdapter for TusAdapter {
         }
     }
 
+    /// Reattach (issue #12): replay the journaled probe event's creation URL
+    /// into the session map. Pure in-memory restore — no network, no new
+    /// POST creation (that would start a second upload resource and orphan
+    /// the first).
+    async fn reattach(&self, endpoint: &str, token: &str) -> Result<(), AdapterError> {
+        self.restore_session(endpoint, token.to_string());
+        Ok(())
+    }
+
     async fn upload_chunk(
         &self,
         spec: &JobSpec,

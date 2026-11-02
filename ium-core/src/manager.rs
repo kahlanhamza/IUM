@@ -728,7 +728,29 @@ impl JobManager {
                                 return Ok(()); // abort/pause woke us early
                             }
                         }
-                        Action::Reauthenticate | Action::Reattach | Action::Fail => {
+                        Action::Reattach => {
+                            // Issue #12: the taxonomy promises session
+                            // recovery. Replay the journaled probe token into
+                            // the adapter (never re-probe — that would
+                            // orphan the live session), count the attempt,
+                            // and continue: the chunk re-leases from its
+                            // confirmed offset. A session that is really
+                            // gone re-errors on the next lease and drains
+                            // this same budget into `Fail`.
+                            self.reattach_from_journal(
+                                job_id,
+                                spec,
+                                adapter.as_ref(),
+                                "mid_transfer",
+                            )
+                            .await?;
+                            shared
+                                .attempts
+                                .lock()
+                                .expect("attempts poisoned")
+                                .insert(lease.idx, attempt);
+                        }
+                        Action::Reauthenticate | Action::Fail => {
                             tracing::warn!(job = job_id, idx = lease.idx, "chunk failed for good");
                             shared.failed.store(true, Ordering::SeqCst);
                             let _ = shared.abort_tx.send(true);
@@ -801,6 +823,12 @@ impl JobManager {
         spec: &JobSpec,
         adapter: &dyn TransferAdapter,
     ) -> Result<JobState> {
+        // Issue #12, hole 2: reconcile the adapter's session state FROM THE
+        // JOURNAL before verifying — a fresh process's adapter map is empty,
+        // and verify must not die one step before Done. No-op without a
+        // journaled probe token (one-shot endpoints, 0-byte S3 sources).
+        self.reattach_from_journal(job_id, spec, adapter, "finishing_entry")
+            .await?;
         let verify = adapter
             .verify(spec)
             .await
@@ -863,6 +891,48 @@ impl JobManager {
             )
             .map_err(EngineError::from)?;
         self.transition(job_id, JobState::Done).await
+    }
+
+    /// Replay the job's LAST journaled `probe` event's `session_token` into
+    /// the adapter (issue #12). The journal is the only session truth
+    /// (ADR-002): mid-transfer recovery and fresh-process Finishing entry
+    /// both reattach from it — never by re-probing, which would orphan the
+    /// live session (an S3 re-probe opens a NEW multipart upload). Returns
+    /// `Ok(false)` when there is nothing to replay (no probe event or no
+    /// token — one-shot endpoints, 0-byte S3 sources).
+    async fn reattach_from_journal(
+        &self,
+        job_id: &str,
+        spec: &JobSpec,
+        adapter: &dyn TransferAdapter,
+        source: &str,
+    ) -> Result<bool> {
+        let token = self
+            .j()
+            .events_for(job_id)
+            .map_err(EngineError::from)?
+            .into_iter()
+            .rev()
+            .find(|(_, kind, _)| kind == "probe")
+            .and_then(|(_, _, payload)| {
+                serde_json::from_str::<serde_json::Value>(&payload)
+                    .ok()?
+                    .get("session_token")?
+                    .as_str()
+                    .map(str::to_string)
+            })
+            .filter(|t| !t.is_empty());
+        let Some(token) = token else {
+            return Ok(false);
+        };
+        adapter
+            .reattach(&spec.endpoint, &token)
+            .await
+            .map_err(|e| EngineError::Adapter(format!("reattach failed: {e}")))?;
+        self.j()
+            .append_event(job_id, "reattach", &serde_json::json!({ "source": source }))
+            .map_err(EngineError::from)?;
+        Ok(true)
     }
 
     fn load_pool(&self, job_id: &str) -> Result<ChunkPool> {

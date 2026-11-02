@@ -1,7 +1,8 @@
-error[E0046]: not all trait items implemented, missing: `verify`
+error[E0046]: not all trait items implemented, missing: `verify`, `reattach`
   --> tests/ui/adapter_without_verify.rs:12:1
    |
 12 | impl TransferAdapter for Sneaky {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `verify` in implementation
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `verify`, `reattach` in implementation
    |
    = help: implement the missing item: `fn verify<'life0: 'async_trait, 'life1: 'async_trait, 'async_trait>(&'life0 self, _: &'life1 JobSpec) -> Pin<Box<(dyn Future<Output = Result<VerifyReport, AdapterError>> + Send + 'async_trait)>> { todo!() }`
+   = help: implement the missing item: `fn reattach<'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'async_trait>(&'life0 self, _: &'life1 str, _: &'life2 str) -> Pin<Box<(dyn Future<Output = Result<(), AdapterError>> + Send + 'async_trait)>> { todo!() }`

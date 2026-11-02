@@ -208,6 +208,14 @@ impl TransferAdapter for HttpOneShotAdapter {
         })
     }
 
+    /// Reattach (issue #12): explicit no-op, honestly. A one-shot endpoint
+    /// has no session to reattach to, and the manager only calls this when
+    /// a journaled probe event carries a `session_token` — which this
+    /// adapter's probe never produces (`session_token: None`).
+    async fn reattach(&self, _endpoint: &str, _token: &str) -> Result<(), AdapterError> {
+        Ok(())
+    }
+
     async fn verify(&self, spec: &JobSpec) -> Result<VerifyReport, AdapterError> {
         let resp = match self.client.head(&spec.endpoint).send().await {
             Ok(r) => r,

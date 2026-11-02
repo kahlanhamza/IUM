@@ -184,6 +184,20 @@ pub trait TransferAdapter: Send + Sync {
     /// `VerifyReport { ok, detail }` after a protocol-appropriate probe;
     /// see `HttpOneShotAdapter` for the reference implementation.
     async fn verify(&self, spec: &JobSpec) -> Result<VerifyReport, AdapterError>;
+
+    /// Reattach to an EXISTING upload session, restoring protocol state from
+    /// `token` — the journaled `probe` event's `session_token` (ADR-002: the
+    /// journal is the only truth). **Required, no default** — the taxonomy
+    /// promises `Action::Reattach` for `SessionLost` (issue #12); a silent
+    /// default would let an adapter promise recovery it never performs (the
+    /// verify-is-required lesson, issue #1).
+    ///
+    /// Must never CREATE a session — re-probing would orphan the live one
+    /// (an S3 re-probe opens a new multipart upload). Adapters whose probes
+    /// never produce a `session_token` (one-shot endpoints) implement this
+    /// as an explicit no-op; the manager only calls it when a journaled
+    /// probe event actually carries a token.
+    async fn reattach(&self, endpoint: &str, token: &str) -> Result<(), AdapterError>;
 }
 
 /// Registry — the plugin point community contributors use to add protocols
@@ -254,6 +268,11 @@ mod tests {
                 ok: true,
                 detail: Some("test double: no real endpoint to verify against".into()),
             })
+        }
+        // Required since issue #12: reattach is not opt-in either. This
+        // one-shot double has no session, so the no-op is the honest body.
+        async fn reattach(&self, _endpoint: &str, _token: &str) -> Result<(), AdapterError> {
+            Ok(())
         }
     }
 

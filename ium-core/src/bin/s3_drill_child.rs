@@ -86,6 +86,9 @@ impl TransferAdapter for MeasuringAdapter {
     async fn verify(&self, spec: &JobSpec) -> Result<VerifyReport, AdapterError> {
         self.inner.verify(spec).await
     }
+    async fn reattach(&self, endpoint: &str, token: &str) -> Result<(), AdapterError> {
+        self.inner.reattach(endpoint, token).await
+    }
 }
 
 fn arg_of(args: &[String], key: &str) -> Option<String> {

@@ -865,6 +865,17 @@ impl TransferAdapter for S3MultipartAdapter {
         })
     }
 
+    /// Reattach (issue #12): replay the journaled probe event's UploadId
+    /// into the session map. Pure in-memory restore — no network, no new
+    /// multipart upload (a re-probe's CreateMultipartUpload would orphan the
+    /// live session). The kill-9 drill (#9) already exercised this path via
+    /// the inherent `restore_session`; the trait method is the same door,
+    /// promised by the taxonomy instead of host-side special-casing.
+    async fn reattach(&self, endpoint: &str, token: &str) -> Result<(), AdapterError> {
+        self.restore_session(endpoint, token.to_string());
+        Ok(())
+    }
+
     async fn verify(&self, spec: &JobSpec) -> Result<VerifyReport, AdapterError> {
         let target = parse_target(&spec.endpoint, &spec.source_path)?;
 
