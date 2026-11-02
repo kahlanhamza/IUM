@@ -107,6 +107,18 @@ Decision: **hand-roll SigV4** in `ium-core/src/sigv4.rs` on `hmac` + `sha2` + `h
 > binaries are rejected: unmaintained supply-chain surface. RustFS rejected for now: alpha,
 > self-declared not production-ready. The **adapter and its tests name no server product**
 > — plain S3 over `IUM_S3_ENDPOINT` — so the #7 acceptance criteria are unaffected.
+>
+> **DECISION (2026-11-02, issue #9): pinned SeaweedFS 4.51.** Garage v2.1.0 publishes
+> Linux-only official binaries (no darwin, no windows) — one server for the 3-OS harness
+> must come from SeaweedFS (`linux_amd64` / `darwin_{amd64,arm64}` / `windows_amd64`,
+> GitHub Releases with md5 sidecars; the harness verifies the digest before use). The
+> decision paid for itself immediately: SeaweedFS escapes ETag quotes in ListParts XML as
+> the NUMERIC character reference `&#34;` where Garage uses the named `&quot;` — the
+> adapter's named-only entity decode left literal `&#34;` in the etag and
+> CompleteMultipartUpload answered `InvalidPart`. Fixed in `xml_text` (single-pass XML
+> entity decode, named + numeric, double-decode-safe) with both servers' captured wire
+> shapes pinned as parse vectors. Harness: `scripts/s3-test.sh` (renamed from the planned
+> `minio-test.sh` — server-agnostic name for a server-agnostic suite).
 
 Original §6 (server name now historical): one pinned binary per runner, launched as a
 process, waited on its health endpoint, env exported. The env-gated pattern below stands

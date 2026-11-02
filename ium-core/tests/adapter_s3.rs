@@ -91,6 +91,65 @@ fn xml_text_decodes_the_five_named_entities() {
     assert_eq!(xml_text("<Other>x</Other>", "Missing"), None);
 }
 
+#[test]
+fn xml_text_decodes_numeric_character_references() {
+    // SeaweedFS 4.51 (issue #9) escapes the ETag quotes as numeric refs —
+    // the named-only decode left literal `&#34;` in the etag and Complete
+    // answered InvalidPart. Decimal and hex forms both decode.
+    assert_eq!(
+        xml_text("<ETag>&#34;abc&#34;</ETag>", "ETag").as_deref(),
+        Some("\"abc\"")
+    );
+    assert_eq!(
+        xml_text("<ETag>&#x22;abc&#X22;</ETag>", "ETag").as_deref(),
+        Some("\"abc\"")
+    );
+    assert_eq!(
+        xml_text("<ETag>a&amp;b</ETag>", "ETag").as_deref(),
+        Some("a&b")
+    );
+}
+
+#[test]
+fn xml_text_decodes_each_reference_exactly_once() {
+    // The double-decode trap: `&amp;#34;` is the LITERAL TEXT `&#34;` in XML —
+    // decoding it again to `"` would be a correctness bug, not leniency.
+    assert_eq!(
+        xml_text("<ETag>&amp;#34;x&amp;#34;</ETag>", "ETag").as_deref(),
+        Some("&#34;x&#34;")
+    );
+    // A bare `&` that starts no valid reference is copied verbatim.
+    assert_eq!(
+        xml_text("<ETag>a&b&#65;c</ETag>", "ETag").as_deref(),
+        Some("a&bAc")
+    );
+    // Malformed numerics stay literal.
+    assert_eq!(
+        xml_text("<ETag>&#; &#zz; &#x;</ETag>", "ETag").as_deref(),
+        Some("&#; &#zz; &#x;")
+    );
+}
+
+/// Real SeaweedFS 4.51 ListParts response (captured live during the issue #9
+/// rehearsal) — the numeric-entity wire shape, pinned as a parse vector.
+#[test]
+fn parse_list_parts_on_captured_seaweedfs_vector() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?><ListPartsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>ium-test</Bucket><IsTruncated>false</IsTruncated><Key>mpu.bin</Key><MaxParts>10000</MaxParts><PartNumberMarker>0</PartNumberMarker><StorageClass>STANDARD</StorageClass><UploadId>4fcac3a0277c0b99d1dad7b457bdc176b777d11d_01a199f969c475dbbcce8a405a611e71</UploadId><Part><ETag>&#34;39a615f574c21f9e3ac7be61fc573bdb&#34;</ETag><LastModified>2026-11-02T01:59:14Z</LastModified><PartNumber>1</PartNumber><Size>5242880</Size></Part></ListPartsResult>"#;
+    let (parts, truncated, marker) = parse_list_parts(xml);
+    assert!(!truncated);
+    assert_eq!(marker, None);
+    assert_eq!(parts.len(), 1);
+    assert_eq!(
+        parts[0],
+        ListedPart {
+            number: 1,
+            size: 5242880,
+            // decoded to the same shape every server's UploadPart header uses
+            etag: "\"39a615f574c21f9e3ac7be61fc573bdb\"".into(),
+        }
+    );
+}
+
 /// Real Garage v2.1.0 ListParts response (captured live during the rehearsal
 /// on this issue) — pinned as the parse vector.
 #[test]

@@ -198,25 +198,72 @@ pub fn parse_part_token(token: &str) -> Option<(u32, &str)> {
     Some((n, etag))
 }
 
-/// First `<tag>…</tag>`'s text with the five named XML entities decoded.
-/// Deliberately not an XML library: three known shapes, lean deps (the
-/// rehearsal showed Garage escapes ETag quotes as `&quot;`).
+/// First `<tag>…</tag>`'s text with XML character references decoded in ONE
+/// left-to-right pass (each reference decoded exactly once, so `&amp;#34;`
+/// yields the literal text `&#34;`, never `"` — no double decode).
+/// Deliberately not an XML library, but BOTH reference shapes real servers
+/// emit are handled: the five named entities (`&quot;` — Garage v2.1.0,
+/// issue #7 rehearsal) and numeric character references (`&#34;`/`&#x22;` —
+/// SeaweedFS 4.51, issue #9: the named-only decode left literal `&#34;` in
+/// the etag and Complete answered `InvalidPart`).
 pub fn xml_text(xml: &str, tag: &str) -> Option<String> {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
     let start = xml.find(&open)? + open.len();
     let end = xml[start..].find(&close)? + start;
-    let mut out = xml[start..end].to_string();
-    for (ent, ch) in [
-        ("&quot;", "\""),
-        ("&apos;", "'"),
-        ("&lt;", "<"),
-        ("&gt;", ">"),
-        ("&amp;", "&"),
-    ] {
-        out = out.replace(ent, ch);
+    Some(decode_entities(&xml[start..end]))
+}
+
+/// One pass over `s`: at every `&`, decode the longest valid reference
+/// (named or numeric) exactly once; anything else is copied verbatim.
+fn decode_entities(s: &str) -> String {
+    const NAMED: [(&str, char); 5] = [
+        ("&quot;", '"'),
+        ("&apos;", '\''),
+        ("&lt;", '<'),
+        ("&gt;", '>'),
+        ("&amp;", '&'),
+    ];
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        if !s[i..].starts_with('&') {
+            let ch = s[i..].chars().next().expect("non-empty remainder");
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        }
+        let rest = &s[i..];
+        if let Some((ent, ch)) = NAMED.iter().find(|(e, _)| rest.starts_with(e)) {
+            out.push(*ch);
+            i += ent.len();
+            continue;
+        }
+        if let Some((ch, consumed)) = decode_numeric_ref(rest) {
+            out.push(ch);
+            i += consumed;
+            continue;
+        }
+        out.push('&');
+        i += 1;
     }
-    Some(out)
+    out
+}
+
+/// `&#DDDD;` (decimal) or `&#xHHHH;` (hex) → `(char, bytes consumed)`.
+fn decode_numeric_ref(s: &str) -> Option<(char, usize)> {
+    let rest = s.strip_prefix("&#")?;
+    let (body, prefix_len, radix) = match rest.strip_prefix(['x', 'X']) {
+        Some(r) => (r, 3, 16),
+        None => (rest, 2, 10),
+    };
+    let end = body.find(';')?;
+    let digits = &body[..end];
+    if digits.is_empty() || digits.len() > 8 {
+        return None;
+    }
+    let code = u32::from_str_radix(digits, radix).ok()?;
+    char::from_u32(code).map(|c| (c, prefix_len + end + 1))
 }
 
 /// XML-escape text for the Complete body (etags contain `"`).

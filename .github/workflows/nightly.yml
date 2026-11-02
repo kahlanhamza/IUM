@@ -52,3 +52,19 @@ jobs:
         with:
           name: ium-core-coverage
           path: coverage/
+
+  # The kill-9 drill (issue #9, roadmap M3 DoD): a >100 MiB multipart upload
+  # in a real child process, SIGKILL mid-body, then a fresh process recovers
+  # from the SQLite WAL journal, reattaches via the journaled UploadId and
+  # finishes with ZERO re-upload of completed parts (wire-byte counter
+  # evidence) and an honest Done — declared only after the ADR-010 verify
+  # gate. Runs on Linux in nightly; the regular S3 suite proves the same
+  # harness on all 3 OS in ci.yml.
+  s3_drill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: >100 MiB upload + SIGKILL mid-body + zero-re-upload resume
+        run: bash scripts/s3-test.sh --with-drill

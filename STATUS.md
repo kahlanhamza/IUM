@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-02** · Phase: **M3 — Real transports** (M1+M2 complete)
+> Last updated: **2026-11-02** · Phase: **M3 — Real transports** (M1+M2 complete; S3 tranche complete)
 
 ---
 
@@ -14,8 +14,9 @@
 cd /home/z/my-project
 git pull                      # remote: github.com/kahlanhamza/IUM (private)
 . scripts/rust-env.sh         # persistent toolchain in .toolchain/ (gitignored)
-cargo test -p ium-core        # expect: 93 passed (50 unit + 20 adapter_s3 + 5 loopback HTTP + 17 integration + 1 compile-fail contract)
+cargo test -p ium-core        # expect: 104 passed (56 unit + 23 adapter_s3 + 5 loopback HTTP + 18 integration + 1 kill-9 drill [env-gated] + 1 compile-fail contract)
 bash scripts/gate.sh          # before ANY push: gates on the COMMITTED tree (defect #11 rule)
+bash scripts/s3-test.sh       # live S3 suite vs pinned SeaweedFS 4.51 (downloads ~45 MB per run)
 ```
 
 If `.toolchain/` was wiped: `bash scripts/install-toolchain.sh` (installs rustup minimal profile
@@ -46,23 +47,23 @@ the Tauri/React shell (`ium-app/`) is **frozen** until M2+M3 (ADR-006).
 | 2026-11-02 | **Issue #3 closed**: `MockAdapter` logs at entry (`bytes_moved: 0`), patched at completion — parity with `ScriptedAdapter`; blipped calls now visible (RED: 4 upload calls, log empty). `partial_first_len` first-call detection moved `is_empty()` → `len() == 1` so the entry-log doesn't silently disable the partial-confirm path. Tests-only change, no production code | 60/60 gates green; #3 auto-closed by commit |
 | 2026-11-02 | **Issue #6 closed**: `sigv4` module — pure, offline, zero I/O. Five external vectors pinned AFTER triple-sourcing (official suite via aws-crt-nodejs, AWS S3 developer guide, suite-mirror creq→authz pairs) and reproduced by an independent Python reference first; a remembered kSigning constant failed that check and was discarded. Rule surfaced by vectors: `x-amz-content-sha256` signed only for `service == "s3"`. Clippy rejected the 9-arg sign → `SigningInput` struct, no allow-escapes. Deps: hmac/sha2/hex only, no AWS SDK | 69/69 gates green; #6 auto-closed by commit |
 | 2026-11-02 | **Issue #7 closed**: `adapter_s3` — first real transport. Protocol rehearsed LIVE (independent Python signer) before Rust: MinIO dead (repo archived 2026-04-25, dl.min.io 410) → tests are server-agnostic env-gated; rehearsal ran vs Garage v2.1.0 and captured wire facts (lowercase `etag` header, `&quot;` XML entities, NoSuchUpload-on-ListParts/Complete idempotency) now pinned as tests. Session state: UploadId lives in adapter map, journaled via probe event (ADR-002), `restore_session` = reattach path; map miss → SessionLost → Reattach. Parts atomic: body = [begin,end) full span; verify = ADR-010 finalize-if-needed (reconcile 1..=k contiguous + Σ==source BEFORE Complete — never completes a wrong assembly) → HEAD. Clippy: 9-arg `call` → `S3Request` struct, no allow-escapes. **ADR-010 accepted** | 93/93 gates green, 20/20 LIVE vs real S3 server incl. restart drill (wire counter: only the missing part moved) + verify-refuses-to-lie; #7 auto-closed by commit |
+| 2026-11-02 | **Issue #8 closed**: planner consumes `ProbeReport.max_chunk_bytes` (ADR-011 accepted: adapter declares, planner obeys). RED at `69d2686`: `cap 4 MiB on 10 MiB must raise n to >= 3, got 2`. `ChunkPool::plan_capped` composes the cap as a HARD bound — `n = max(min(n, ⌊total/chunk_min⌋), ⌈total/cap⌉)` — the existing chunk_min clamp can never undo a cap raise; when `cap < chunk_min` the cap wins (a violated limit fails uploads, a violated floor only costs requests). Manager re-plans at the probe boundary through the journal (`replace_chunks` + `replan_cap` event), only while every chunk is Pending/0-confirmed (journal-verified), resumable endpoints only. Not-binding = byte-identical to `plan` | 100/100 gates green (56 unit + 18 integration incl. cap test); #8 auto-closed by commit |
+| 2026-11-02 | **Issue #9 closed**: S3 CI harness on 3 OS + kill-9 drill + >100 MiB nightly e2e. Server re-decided: **SeaweedFS 4.51 pinned** (Garage v2.1.0 ships Linux-only official binaries; one product for linux/darwin/windows from GitHub Releases with md5 sidecars). The pin caught a real bug on day one: SeaweedFS emits NUMERIC character references (`&#34;`) where Garage emits named (`&quot;`) → adapter's named-only decode left literal `&#34;` in etags → `Complete` answered `InvalidPart` (RED: 18/20 live). Fixed: `xml_text` = single-pass XML entity decode (named + numeric dec/hex, double-decode-safe), both servers' captured vectors pinned as tests. Harness `scripts/s3-test.sh`: per-OS pinned download + md5 verify, random free port triple (no stale-server hazards, git-bash-portable), throwaway creds via `s3.json`, bucket via `scripts/s3curl.py` (stdlib SigV4 from #6's independent reference), env-gated suite, abort-leftover-multiparts on exit (trap). Kill-9 drill: `src/bin/s3_drill_child.rs` (upload/resume modes, ticket-gated adapter wedges calls at ENTRY — deterministic mid-body state) + `tests/s3_drill.rs` (parent): 112 MiB → first part confirmed → SIGKILL → fresh process reattaches from journaled probe event → `WIRE == 112 MiB − 28 MiB` (zero re-upload) → honest Done after ADR-010 verify. ci.yml: S3 step on all 3 OS; nightly: `s3_drill` job (Linux) | 104/104 gates; LIVE: 23/23 suite + drill vs SeaweedFS 4.51 (`WIRE 88080384 < 117440512`); #9 auto-closed by commit |
 
 ## 3. In progress
 
-Next: **#9 (S3 CI harness + kill-9 drill + >100 MiB e2e)** — its MinIO premise was
-invalidated during #7 (server archived 2026-04-25); design note must pin the successor
-server (Garage rehearsed live in #7; SeaweedFS the alternative). **#8** (planner consumes
-`max_chunk_bytes`, ADR-011) parallelizable anywhere.
+Next: **TUS 1.0.0 adapter** (next M3 tranche — reuses the ADR-010 finalize pattern,
+the `s3-test.sh` harness shape, and ADR-011's declared-cap contract). M3 remaining
+after S3: nothing else open — #6 #7 #8 #9 all closed.
 
 ## 4. Backlog / next (ordered — milestone [M3: Real transports](https://github.com/kahlanhamza/IUM/milestone/2))
 
 1. ~~#6 — sigv4 signer~~ ✅ (2026-11-02).
 2. ~~#7 — S3 multipart adapter core~~ ✅ (2026-11-02, ADR-010 accepted).
-3. **#9 — S3 CI harness 3-OS + kill-9 drill + >100 MiB nightly e2e** (server choice
-   re-decided in its design note — MinIO archived); **#8** (planner consumes
-   `max_chunk_bytes`, ADR-011) parallelizable anywhere.
-4. TUS 1.0.0 adapter (next M3 tranche after S3 — reuses ADR-010 finalize pattern +
-   CI harness shape).
+3. ~~#8 — planner consumes `max_chunk_bytes`~~ ✅ (2026-11-02, ADR-011 accepted).
+4. ~~#9 — S3 CI harness 3-OS + kill-9 drill + >100 MiB nightly e2e~~ ✅ (2026-11-02,
+   SeaweedFS 4.51 pinned; MinIO premise dead, Garage Linux-only).
+5. TUS 1.0.0 adapter (next M3 tranche — reuses ADR-010 finalize pattern + harness shape).
 
 ## 5. Defect audit trail
 
@@ -97,17 +98,18 @@ proved nothing about the committed tree; `gate.sh` closes that hole by construct
 **Used now:** git; Rust stable 1.99.1 (rustup minimal profile + rustfmt/clippy, persisted in
 `.toolchain/`, activated via `scripts/rust-env.sh`); cargo fmt/clippy/test; **cargo-llvm-cov
 0.9.1 (coverage, nightly job)**; **`scripts/gate.sh` (committed-tree gate: detached-worktree
-fmt+clippy+test, refuses dirty trees)**; GitHub Actions CI (3-OS matrix) + nightly (fuzz +
-coverage, dispatch-verified); GitHub REST API via PAT (issues/milestones/actions —
-`scripts/gh_issues.py`, `scripts/gh_comment.py`, curl); Python 3 for repo scripts; tokio
-dev-dependencies: tempfile, async-trait, serde_json, trybuild. **Local S3 rehearsal harness**
-(#7): Garage v2.1.0 single binary under `.garage-local/` (gitignored, throwaway creds) —
-not a repo dependency; CI server choice is #9's.
+fmt+clippy+test, refuses dirty trees)**; GitHub Actions CI (3-OS matrix + S3 wire suite via
+`scripts/s3-test.sh`) + nightly (fuzz + coverage + kill-9 drill, dispatch-verified); GitHub
+REST API via PAT (issues/milestones/actions — `scripts/gh_issues.py`, `scripts/gh_comment.py`,
+curl); Python 3 for repo scripts; tokio dev-dependencies: tempfile, async-trait, serde_json,
+trybuild. **S3 test harness (#9)**: pinned SeaweedFS 4.51 per-OS (downloaded fresh each run,
+md5-verified, throwaway creds, random ports) + `scripts/s3curl.py` (stdlib SigV4 client:
+bucket create, header debug, abort-multipart cleanup). Local rehearsal binaries under
+`.weed-local/` / `.garage-local/` (gitignored, throwaway) — not repo dependencies.
 
-**Needed later:** a pinned S3-compatible test server for CI (#9 — MinIO archived
-2026-04-25; Garage rehearsed live in #7, SeaweedFS the alternative); a TUS test server
-(M3); Tauri CLI + Node 20 (M4 — frozen). MCP servers are not installable in
-this sandbox; the GitHub REST API covers issue/milestone/label management with the same effect.
+**Needed later:** a TUS test server (M3 — same harness pattern as s3-test.sh); Tauri CLI +
+Node 20 (M4 — frozen). MCP servers are not installable in this sandbox; the GitHub REST API
+covers issue/milestone/label management with the same effect.
 
 ## 7. Architecture (one screen)
 
@@ -161,6 +163,8 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-02 | **M3 spike done**: design note `docs/07` (protocol↔trait mapping, parts-atomic resume + ListParts rebuild, ADR-010 verify-as-commit-gate proposal, hand-rolled SigV4 vs SDK, MinIO single-binary on 3 OS — services containers are Linux-only); milestone M3 + issues #6–#9 filed idempotently (`scripts/file_m3.py`); roadmap M2 marked ✅, M3 amended | roadmap/STATUS aligned; M3 backlog live on GitHub | `afefc93` |
 | 2026-11-02 | Issue #6 via the full loop (design note + vector triple-sourcing → 9×RED on stubs → implement → 69/69); independent Python reference gate before pinning constants | sigv4 module green on official AWS vectors; deps hmac/sha2/hex only | see git log |
 | 2026-11-02 | Issue #7 via the full loop (design note → protocol rehearsal vs Garage → compile-RED → implement → 93/93 + 20/20 LIVE); MinIO-archived finding recorded in docs/07 §6 amendment; ADR-010 accepted; #9 server premise amended | first real transport works live: multipart lifecycle, restart drill (zero re-upload), verify-refuses-to-lie | see git log |
+| 2026-11-02 | Issue #8 via the full loop (design note → RED `got 2` → `plan_capped` + journal re-plan → 100/100); ADR-011 accepted | adapter cap is a hard planner bound; not-binding = byte-identical | `80c22c1` |
+| 2026-11-02 | Issue #9 via the full loop (design note → server re-decision → LIVE RED 18/20 `InvalidPart` → `xml_text` single-pass entity decode → harness + drill + CI/nightly wiring → 104/104 + LIVE 23/23 + drill); SeaweedFS 4.51 pinned (Garage Linux-only); wire shapes of BOTH servers pinned as vectors | 3-OS S3 gate live; kill-9 drill: SIGKILL mid-body → zero re-upload → verify→Done | see git log |
 
 ## 10. Security
 

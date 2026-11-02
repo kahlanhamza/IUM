@@ -38,6 +38,13 @@ jobs:
         run: cargo clippy -p ium-core --all-targets -- -D warnings
       - name: Tests
         run: cargo test -p ium-core
+      # Issue #9: the S3 wire suite needs a live S3-compatible server on
+      # every OS we ship on. `services:` containers are Linux-only (docs/07
+      # §6), so the harness downloads the pinned SeaweedFS single binary per
+      # runner OS instead — same gate, all three OSes.
+      - name: S3 wire tests (SeaweedFS 4.51)
+        shell: bash
+        run: bash scripts/s3-test.sh
 
   # The desktop shell is deliberately NOT compiled in CI yet: the engine is
   # the product; the shell gets its own matrix when we return to it.
