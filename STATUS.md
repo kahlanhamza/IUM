@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-02** · Phase: **M3 — Real transports** (M1+M2 complete; S3 tranche complete)
+> Last updated: **2026-11-02** · Phase: **M3 — Real transports complete** (M1+M2+M3 done)
 
 ---
 
@@ -14,9 +14,10 @@
 cd /home/z/my-project
 git pull                      # remote: github.com/kahlanhamza/IUM (private)
 . scripts/rust-env.sh         # persistent toolchain in .toolchain/ (gitignored)
-cargo test -p ium-core        # expect: 104 passed (56 unit + 23 adapter_s3 + 5 loopback HTTP + 18 integration + 1 kill-9 drill [env-gated] + 1 compile-fail contract)
+cargo test -p ium-core        # expect: 115 passed (56 unit + 23 adapter_s3 + 11 adapter_tus + 5 loopback HTTP + 18 integration + 1 kill-9 drill [env-gated] + 1 compile-fail contract)
 bash scripts/gate.sh          # before ANY push: gates on the COMMITTED tree (defect #11 rule)
 bash scripts/s3-test.sh       # live S3 suite vs pinned SeaweedFS 4.51 (downloads ~45 MB per run)
+bash scripts/tus-test.sh      # live TUS suite vs pinned tusd 2.10.1 (downloads ~27 MB per run)
 ```
 
 If `.toolchain/` was wiped: `bash scripts/install-toolchain.sh` (installs rustup minimal profile
@@ -52,9 +53,10 @@ the Tauri/React shell (`ium-app/`) is **frozen** until M2+M3 (ADR-006).
 
 ## 3. In progress
 
-Next: **TUS 1.0.0 adapter** (next M3 tranche — reuses the ADR-010 finalize pattern,
-the `s3-test.sh` harness shape, and ADR-011's declared-cap contract). M3 remaining
-after S3: nothing else open — #6 #7 #8 #9 all closed.
+Next: **#12 — implement Action::Reattach** (mid-transfer SessionLost recovery +
+Finishing-entry session replay; RED captured on the issue) and **#11 — TUS subprocess
+kill-9 nightly drill**. After those: M4 tranche decision (frozen shell vs more transports).
+M3 is complete: #6 #7 #8 #9 #10 all closed.
 
 ## 4. Backlog / next (ordered — milestone [M3: Real transports](https://github.com/kahlanhamza/IUM/milestone/2))
 
@@ -63,7 +65,10 @@ after S3: nothing else open — #6 #7 #8 #9 all closed.
 3. ~~#8 — planner consumes `max_chunk_bytes`~~ ✅ (2026-11-02, ADR-011 accepted).
 4. ~~#9 — S3 CI harness 3-OS + kill-9 drill + >100 MiB nightly e2e~~ ✅ (2026-11-02,
    SeaweedFS 4.51 pinned; MinIO premise dead, Garage Linux-only).
-5. TUS 1.0.0 adapter (next M3 tranche — reuses ADR-010 finalize pattern + harness shape).
+5. ~~#10 — TUS 1.0.0 adapter~~ ✅ (2026-11-02, tusd v2.10.1 pinned, 3-OS CI).
+6. **#12 — implement Action::Reattach** (mid-transfer + Finishing-entry; RED on the issue);
+   **#11 — TUS subprocess kill-9 nightly drill** (blocked by #10 ✅).
+7. M4 tranche decision (frozen shell per ADR-006 vs more transports).
 
 ## 5. Defect audit trail
 
@@ -125,6 +130,7 @@ ium-core
    ├─ adapter.rs    TransferAdapter trait + registry (+ verify gate types)
    ├─ adapter_http.rs  HttpOneShotAdapter — reqwest+rustls, streams from disk, HEAD verify
    ├─ adapter_s3.rs    S3MultipartAdapter — SigV4 multipart, ADR-010 commit-gate verify, restore_session reattach
+   ├─ adapter_tus.rs   TusAdapter — TUS 1.0.0 PATCH/HEAD, 409-realign drift absorption, read-only verify
    └─ state.rs, ids.rs
 ```
 
@@ -166,6 +172,8 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-02 | Issue #8 via the full loop (design note → RED `got 2` → `plan_capped` + journal re-plan → 100/100); ADR-011 accepted | adapter cap is a hard planner bound; not-binding = byte-identical | `80c22c1` |
 | 2026-11-02 | Issue #9 via the full loop (design note → server re-decision → LIVE RED 18/20 `InvalidPart` → `xml_text` single-pass entity decode → harness + drill + CI/nightly wiring → 104/104 + LIVE 23/23 + drill); SeaweedFS 4.51 pinned (Garage Linux-only); wire shapes of BOTH servers pinned as vectors | 3-OS S3 gate live; kill-9 drill: SIGKILL mid-body → zero re-upload → verify→Done | `3ac5dd8` |
 | 2026-11-02 | Workflow verification pass, two real catches: (1) `name: >100 MiB …` — unquoted `>` is a YAML block-scalar indicator, the push run died at startup with ZERO jobs (run named after the file path); quoted + validated with `yaml.safe_load`. (2) Windows: the 23-test suite passed LIVE but git-bash `kill` returns before weed.exe releases data-file handles → `rm -rf` hit "Device or resource busy" → `set -e` turned green red; trap now polls until the process dies, then best-effort rm | CI 3-OS green @ `9ae4be6` incl. Windows; nightly `s3_drill` dispatch-verified | `c4ada0c`, `9ae4be6` |
+| 2026-11-02 | **Issue #10 closed**: TUS 1.0.0 adapter — byte-level resume. Protocol rehearsed LIVE on tusd v2.10.1 before any Rust (204 + Upload-Offset acks, 409 offset conflict, 404 bogus session, 412 without Tus-Resumable, NO checksum extension offered). `adapter_tus`: probe = POST creation (Location resolved RFC 3986 §5.2, absolute + relative); PATCH `[resume_from, end)` streamed from disk; `bytes_confirmed` = server-acked delta ONLY; **409 realign** absorbs drifted-but-server-acked bytes (HEAD → re-PATCH from server offset → journal converges to server truth; behind-journal = Unresumable, beyond-chunk = Unknown, one attempt only); verify is READ-ONLY HEAD (no commit gate — contrast ADR-010); empty `[(0,0)]` chunk confirms via HEAD. `PatchFailure::Conflict` exposes 409 as data, no string matching. Harness `scripts/tus-test.sh` (pinned tusd, sha256-verified, random port, temp upload dir); ci.yml TUS step on all 3 OS. Two test bugs caught by the server itself (cannot PATCH ahead of server offset; partial-confirm needs real server state) + one telemetry finding pinned: a call containing a failed 409 attempt may buffer ~24 KiB before the rejection — that test asserts the wire floor, the no-failed-attempt drill keeps exact bytes. Loop finding → #12: `Action::Reattach` promised by the taxonomy but fails the job; Finishing-entry verify has an empty session map (pre-existing, S3 included; RED captured on #12) | 115/115 gates; 11/11 LIVE vs tusd incl. 409-realign + byte-level restart drill; #10 auto-closed by commit |
+| 2026-11-02 | Issues #11 + #12 filed from loop findings: #11 = TUS subprocess kill-9 nightly drill (the s3_drill shape; blocked by #10); #12 = implement Action::Reattach (mid-transfer SessionLost recovery + Finishing-entry session replay; scratch-test RED captured: job Failed where taxonomy promises recovery) | findings are issues, not drive-bys | — |
 
 ## 10. Security
 

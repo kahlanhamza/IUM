@@ -27,10 +27,12 @@ Repo, persistent sandbox toolchain (`.toolchain/` + `scripts/rust-env.sh`), push
 - DoD met: gates green on 3 OS; every fix landed with the test that failed first.
 
 ## M3 — Real transports (current — spike done, see docs/07)
-- [ ] S3 multipart adapter, tested against MinIO in CI — one pinned binary per OS runner
-      (services containers are Linux-only; spike doc docs/07 §6) — issues #6–#9
-- [ ] TUS 1.0.0 adapter against a real test server
-- [ ] Resume across process restart for both (kill -9 drill in CI on Linux)
+- [x] S3 multipart adapter, tested against a real server in CI — one pinned binary per OS
+      runner (MinIO premise dead — archived 2026-04-25; SeaweedFS 4.51 pinned in #9;
+      services containers are Linux-only; spike doc docs/07 §6) — issues #6–#9
+- [x] TUS 1.0.0 adapter against a real test server (tusd v2.10.1 pinned, 3-OS) — issue #10
+- [x] Resume across process restart for both (kill -9 drill in CI on Linux for S3 via #9;
+      TUS byte-level restart drill in-suite via #10, subprocess drill tracked as #11)
 - DoD: end-to-end uploads of >100 MiB with forced mid-body kills; zero corruption on resume;
       honest Done only after adapter-verified completion.
 
