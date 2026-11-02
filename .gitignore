@@ -29,3 +29,6 @@ tool-results/
 
 # --- gate.sh shared build cache for committed-tree worktrees ---
 .gate-target/
+
+# --- local S3 test server (Garage rehearsal harness, not part of the repo) ---
+.garage-local/

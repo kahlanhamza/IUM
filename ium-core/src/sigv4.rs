@@ -186,8 +186,9 @@ impl SigV4Signer {
 }
 
 /// Strict RFC3986 encoding: unreserved `A-Za-z0-9-._~` survive; everything
-/// else becomes uppercase `%XX`.
-fn uri_encode(s: &str) -> String {
+/// else becomes uppercase `%XX`. Crate-visible so adapter request URLs and
+/// signatures always agree byte-for-byte on the encoding.
+pub(crate) fn uri_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.as_bytes() {
         match b {

@@ -17,6 +17,7 @@
 
 pub mod adapter;
 pub mod adapter_http;
+pub mod adapter_s3;
 pub mod chunk;
 pub mod eviction;
 pub mod ids;
@@ -28,6 +29,7 @@ pub mod state;
 
 pub use adapter::{AdapterRegistry, Capability, ChunkConfirm, ProbeReport, TransferAdapter};
 pub use adapter_http::HttpOneShotAdapter;
+pub use adapter_s3::{S3MultipartAdapter, S3MultipartConfig};
 pub use chunk::{Chunk, ChunkPool, ChunkState, Lease};
 pub use eviction::{below_floor, median, EvictionPolicy, ThroughputWatch};
 pub use ids::new_id;

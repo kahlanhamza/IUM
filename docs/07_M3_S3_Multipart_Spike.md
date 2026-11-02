@@ -94,7 +94,23 @@ Decision: **hand-roll SigV4** in `ium-core/src/sigv4.rs` on `hmac` + `sha2` + `h
   accepts it).
 * Small XML bodies (`Create`/`Complete`) use the **real** SHA-256 — cheap, stricter.
 
-## 6. MinIO in CI — one binary, all three OSes
+## 6. S3 test server in CI — ~~one binary, all three OSes~~ (amended 2026-11-02)
+
+> **AMENDMENT (2026-11-02, issue #7 rehearsal): MinIO is dead.** While preparing the #7 test
+> environment, `dl.min.io` answered **410 Gone** for every community path. Timeline (verified
+> against public sources the same day): console stripped May 2025 → binaries + Docker images
+> cut Oct 2025 → "maintenance mode" Dec 2025 → "no longer maintained" Feb 2026 → **repo
+> archived Apr 25, 2026**. The §6 premise "MinIO ships a single static binary per OS" no
+> longer holds. Successor candidates for the #9 CI harness: **Garage** (Rust, single static
+> binary, full multipart — the #7 live rehearsal ran against Garage v2.1.0 with zero
+> adapter changes) and **SeaweedFS** (Go, Apache-2.0, `weed server -s3`). Legacy MinIO
+> binaries are rejected: unmaintained supply-chain surface. RustFS rejected for now: alpha,
+> self-declared not production-ready. The **adapter and its tests name no server product**
+> — plain S3 over `IUM_S3_ENDPOINT` — so the #7 acceptance criteria are unaffected.
+
+Original §6 (server name now historical): one pinned binary per runner, launched as a
+process, waited on its health endpoint, env exported. The env-gated pattern below stands
+unchanged — only the binary name/pinning mechanics move to #9's design note:
 
 Roadmap M3 said "services container"; amended here: **`services:` containers are
 Linux-only** on GitHub Actions, which would make the S3 gate Linux-only. MinIO ships

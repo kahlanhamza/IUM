@@ -97,10 +97,11 @@ fn req_err(e: reqwest::Error) -> AdapterError {
 
 /// AsyncRead passthrough that feeds every byte handed to the transport into
 /// the call's [`ProgressReporter`] — the supervisor's eviction window (spec
-/// §4.2) reads this instead of guessing from timeouts.
-struct Counting<R> {
-    inner: R,
-    progress: ProgressReporter,
+/// §4.2) reads this instead of guessing from timeouts. Shared with the S3
+/// adapter (#7), which counts wire bytes the same way.
+pub(crate) struct Counting<R> {
+    pub(crate) inner: R,
+    pub(crate) progress: ProgressReporter,
 }
 
 impl<R: AsyncRead + Unpin> AsyncRead for Counting<R> {
