@@ -27,6 +27,7 @@ pub mod manager;
 pub mod retry;
 pub mod sigv4;
 pub mod state;
+pub mod supervisor;
 
 pub use adapter::{AdapterRegistry, Capability, ChunkConfirm, ProbeReport, TransferAdapter};
 pub use adapter_http::HttpOneShotAdapter;
@@ -38,6 +39,7 @@ pub use ids::new_id;
 pub use journal::{ChunkRow, JobRecord, SessionJournal};
 pub use manager::{JobManager, JobSnapshot};
 pub use state::JobState;
+pub use supervisor::Supervisor;
 
 /// Crate version, surfaced by the desktop shell's status command.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

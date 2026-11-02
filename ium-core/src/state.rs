@@ -15,16 +15,12 @@ pub enum JobState {
     Done,
     Unresumable,
     Failed,
-}
-
-/// Why a job left the happy path (kept in the journal payload).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum FailureKind {
-    Cancelled,
-    ExpiredSession,
-    ProtocolViolation,
-    Unknown,
+    /// User canceled (issue #15): a first-class terminal state — a cancel
+    /// must never be recorded as `Failed` (honest endings rule). Legal from
+    /// Created/Probing/Running/Paused; NOT from Finishing (verify is already
+    /// in flight and completes honestly as Done). Journaled BEFORE the drive
+    /// task is aborted (ADR-002).
+    Canceled,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -42,15 +38,19 @@ impl JobState {
             (self, to),
             (Created, Probing)
                 | (Created, Failed) // rejected before probing (e.g. unknown adapter)
+                | (Created, Canceled) // user cancel before any work (issue #15)
                 | (Probing, Running)
                 | (Probing, Unresumable) // one-shot endpoint + lost session
                 | (Probing, Paused) // user paused during probe
                 | (Probing, Failed)
+                | (Probing, Canceled)
                 | (Running, Paused)
                 | (Running, Finishing)
                 | (Running, Failed)
+                | (Running, Canceled)
                 | (Paused, Running)
                 | (Paused, Failed)
+                | (Paused, Canceled)
                 | (Finishing, Done)
                 | (Finishing, Running) // verify failed → repair loop
                 | (Finishing, Failed)
@@ -65,7 +65,7 @@ impl JobState {
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
-            JobState::Done | JobState::Failed | JobState::Unresumable
+            JobState::Done | JobState::Failed | JobState::Unresumable | JobState::Canceled
         )
     }
 
@@ -79,6 +79,7 @@ impl JobState {
             JobState::Done => "done",
             JobState::Unresumable => "unresumable",
             JobState::Failed => "failed",
+            JobState::Canceled => "canceled",
         }
     }
 }
@@ -123,6 +124,27 @@ mod tests {
     }
 
     #[test]
+    fn cancel_is_reachable_from_every_pre_finish_state_and_terminal() {
+        for from in [
+            JobState::Created,
+            JobState::Probing,
+            JobState::Running,
+            JobState::Paused,
+        ] {
+            let s = from.transition(JobState::Canceled).unwrap();
+            assert_eq!(s, JobState::Canceled);
+            assert!(s.is_terminal());
+            // Terminal: nothing may follow a cancel.
+            assert!(s.transition(JobState::Running).is_err());
+            assert!(s.transition(JobState::Paused).is_err());
+        }
+        // Finishing is past canceling: verify is already in flight and
+        // completes honestly as Done (issue #15 design).
+        assert!(JobState::Finishing.transition(JobState::Canceled).is_err());
+        assert!(JobState::Canceled.transition(JobState::Failed).is_err());
+    }
+
+    #[test]
     fn serde_roundtrip_is_stable_for_journal() {
         for s in [
             JobState::Created,
@@ -133,6 +155,7 @@ mod tests {
             JobState::Done,
             JobState::Unresumable,
             JobState::Failed,
+            JobState::Canceled,
         ] {
             let json = serde_json::to_string(&s).unwrap();
             assert_eq!(serde_json::from_str::<JobState>(&json).unwrap(), s);

@@ -46,7 +46,15 @@ export const api = {
   listJobs: (): Promise<JobRecord[]> => invoke("list_jobs"),
   snapshot: (jobId: string): Promise<JobSnapshot> =>
     invoke("snapshot", { jobId }),
+  /** Spec Sprint-1 item 9 name for the per-chunk inspector drawer (#16). */
+  inspectChunks: (jobId: string): Promise<JobSnapshot> =>
+    invoke("inspect_chunks", { jobId }),
   pauseJob: (jobId: string): Promise<void> => invoke("pause_job", { jobId }),
   resumeSignal: (jobId: string): Promise<void> =>
     invoke("resume_signal", { jobId }),
+  /** Honest cancel: journals `Canceled`, never `Failed` (#15). */
+  cancelJob: (jobId: string): Promise<JobRecord> =>
+    invoke("cancel_job", { jobId }),
+  /** The shell stats, the engine plans — the UI never computes truth. */
+  statFile: (path: string): Promise<number> => invoke("stat_file", { path }),
 };

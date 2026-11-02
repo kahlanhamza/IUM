@@ -60,6 +60,10 @@ pub struct JobManager {
     eviction: EvictionPolicy,
     /// job_id -> pause flag (watch keeps the last value; workers observe it).
     pause_flags: Mutex<HashMap<String, watch::Sender<bool>>>,
+    /// job_id -> cancel flag (issue #15). The flag is a request signal; the
+    /// JOURNAL transition (made by `cancel()` BEFORE the flag flips) is the
+    /// truth the drive loop obeys.
+    cancel_flags: Mutex<HashMap<String, watch::Sender<bool>>>,
     /// job ids with an active driver task — enforces single-driver.
     active: Mutex<HashSet<String>>,
 }
@@ -93,6 +97,9 @@ struct DriveShared {
     /// Set by workers that observed the pause flag; the driver journals Paused.
     paused_seen: Arc<AtomicBool>,
     paused_rx: watch::Receiver<bool>,
+    /// Issue #15: the journal already holds Canceled before this flips; the
+    /// nap and the loop top just obey it promptly.
+    cancel_rx: watch::Receiver<bool>,
 }
 
 impl JobManager {
@@ -103,6 +110,7 @@ impl JobManager {
             policy: RetryPolicy::default(),
             eviction: EvictionPolicy::default(),
             pause_flags: Mutex::new(HashMap::new()),
+            cancel_flags: Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
         })
     }
@@ -114,6 +122,7 @@ impl JobManager {
             policy: RetryPolicy::default(),
             eviction: EvictionPolicy::default(),
             pause_flags: Mutex::new(HashMap::new()),
+            cancel_flags: Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
         })
     }
@@ -236,6 +245,52 @@ impl JobManager {
         Ok(())
     }
 
+    /// User cancel (issue #15): a first-class terminal state, never recorded
+    /// as `Failed`. The journal transition happens FIRST (ADR-002: states
+    /// are journaled before they execute — here "execute" is the flag flip
+    /// and the supervisor's task abort), then the cancel flag wakes every
+    /// worker and drive-round loop point. Legal from Created/Probing/Running/
+    /// Paused; NOT from Finishing (verify is in flight and completes
+    /// honestly) nor any terminal state.
+    pub async fn cancel(&self, job_id: &str) -> Result<JobRecord> {
+        let job = self.require_job(job_id)?;
+        if job.state.is_terminal() {
+            return Err(EngineError::WrongState(
+                job_id.to_string(),
+                job.state.as_str().to_string(),
+                "non-terminal",
+            ));
+        }
+        self.transition(job_id, JobState::Canceled).await?;
+        self.j()
+            .append_event(job_id, "cancel_requested", &serde_json::json!({}))
+            .map_err(EngineError::from)?;
+        self.ensure_cancel_flag(job_id).send_replace(true);
+        self.require_job(job_id)
+    }
+
+    fn ensure_cancel_flag(&self, job_id: &str) -> watch::Sender<bool> {
+        self.cancel_flags
+            .lock()
+            .unwrap()
+            .entry(job_id.to_string())
+            .or_insert_with(|| watch::channel(false).0)
+            .clone()
+    }
+
+    /// `transition` that tolerates the journal having moved to Canceled
+    /// underneath a racing drive loop (cancel between the loop-top check
+    /// and a transition): the Canceled state is the truth, return it.
+    async fn transition_or_canceled(&self, job_id: &str, to: JobState) -> Result<JobState> {
+        match self.transition(job_id, to).await {
+            Ok(s) => Ok(s),
+            Err(EngineError::IllegalTransition(e)) if e.from == JobState::Canceled => {
+                Ok(JobState::Canceled)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     fn ensure_pause_flag(&self, job_id: &str) -> watch::Sender<bool> {
         self.pause_flags
             .lock()
@@ -315,7 +370,10 @@ impl JobManager {
         };
 
         let mut record = self.require_job(job_id)?;
-        if matches!(record.state, JobState::Done | JobState::Unresumable) {
+        if matches!(
+            record.state,
+            JobState::Done | JobState::Unresumable | JobState::Canceled
+        ) {
             return Ok(record);
         }
         if record.state == JobState::Failed {
@@ -380,10 +438,16 @@ impl JobManager {
             if let Some(cap) = probe.max_chunk_bytes.filter(|_| probe.resumable) {
                 self.apply_chunk_cap(job_id, cap)?;
             }
-            record.state = self.transition(job_id, JobState::Running).await?;
+            // Tolerate a cancel that raced the probe: the journal is the
+            // truth, and Canceled → Running is not a legal arrow.
+            record.state = self
+                .transition_or_canceled(job_id, JobState::Running)
+                .await?;
         } else if record.state == JobState::Paused {
             // Resuming a paused job: journal Paused→Running before touching chunks.
-            record.state = self.transition(job_id, JobState::Running).await?;
+            record.state = self
+                .transition_or_canceled(job_id, JobState::Running)
+                .await?;
         }
         // `Running` / `Finishing` on entry = crash recovery: the journal says
         // the job was mid-flight, so continue exactly there.
@@ -469,6 +533,7 @@ impl JobManager {
         adapter: Arc<dyn TransferAdapter>,
     ) -> Result<JobState> {
         let paused_rx = self.ensure_pause_flag(job_id).subscribe();
+        let cancel_rx = self.ensure_cancel_flag(job_id).subscribe();
         let (abort_tx, abort_rx) = watch::channel(false);
         let attempts: Arc<Mutex<HashMap<u32, u32>>> = Arc::new(Mutex::new(HashMap::new()));
         let live_bps: Arc<Mutex<HashMap<u32, f64>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -476,8 +541,13 @@ impl JobManager {
         let paused_seen = Arc::new(AtomicBool::new(false));
 
         loop {
+            // Cancel is checked FIRST: if the journal says Canceled, the
+            // journal is the truth — no new leases, no further transitions.
+            if *cancel_rx.borrow() {
+                return Ok(self.require_job(job_id)?.state);
+            }
             if *paused_rx.borrow() {
-                return self.transition(job_id, JobState::Paused).await;
+                return self.transition_or_canceled(job_id, JobState::Paused).await;
             }
 
             // Fresh pool from the journal. Stale `Leased` rows left by a dead
@@ -543,6 +613,7 @@ impl JobManager {
                 failed: failed.clone(),
                 paused_seen: paused_seen.clone(),
                 paused_rx: paused_rx.clone(),
+                cancel_rx: cancel_rx.clone(),
             };
             let futs: Vec<_> = (0..fleet)
                 .map(|w| {
@@ -573,17 +644,25 @@ impl JobManager {
                 break;
             }
         }
+        // Cancel may have landed while the last round ran: the journal is
+        // the truth — a Canceled job never enters Finishing.
+        let state = self.require_job(job_id)?.state;
+        if state == JobState::Canceled {
+            return Ok(state);
+        }
         self.transition(job_id, JobState::Finishing).await
     }
 
-    /// Sleep that wakes early on abort/pause. Returns `false` when
+    /// Sleep that wakes early on abort/pause/cancel. Returns `false` when
     /// interrupted (the worker must exit without leasing anything).
     async fn nap(shared: &DriveShared, delay: Duration) -> bool {
         let mut abort_rx = shared.abort_rx.clone();
         let mut paused_rx = shared.paused_rx.clone();
+        let mut cancel_rx = shared.cancel_rx.clone();
         tokio::select! {
             _ = tokio::time::sleep(delay) => true,
             _ = abort_rx.changed() => false,
+            _ = cancel_rx.changed() => false,
             _ = paused_rx.changed() => {
                 if *paused_rx.borrow() {
                     shared.paused_seen.store(true, Ordering::SeqCst);

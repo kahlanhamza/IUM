@@ -370,7 +370,16 @@ fn row_to_record(r: &rusqlite::Row<'_>) -> rusqlite::Result<JobRecord> {
         source_size: r.get::<_, i64>(2)? as u64,
         adapter: r.get(3)?,
         endpoint: r.get(4)?,
-        state: parse_state(&r.get::<_, String>(5)?),
+        // Issue #15: an unknown state string is JOURNAL CORRUPTION, never a
+        // silent Created (the old `_ => Created` fallback would have quietly
+        // resurrected a canceled job as fresh — fail loudly instead).
+        state: parse_state(&r.get::<_, String>(5)?).map_err(|bad| {
+            rusqlite::Error::FromSqlConversionFailure(
+                5,
+                rusqlite::types::Type::Text,
+                format!("unknown job state in the journal: {bad}").into(),
+            )
+        })?,
         capability_badge: r.get(6)?,
         created_at: r.get(7)?,
         updated_at: r.get(8)?,
@@ -395,16 +404,18 @@ fn parse_chunk_state(s: &str) -> ChunkState {
     }
 }
 
-fn parse_state(s: &str) -> JobState {
+fn parse_state(s: &str) -> Result<JobState, String> {
     match s {
-        "probing" => JobState::Probing,
-        "running" => JobState::Running,
-        "paused" => JobState::Paused,
-        "finishing" => JobState::Finishing,
-        "done" => JobState::Done,
-        "unresumable" => JobState::Unresumable,
-        "failed" => JobState::Failed,
-        _ => JobState::Created,
+        "created" => Ok(JobState::Created),
+        "probing" => Ok(JobState::Probing),
+        "running" => Ok(JobState::Running),
+        "paused" => Ok(JobState::Paused),
+        "finishing" => Ok(JobState::Finishing),
+        "done" => Ok(JobState::Done),
+        "unresumable" => Ok(JobState::Unresumable),
+        "failed" => Ok(JobState::Failed),
+        "canceled" => Ok(JobState::Canceled),
+        other => Err(other.to_string()),
     }
 }
 
