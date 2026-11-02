@@ -477,7 +477,7 @@ impl JobManager {
             record.state = self.drive_running(job_id, &spec, adapter.clone()).await?;
         }
         if record.state == JobState::Finishing {
-            record.state = self.finish(job_id, &spec, adapter.as_ref()).await?;
+            record.state = self.finish(job_id, &spec, &adapter).await?;
         }
         self.require_job(job_id)
     }
@@ -955,24 +955,46 @@ impl JobManager {
     }
 
     /// Verify-before-declare gate (pattern #10).
+    ///
+    /// Issue #24: when verify REFUSES on a resumable job (the server's part
+    /// list cannot assemble — e.g. SeaweedFS keeps a duplicate entry for a
+    /// completed-but-unacknowledged PUT that the resume re-sent), the gate
+    /// makes ONE counted, journaled repair: re-probe (fresh multipart
+    /// session, journaled per ADR-002), reset every chunk to Pending over
+    /// the SAME spans, re-drive, re-verify. Verify-before-declare is not
+    /// weakened — the Complete only ever fires after a CLEAN reconcile on
+    /// the fresh session. One attempt: the `verify_repair` marker makes a
+    /// second refusal terminal (Failed, honest).
     async fn finish(
         &self,
         job_id: &str,
         spec: &JobSpec,
-        adapter: &dyn TransferAdapter,
+        adapter: &Arc<dyn TransferAdapter>,
     ) -> Result<JobState> {
-        // Issue #12, hole 2: reconcile the adapter's session state FROM THE
-        // JOURNAL before verifying — a fresh process's adapter map is empty,
-        // and verify must not die one step before Done. No-op without a
-        // journaled probe token (one-shot endpoints, 0-byte S3 sources).
-        self.reattach_from_journal(job_id, spec, adapter, "finishing_entry")
-            .await?;
-        let verify = adapter
-            .verify(spec)
-            .await
-            .map_err(|e| EngineError::Adapter(e.to_string()))?;
-
-        if !verify.ok {
+        // The repair marker: ONE `verify_repair` event per job, ever. Read
+        // up front so a journal that already carries one (a previous drive's
+        // repair) cannot repair again.
+        let mut repair_used = self
+            .j()
+            .events_for(job_id)
+            .map_err(EngineError::from)?
+            .iter()
+            .any(|(_, k, _)| k == "verify_repair");
+        let ok_detail: Option<String> = loop {
+            // Issue #12, hole 2: reconcile the adapter's session state FROM
+            // THE JOURNAL before verifying — a fresh process's adapter map
+            // is empty, and verify must not die one step before Done.
+            // No-op without a journaled probe token (one-shot endpoints,
+            // 0-byte S3 sources).
+            self.reattach_from_journal(job_id, spec, adapter.as_ref(), "finishing_entry")
+                .await?;
+            let verify = adapter
+                .verify(spec)
+                .await
+                .map_err(|e| EngineError::Adapter(e.to_string()))?;
+            if verify.ok {
+                break verify.detail;
+            }
             self.j()
                 .append_event(
                     job_id,
@@ -980,8 +1002,68 @@ impl JobManager {
                     &serde_json::json!({ "detail": verify.detail }),
                 )
                 .map_err(EngineError::from)?;
-            return self.transition(job_id, JobState::Failed).await;
-        }
+            let record = self.require_job(job_id)?;
+            if repair_used || record.capability_badge != "resumable" {
+                return self.transition(job_id, JobState::Failed).await;
+            }
+            // -- the one repair -------------------------------------------------
+            repair_used = true;
+            self.j()
+                .append_event(
+                    job_id,
+                    "verify_repair",
+                    &serde_json::json!({ "detail": verify.detail }),
+                )
+                .map_err(EngineError::from)?;
+            // Fresh multipart session: a NEW CreateMultipartUpload, journaled
+            // as the newest probe event (session truth, ADR-002; the #13
+            // clamp re-derivation reads the LAST probe and stays correct).
+            let probe = adapter
+                .probe(spec)
+                .await
+                .map_err(|e| EngineError::Adapter(e.to_string()))?;
+            self.j()
+                .append_event(
+                    job_id,
+                    "probe",
+                    &serde_json::json!({
+                        "resumable": probe.resumable,
+                        "session_token": probe.session_token,
+                        "max_parallel": probe.max_parallel,
+                    }),
+                )
+                .map_err(EngineError::from)?;
+            // Reset every chunk to Pending over the SAME spans — journal
+            // truth, nothing invented: the plan is byte-identical, only the
+            // per-chunk progress is zeroed because the fresh session holds
+            // nothing.
+            let rows: Vec<crate::journal::ChunkRow> = self
+                .j()
+                .load_chunks(job_id)
+                .map_err(EngineError::from)?
+                .iter()
+                .map(|c| crate::journal::ChunkRow {
+                    idx: c.idx,
+                    begin: c.begin,
+                    end: c.end,
+                    state: crate::chunk::ChunkState::Pending,
+                    bytes_confirmed: 0,
+                    adapter_token: None,
+                })
+                .collect();
+            self.j()
+                .replace_chunks(job_id, &rows)
+                .map_err(EngineError::from)?;
+            self.transition(job_id, JobState::Running).await?;
+            let driven = self
+                .drive_running(job_id, spec, Arc::clone(adapter))
+                .await?;
+            if driven != JobState::Finishing {
+                // Paused / Canceled / Failed during the repair re-drive: the
+                // journal holds the truth, the state is terminal-or-paused.
+                return Ok(driven);
+            }
+        };
 
         // Persist every uploaded chunk as verified (journal is the truth).
         let pool = self.load_pool(job_id)?;
@@ -1025,7 +1107,7 @@ impl JobManager {
             .append_event(
                 job_id,
                 "verified",
-                &serde_json::json!({ "detail": verify.detail }),
+                &serde_json::json!({ "detail": ok_detail }),
             )
             .map_err(EngineError::from)?;
         self.transition(job_id, JobState::Done).await

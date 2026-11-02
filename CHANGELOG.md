@@ -11,6 +11,18 @@ prose. An entry without verifiable issue numbers does not belong here.
 ## [Unreleased]
 
 ### Fixed
+- #24 — verify-repair in the finish gate: when ADR-010 verify REFUSES a resumed
+  upload because the SERVER's part list cannot assemble (SeaweedFS keeps a
+  duplicate entry for a completed-but-unacknowledged PUT that the resume re-sent),
+  the gate now makes ONE counted, journaled repair — re-probe (fresh multipart
+  session, journaled per ADR-002), reset every chunk to Pending over the SAME
+  spans, re-drive, re-verify — instead of ending an otherwise-perfect upload as
+  Failed. Verify-before-declare is not weakened: Complete fires only after a clean
+  reconcile on the fresh session; a second refusal is terminal (honest Failed);
+  non-resumable badges never repair. The verify refusal detail now carries the
+  server-listed parts (bounded to 32) so refusals carry wire truth. Pinned by
+  `tests/verify_repair.rs` (repair-once → Done, bounded → Failed, clean path
+  byte-identical).
 - #23 — `s3curl.py --abort-multiparts` crashed on `NameError: re` (module never
   imported `re`; the `s3-test.sh` exit trap discarded the crash via `|| true`) —
   multipart exit-hygiene has silently never worked; it now actually runs and the

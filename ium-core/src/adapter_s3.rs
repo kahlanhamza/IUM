@@ -976,10 +976,28 @@ impl TransferAdapter for S3MultipartAdapter {
 
         // -- 2. Reconcile BEFORE completing — never Complete a wrong assembly.
         if let Err(detail) = reconcile_parts(&all_parts, spec.source_size) {
+            // The refusal carries the server's wire truth (bounded): what the
+            // ListParts actually held when the assembly was rejected.
+            let listed: String = if all_parts.len() > 32 {
+                let head: Vec<String> = all_parts
+                    .iter()
+                    .take(32)
+                    .map(|p| format!("(p{} {}B)", p.number, p.size))
+                    .collect();
+                format!("{} …", head.join(" "))
+            } else {
+                all_parts
+                    .iter()
+                    .map(|p| format!("(p{} {}B)", p.number, p.size))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
             return Ok(VerifyReport {
                 ok: false,
                 detail: Some(format!(
-                    "reconcile failed, upload left incomplete: {detail}"
+                    "reconcile failed, upload left incomplete: {detail}; server listed {} part(s): {}",
+                    all_parts.len(),
+                    listed
                 )),
             });
         }
