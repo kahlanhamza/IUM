@@ -14,7 +14,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ium_core::adapter::TransferAdapter;
 use ium_core::{
     HttpOneShotAdapter, JobManager, JobRecord, JobSnapshot, JobSpec, S3MultipartAdapter,
     S3MultipartConfig, Supervisor, TusAdapter,
@@ -166,7 +165,7 @@ pub fn run() {
             let manager = JobManager::open(db_path(app.handle())).map_err(|e| e.to_string())?;
             let mut manager = manager;
             register_adapters(&mut manager);
-            app.manage(Engine(Supervisor::new(Arc::new(manager))));
+            app.manage(Engine(Arc::new(Supervisor::new(Arc::new(manager)))));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
