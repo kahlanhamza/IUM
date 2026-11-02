@@ -81,6 +81,9 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
+      - name: Frontend logic tests (vitest)
+        working-directory: ium-app
+        run: npm test
       - name: Shell lane (clippy, deny warnings)
         run: cargo clippy -p ium-app --all-targets -- -D warnings
       - name: Shell lane (tests)

@@ -43,7 +43,7 @@ cargo test -p ium-core
 # local skip is LOUD here and enforced there, never silent (same honesty
 # contract as the env-gated S3/TUS live suites).
 echo "== gate: ium-app frontend lane =="
-( cd ium-app && npm ci --no-audit --no-fund && npm run build )
+( cd ium-app && npm ci --no-audit --no-fund && npm run build && npm test )
 
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists webkit2gtk-4.1; then
   echo "== gate: ium-app rust lane (native, WebKitGTK present) =="

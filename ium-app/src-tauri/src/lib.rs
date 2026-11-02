@@ -23,6 +23,19 @@ use tauri::{Emitter, Manager, State};
 
 struct Engine(Arc<Supervisor>);
 
+/// Registry names for the create-job form's adapter select (#16): the UI
+/// reflects the engine's registry, it never hard-codes protocol lists.
+#[tauri::command]
+fn list_adapters(engine: State<Engine>) -> Vec<String> {
+    engine
+        .0
+        .manager()
+        .adapter_names()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
 fn db_path(app: &tauri::AppHandle) -> std::path::PathBuf {
     let dir = app
         .path()
@@ -158,6 +171,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             engine_status,
+            list_adapters,
             create_job,
             list_jobs,
             snapshot,
@@ -167,6 +181,7 @@ pub fn run() {
             cancel_job,
             stat_file,
         ])
+        .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())
         .expect("error while running IUM");
 }

@@ -41,6 +41,8 @@ export interface JobSnapshot {
 
 export const api = {
   engineStatus: (): Promise<string> => invoke("engine_status"),
+  /** Registry names for the adapter select — the UI reflects the engine. */
+  listAdapters: (): Promise<string[]> => invoke("list_adapters"),
   createJob: (spec: JobSpec, maxConns: number): Promise<JobRecord> =>
     invoke("create_job", { spec, maxConns }),
   listJobs: (): Promise<JobRecord[]> => invoke("list_jobs"),
