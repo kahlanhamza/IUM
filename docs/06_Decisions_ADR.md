@@ -46,3 +46,16 @@ STATUS.md updated and pushed. A task that is not pushed does not exist.
 Vendor behavior is studied by observing printable strings and public documentation only
 (`scripts/elf_strings_scan.py`, `scripts/idm_pe_scan.py`, `scripts/magic_carver.py`; evidence in
 `rea-lab/out/`). No disassembly, no decompilation, no vendor code or assets in the repo.
+
+## ADR-010 — For S3, verify() is the commit gate: finalize-if-needed + verify 📝 proposed (M3 spike, docs/07 §4)
+An uncompleted multipart upload has no object to verify, so the S3 adapter's `verify()` is
+`ListParts` reconcile → `CompleteMultipartUpload` → `HEAD` (`Content-Length == source_size`).
+Honest framing: verify is not read-only for S3 — `Done` is declared only after the object
+actually exists. Idempotent (`NoSuchUpload` on complete = already completed); orphans handled
+by a MinIO lifecycle rule, not a manager hook (YAGNI until TUS proves the need). Ratified when
+#7 lands with the evidence.
+
+## ADR-011 — Adapter declares, planner obeys 📝 proposed (M3 spike, docs/07 §2)
+`ProbeReport.max_chunk_bytes` must constrain planning (n ≥ ceil(total/max)) — today it is
+discovered but never consumed. The chunk pool stays the single planning authority; adapters
+contribute constraints, never plans. Ratified when #8 lands with the evidence.

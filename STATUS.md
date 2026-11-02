@@ -47,11 +47,21 @@ the Tauri/React shell (`ium-app/`) is **frozen** until M2+M3 (ADR-006).
 
 ## 3. In progress
 
-Nothing — issue #3 closed. **M2 fully done (all 5 issues closed).** Next: M3 spike.
+M3 spike **done**: design note `docs/07_M3_S3_Multipart_Spike.md` + milestone M3
+filed with issues #6–#9 (sigv4 → adapter_s3 → MinIO harness/kill-9 drill; #8 planner
+contract parallel). Spike findings already filed: `max_chunk_bytes` never consumed
+(#8), 0-byte → PutObject path, verify-as-commit-gate (ADR-010 proposal).
 
-## 4. Backlog / next (ordered — milestone [M2: Hardening & Honesty](https://github.com/kahlanhamza/IUM/milestone/1))
+Next: **#6 (sigv4)**.
 
-1. M3 spike: S3 multipart against MinIO in CI (design note + issue breakdown).
+## 4. Backlog / next (ordered — milestone [M3: Real transports](https://github.com/kahlanhamza/IUM/milestone/2))
+
+1. **#6 — sigv4 signer** (pure, offline, official AWS test vectors) → **#7 — S3
+   multipart adapter core** → **#9 — MinIO CI harness 3-OS + kill-9 drill + >100 MiB
+   nightly e2e**; **#8** (planner consumes `max_chunk_bytes`, ADR-011) parallelizable
+   anywhere.
+2. TUS 1.0.0 adapter (next M3 tranche after S3 — reuses ADR-010 finalize pattern +
+   CI harness shape).
 
 ## 5. Defect audit trail
 
@@ -142,7 +152,8 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-02 | Issue #2 via the full loop (design note → RED → fix → GREEN); follow-up #5 filed; toolchain installer now ships rustfmt+clippy (recycle gap) | 56/56 gates green on committed tree; #2 closed | `b29b8e9` + `cae3be5` |
 | 2026-11-02 | Issue #4 via the full loop (design note → mutation-RED → revert → workflow → dispatch-verified) | nightly fuzz 400×2000 + coverage artifact; alarm proven to ring; 56/56 | `ecb3374` |
 | 2026-11-02 | Issue #5 via the full loop (design note → 4×RED → fix → 59/59); old-convention tests updated, not drive-bys | planless-job invariant pinned; honest-badge hole closed | `8b0c5fc` |
-| 2026-11-02 | Issue #3 via the full loop (design note → RED → fix → 60/60); MockAdapter entry-logging parity, `is_empty()` → `len() == 1` subtlety documented on the issue | M2 milestone complete: #1 #2 #3 #4 #5 all closed | see git log |
+| 2026-11-02 | Issue #3 via the full loop (design note → RED → fix → 60/60); MockAdapter entry-logging parity, `is_empty()` → `len() == 1` subtlety documented on the issue | M2 milestone complete: #1 #2 #3 #4 #5 all closed | `d73147c` |
+| 2026-11-02 | **M3 spike done**: design note `docs/07` (protocol↔trait mapping, parts-atomic resume + ListParts rebuild, ADR-010 verify-as-commit-gate proposal, hand-rolled SigV4 vs SDK, MinIO single-binary on 3 OS — services containers are Linux-only); milestone M3 + issues #6–#9 filed idempotently (`scripts/file_m3.py`); roadmap M2 marked ✅, M3 amended | roadmap/STATUS aligned; M3 backlog live on GitHub | see git log |
 
 ## 10. Security
 
