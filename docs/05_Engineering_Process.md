@@ -57,6 +57,12 @@
 - **Journal is truth** (ADR-002): any state a function acts on is read from the journal, not
   from caller arguments.
 - **Honest badges** (ADR-004): nothing reports Done that the adapter did not verify.
+- **Real data only** (owner mandate 2026-11-02): reliability claims are proven on REAL files
+  (a playable video, not zeros — `tests/real_data.rs`, issue #17) and REAL impaired
+  connections (a genuinely throttled socket, not a test clock — issue #18). Synthetic
+  fixtures (zeros, wedges, scripted delays) remain useful for offline determinism, but they
+  are never the evidence that a transfer claim holds; every milestone must include at least
+  one live, real-data proof.
 - **Clean-room** (ADR-009): observation of printable strings only; no disassembly, no
   decompilation, no copying of vendor code or assets.
 - **Postmortem in 3 lines.** Any bug found outside of tests gets 3 lines in the issue: what

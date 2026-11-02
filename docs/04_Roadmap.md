@@ -49,6 +49,13 @@ Repo, persistent sandbox toolchain (`.toolchain/` + `scripts/rust-env.sh`), push
 
 Unlocks only after M2 + M3. pnpm→npm already fixed in `tauri.conf.json`.
 
-## M5 — Public API freeze & docs
-- [ ] `ium-core` public API reviewed and documented (`cargo doc` clean)
-- [ ] Versioning policy (semver), changelog discipline
+## M5 — API freeze, docs & real-data evidence (current — amended 2026-11-02)
+Owner mandate folded in: every claim is tested on REAL data (a real video file; a genuinely
+throttled slow connection) — see docs/05 "Real data only".
+- [ ] #17 — real-data e2e drill: a real H.264/AAC video through HTTP + TUS + S3,
+      byte-verified (sha256 + ffprobe on source AND received), engine-driven
+- [ ] #18 — real slow-connection drill: throttled socket, eviction fires on live wire
+      throughput (spec §4.2 proven on real evidence, not simulated wedges)
+- [ ] #19 — `ium-core` public API reviewed and documented (`missing_docs` enforced,
+      `cargo doc` clean)
+- [ ] #20 — versioning policy (semver), CHANGELOG.md discipline

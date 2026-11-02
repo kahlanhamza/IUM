@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-02** · Phase: **M4 COMPLETE — #13 #14 #15 #16 all closed; M5 (API freeze & docs) next**
+> Last updated: **2026-11-02** · Phase: **M4 COMPLETE; M5 in progress — #17 (real-data drill) closed; #18 #19 #20 open**
 
 ---
 
@@ -14,11 +14,13 @@
 cd /home/z/my-project
 git pull                      # remote: github.com/kahlanhamza/IUM (private)
 . scripts/rust-env.sh         # persistent toolchain in .toolchain/ (gitignored)
-cargo test -p ium-core        # expect: 126 passed (57 unit + 23 adapter_s3 + 12 adapter_tus + 5 loopback HTTP + 22 integration + 4 supervisor + 1 s3 kill-9 drill [env-gated] + 1 tus kill-9 drill [env-gated] + 1 compile-fail contract)
+cargo test -p ium-core        # expect: 129 passed (57 unit + 23 adapter_s3 + 12 adapter_tus + 5 loopback HTTP + 22 integration + 4 supervisor + 3 real-data drill [HTTP live; TUS/S3 env-gated] + 1 s3 kill-9 drill [env-gated] + 1 tus kill-9 drill [env-gated] + 1 compile-fail contract)
 bash scripts/gate.sh          # before ANY push: gates on the COMMITTED tree (defect #11 rule)
 bash scripts/s3-test.sh       # live S3 suite vs pinned SeaweedFS 4.51 (downloads ~45 MB per run)
+                              #   --with-real: also the real-data drill (#17)
 bash scripts/tus-test.sh      # live TUS suite vs pinned tusd 2.10.1 (downloads ~27 MB per run)
                               #   --with-drill: also the kill-9 TUS drill (nightly)
+                              #   --with-real: also the real-data drill (#17)
 ```
 
 If `.toolchain/` was wiped: `bash scripts/install-toolchain.sh` (installs rustup minimal profile
@@ -61,14 +63,11 @@ the Tauri/React shell (`ium-app/`) is **frozen** until M2+M3 (ADR-006).
 
 ## 3. In progress
 
-**M4 — App shell** (tranche decision made by "Go for M4": the frozen shell per ADR-006
-unlocks now that M2+M3 are done; more transports stay future work). Milestone filed on
-GitHub (M4: App shell) with four issues. Known follow-up folded into #13 and CLOSED:
-TUS jobs planned concurrently 409-realign into `Unresumable` on protocol-honest servers —
-fixed by adapter-declared `max_parallel` (ADR-012). Remaining: #14 unfreeze the shell
-(builds on 3 OS, ADR-006 amendment) → #15 runtime wiring (run_job spawn, `job_updated`
-events, honest `Canceled` state) → #16 Sprint-1 UI slice (spec §8: jobs table, progress,
-badges, per-chunk inspector).
+**M5 — API freeze, docs & real-data evidence** (owner mandate 2026-11-02 folded in:
+"always test on real data" — standing rule in docs/05 "Real data only"). Milestone 4
+filed on GitHub with four issues. #17 CLOSED (real H.264/AAC video through HTTP+TUS+S3,
+byte-verified, engine-driven). Remaining: #18 (throttled-socket eviction drill) → #19
+(API freeze: missing_docs + cargo doc clean) → #20 (semver + CHANGELOG discipline).
 
 ## 4. Backlog / next (ordered — milestone [M3: Real transports](https://github.com/kahlanhamza/IUM/milestone/2))
 
@@ -92,8 +91,13 @@ badges, per-chunk inspector).
     parse_state corruption fallback removed).
 12. ~~**#16 — Sprint-1 UI slice: jobs table, live progress, badges, per-chunk inspector**~~ ✅
    (2026-11-02, pure logic.ts + vitest 9/9 + dumb components + dialog plugin).
-13. **M4 milestone complete** — all four issues closed; M5 (public API freeze & docs) is
-   the next tranche per docs/04.
+13. ~~**M4 milestone complete**~~ ✅ (2026-11-02, all four issues closed, CI 7/7 green).
+14. ~~**#17 — real-data e2e drill: a real video through HTTP + TUS + S3**~~ ✅ (2026-11-02,
+   M5; ffmpeg fixture, ffprobe + entropy guards on source AND received, byte-exact on
+   all 3 lanes, `--with-real` harness flag, CI wired).
+15. **#18 — real slow-connection drill: throttled socket, live eviction** (next).
+16. **#19 — API freeze: public surface reviewed, missing_docs enforced, cargo doc clean**.
+17. **#20 — semver versioning policy + CHANGELOG.md discipline**.
 
 ## 5. Defect audit trail
 
@@ -210,6 +214,8 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-02 | Issue #15 via the full loop (compile-fail RED posted → Supervisor + Canceled state + transition_or_canceled → tests earned a REAL catch: `parse_state`'s `_ => Created` silently resurrected unknown-state jobs as fresh — canceled jobs would come back new; now an exhaustive parse failing loudly → shell wiring (Supervisor-backed Engine, cancel_job/inspect_chunks/stat_file, job_updated watcher) → 126/126) | the shell can finally upload, pause, resume, cancel — all journal-truth | `38d7ead` |
 | 2026-11-02 | Issue #16 via the full loop (vitest RED: `./logic` unresolvable → pure logic.ts (badges, engine-mirrored action rules, journal-snapshot math) + dumb components (CreateJobForm via dialog plugin, JobsTable, InspectorDrawer) + list_adapters command → 9/9 vitest + tsc strict + vite build; vitest added to gate + CI) | M4 complete: the app slice renders journal truth with engine-gated actions; UI logic tested locally for real | `b828d9e` |
 | 2026-11-02 | **CI shell-lane catches on `b828d9e`** (all 3 OS, frontend+vitest already green): E0433 tokio missing from ium-app deps (watcher sleeps), E0308 `Engine(Arc<Supervisor>)` wrap, unused import under `-D warnings` — the sandbox structurally cannot compile the Tauri crate, so CI is the lane's compiler, and it did its job; fixed forward in `7291606`, **CI GREEN all 7 jobs** (core + ium-app × 3 OS + fmt). M4 milestone closed (4/4 issues); M5 (API freeze & docs) is next per docs/04 | M4 COMPLETE — engine 126/126, shell compiles natively everywhere, UI logic tested | `7291606` |
+| 2026-11-02 | **M5 filed** (milestone 4, `scripts/file_m5.py`): #17 real-data e2e drill (owner mandate: a REAL video through all three transports), #18 real slow-connection drill (throttled socket, live eviction), #19 API freeze (missing_docs + cargo doc), #20 semver + CHANGELOG. Roadmap M5 amended; docs/05 gains the standing **"Real data only"** rule | M5 backlog live on GitHub; mandate institutionalized | — |
+| 2026-11-02 | **Issue #17 closed** via the full loop (survey RED: every fixture in the repo uploads zeros → design note on the issue → `tests/real_data.rs` → LIVE first-attempt green on all three lanes). Real fixture: ffmpeg `testsrc2`+sine → **H.264/AAC MP4, 23,089,475 bytes**, generated at test time (never committed, ADR-009); reality guards on source AND received (ffprobe h264+aac+duration, >64 distinct bytes/64 KiB window — a zeros file holds 1); fidelity invariant `sha256(received)==sha256(source)` + received copy ffprobe-verified PLAYABLE. All lanes ENGINE-driven (create_job→run_job→journal Done): HTTP loopback recorder, TUS vs pinned tusd 2.10.1 (max_conns=4 requested — #13 clamp held), S3 multipart vs pinned SeaweedFS 4.51 (parts reassembled, signed GET read-back). Harness: `--with-real` flag on both server scripts; ci.yml passes it (runner images ship ffmpeg; loud skip elsewhere). Test count 126→129 | LIVE: all 3 lanes byte-exact, same sha256 `1a51b80b…`; #17 auto-closed by commit | see git log |
 
 ## 10. Security
 

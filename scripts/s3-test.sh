@@ -8,7 +8,7 @@
 # runs the env-gated S3 suite (and, with --with-drill, the kill-9 drill),
 # then aborts leftover multipart uploads and kills the server.
 #
-# Usage: scripts/s3-test.sh [--with-drill]
+# Usage: scripts/s3-test.sh [--with-drill] [--with-real]
 # Requires: bash, curl, tar, md5sum, python3|python, cargo (already set up).
 
 set -euo pipefail
@@ -17,10 +17,19 @@ VERSION="4.51"
 BASE_URL="https://github.com/seaweedfs/seaweedfs/releases/download/${VERSION}"
 BUCKET="ium-test"
 WITH_DRILL=0
-[ "${1:-}" = "--with-drill" ] && WITH_DRILL=1
-
+WITH_REAL=0
 say() { echo "[s3-test] $*"; }
 die() { echo "[s3-test] FAIL: $*" >&2; exit 1; }
+for arg in "$@"; do
+  case "$arg" in
+    --with-drill) WITH_DRILL=1 ;;
+    # --with-real: also run the real-data drill (tests/real_data.rs, issue
+    # #17) — a REAL ffmpeg-generated video through the engine; skipped loud
+    # where ffmpeg is absent.
+    --with-real) WITH_REAL=1 ;;
+    *) die "unknown flag: $arg" ;;
+  esac
+done
 
 PY=python3
 command -v python3 >/dev/null 2>&1 || PY=python
@@ -140,6 +149,11 @@ cargo test -p ium-core --test adapter_s3
 if [ "$WITH_DRILL" = 1 ]; then
   say "running kill-9 drill (s3_drill)"
   cargo test -p ium-core --test s3_drill -- --nocapture
+fi
+
+if [ "$WITH_REAL" = 1 ]; then
+  say "running real-data drill vs SeaweedFS (real_data, issue #17)"
+  cargo test -p ium-core --test real_data -- --nocapture
 fi
 
 say "GREEN: S3 tests passed against SeaweedFS ${VERSION} on ${os}/${arch}"

@@ -8,7 +8,7 @@
 # server and removes the temp dir (TUS has no multipart-orphan equivalent —
 # the upload dir IS the ephemeral state).
 #
-# Usage: scripts/tus-test.sh
+# Usage: scripts/tus-test.sh [--with-drill] [--with-real]
 # Requires: bash, curl, tar/unzip, python3|python, cargo (already set up).
 
 set -euo pipefail
@@ -18,11 +18,20 @@ BASE_URL="https://github.com/tus/tusd/releases/download/v${VERSION}"
 WITH_DIR="${TUS_UPLOAD_DIR:-}"
 # --with-drill: also run the kill-9 TUS drill (tests/tus_drill.rs) after the
 # suite — nightly-only: it uploads ~60 MiB across two real processes.
+# --with-real: also run the real-data drill (tests/real_data.rs, issue #17)
+# — a REAL ffmpeg-generated video through the engine; skipped loud where
+# ffmpeg is absent.
 WITH_DRILL=0
-[ "${1:-}" = "--with-drill" ] && WITH_DRILL=1
-
+WITH_REAL=0
 say() { echo "[tus-test] $*"; }
 die() { echo "[tus-test] FAIL: $*" >&2; exit 1; }
+for arg in "$@"; do
+  case "$arg" in
+    --with-drill) WITH_DRILL=1 ;;
+    --with-real) WITH_REAL=1 ;;
+    *) die "unknown flag: $arg" ;;
+  esac
+done
 
 PY=python3
 command -v python3 >/dev/null 2>&1 || PY=python
@@ -104,6 +113,11 @@ cargo test -p ium-core --test adapter_tus
 if [ "$WITH_DRILL" = 1 ]; then
   say "running kill-9 drill (tus_drill)"
   cargo test -p ium-core --test tus_drill -- --nocapture
+fi
+
+if [ "$WITH_REAL" = 1 ]; then
+  say "running real-data drill vs tusd (real_data, issue #17)"
+  cargo test -p ium-core --test real_data -- --nocapture
 fi
 
 say "GREEN: TUS tests passed against tusd ${VERSION} on ${os}/${arch}"

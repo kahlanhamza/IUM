@@ -44,12 +44,15 @@ jobs:
       # runner OS instead — same gate, all three OSes.
       - name: S3 wire tests (SeaweedFS 4.51)
         shell: bash
-        run: bash scripts/s3-test.sh
+        # --with-real (issue #17): the real-data drill — a REAL ffmpeg-
+        # generated video through the engine (runner images ship ffmpeg;
+        # the drill skips loud where they don't).
+        run: bash scripts/s3-test.sh --with-real
       # Issue #10: same gate shape for TUS 1.0.0 — pinned tusd, one binary
       # per runner OS, env-gated suite.
       - name: TUS wire tests (tusd 2.10.1)
         shell: bash
-        run: bash scripts/tus-test.sh
+        run: bash scripts/tus-test.sh --with-real
 
   # Issue #14 (ADR-006 amendment): the shell compiles under the same gates
   # as the engine — natively on every OS we ship on. The frontend lane
