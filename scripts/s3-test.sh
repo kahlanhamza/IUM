@@ -44,8 +44,19 @@ cleanup() {
   say "aborting leftover multipart uploads on ${BUCKET}"
   "$PY" "$SCRIPT_DIR/s3curl.py" --abort-multiparts \
     "http://127.0.0.1:${S3_PORT}/${BUCKET}" >/dev/null 2>&1 || true
-  [ -n "${WEED_PID:-}" ] && kill "$WEED_PID" >/dev/null 2>&1 || true
-  rm -rf "$WORK"
+  if [ -n "${WEED_PID:-}" ]; then
+    kill "$WEED_PID" >/dev/null 2>&1 || true
+    # Windows/git-bash: weed.exe releases file handles asynchronously — wait
+    # for the process to actually die before rm, then force it.
+    for _ in $(seq 1 20); do
+      kill -0 "$WEED_PID" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -9 "$WEED_PID" >/dev/null 2>&1 || true
+  fi
+  # Best effort: a lingering handle must never turn a green suite red
+  # (runner temp dirs are ephemeral anyway).
+  rm -rf "$WORK" 2>/dev/null || true
 }
 trap cleanup EXIT
 
