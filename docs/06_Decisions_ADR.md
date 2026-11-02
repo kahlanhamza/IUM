@@ -29,9 +29,19 @@ Per-lease sliding-window throughput; a worker below `floor_ratio × median(pool)
 §4.2). Pure decision logic, unit-tested without real clocks. Lone-worker and fully-idle pools
 never evict (no thrash).
 
-## ADR-006 — Engine first, UI frozen ✅ ratified (team directive)
+## ADR-006 — Engine first, UI frozen ✅ ratified (team directive); ✅ AMENDED 2026-11-02 (issue #14)
 `ium-app` (Tauri 2 + React) does not join the workspace and is not compiled in CI until M2+M3.
 Consequence: no demo UI until the engine is trustworthy — deliberate.
+
+**Amendment (M2+M3 complete):** the freeze is lifted. `ium-app/src-tauri` joins the
+workspace and CI gains a 3-OS `ium-app` job (frontend lane `npm ci && npm run build`
+unconditional — tauri's `generate_context!` embeds `dist/`, so the build precedes cargo;
+shell lane `cargo clippy -p ium-app --all-targets -- -D warnings` + `cargo test -p
+ium-app` native on every runner OS). The LOCAL gate runs the frontend lane everywhere
+and the shell lane only where the platform's libraries exist (WebKitGTK on Linux);
+the sandbox has no root to install them, so its skip is LOUD in gate output and the
+CI job owns the lane on every push — the same capability-gated honesty contract as
+the env-gated S3/TUS live suites (skip locally is never silent; CI enforces).
 
 ## ADR-007 — Gates are non-bypassable ✅ ratified (2026-11-02)
 No commit lands without `fmt --check` + `clippy -D warnings` + full test suite green locally.

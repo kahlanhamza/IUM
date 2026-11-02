@@ -36,7 +36,15 @@ Repo, persistent sandbox toolchain (`.toolchain/` + `scripts/rust-env.sh`), push
 - DoD: end-to-end uploads of >100 MiB with forced mid-body kills; zero corruption on resume;
       honest Done only after adapter-verified completion.
 
-## M4 — App shell (Tauri 2 + React) — **FROZEN**
+## M4 — App shell (Tauri 2 + React) — **IN PROGRESS** (unlocked 2026-11-02: M2+M3 done)
+- [x] #13 — adapter-declared `max_parallel` (TUS ⇒ 1 worker) — correctness prerequisite
+      landed before any UI can create a broken TUS job (ADR-012)
+- [x] #14 — unfreeze: `ium-app/src-tauri` joins the workspace; CI 3-OS `ium-app` job
+      (npm lane + shell clippy/tests native per runner); ADR-006 amended; icons committed
+- [ ] #15 — runtime wiring: `run_job` spawn, `job_updated` events, honest `Canceled` state
+- [ ] #16 — Sprint-1 UI slice (spec §8): jobs table, live progress, badges, per-chunk
+      inspector
+
 Unlocks only after M2 + M3. pnpm→npm already fixed in `tauri.conf.json`.
 
 ## M5 — Public API freeze & docs

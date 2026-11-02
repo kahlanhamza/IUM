@@ -29,12 +29,13 @@ fn engine_status() -> String {
 }
 
 #[tauri::command]
-fn create_job(
-    engine: State<Engine>,
-    spec: JobSpec,
-    max_conns: u32,
-) -> Result<JobRecord, String> {
-    engine.0.lock().unwrap().create_job(&spec, max_conns).map_err(engine_error)
+fn create_job(engine: State<Engine>, spec: JobSpec, max_conns: u32) -> Result<JobRecord, String> {
+    engine
+        .0
+        .lock()
+        .unwrap()
+        .create_job(&spec, max_conns)
+        .map_err(engine_error)
 }
 
 #[tauri::command]
@@ -44,17 +45,32 @@ fn list_jobs(engine: State<Engine>) -> Result<Vec<JobRecord>, String> {
 
 #[tauri::command]
 fn snapshot(engine: State<Engine>, job_id: String) -> Result<JobSnapshot, String> {
-    engine.0.lock().unwrap().snapshot(&job_id).map_err(engine_error)
+    engine
+        .0
+        .lock()
+        .unwrap()
+        .snapshot(&job_id)
+        .map_err(engine_error)
 }
 
 #[tauri::command]
 fn pause_job(engine: State<Engine>, job_id: String) -> Result<(), String> {
-    engine.0.lock().unwrap().pause(&job_id).map_err(engine_error)
+    engine
+        .0
+        .lock()
+        .unwrap()
+        .pause(&job_id)
+        .map_err(engine_error)
 }
 
 #[tauri::command]
 fn resume_signal(engine: State<Engine>, job_id: String) -> Result<(), String> {
-    engine.0.lock().unwrap().resume_signal(&job_id).map_err(engine_error)
+    engine
+        .0
+        .lock()
+        .unwrap()
+        .resume_signal(&job_id)
+        .map_err(engine_error)
 }
 
 pub fn run() {

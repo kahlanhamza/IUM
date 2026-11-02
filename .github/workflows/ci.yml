@@ -51,23 +51,37 @@ jobs:
         shell: bash
         run: bash scripts/tus-test.sh
 
-  # The desktop shell is deliberately NOT compiled in CI yet: the engine is
-  # the product; the shell gets its own matrix when we return to it.
-  # Until then, keep its manifests and structure honest.
-  scaffold:
-    runs-on: ubuntu-latest
+  # Issue #14 (ADR-006 amendment): the shell compiles under the same gates
+  # as the engine — natively on every OS we ship on. The frontend lane
+  # (tsc strict + vite) must precede cargo: tauri's generate_context! embeds
+  # the built dist/ assets at compile time.
+  ium-app:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Validate manifests
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux system deps (WebKitGTK)
+        if: runner.os == 'Linux'
         run: |
-          node -e "JSON.parse(require('fs').readFileSync('ium-app/package.json','utf8')); console.log('package.json ok')"
-          node -e "JSON.parse(require('fs').readFileSync('ium-app/src-tauri/tauri.conf.json','utf8')); console.log('tauri.conf.json ok')"
-      - name: Scaffold completeness
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            librsvg2-dev libxdo-dev libssl-dev build-essential
+      - name: Frontend lane (npm ci + tsc strict + vite build)
+        working-directory: ium-app
         run: |
-          test -f ium-app/src/main.tsx
-          test -f ium-app/src/api.ts
-          test -f ium-app/src-tauri/src/lib.rs
-          echo "scaffold complete"
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Shell lane (clippy, deny warnings)
+        run: cargo clippy -p ium-app --all-targets -- -D warnings
+      - name: Shell lane (tests)
+        run: cargo test -p ium-app

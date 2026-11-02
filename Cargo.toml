@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["ium-core"]
-# NOTE: ium-app/src-tauri is intentionally NOT a workspace member yet.
-# It is compiled on desktop machines (needs WebKitGTK / platform SDKs),
-# while ium-core must stay buildable in minimal CI and sandbox environments.
+members = ["ium-core", "ium-app/src-tauri"]
+# ADR-006 amendment (issue #14): the M2+M3 freeze is lifted — the shell
+# compiles under the same gates as the engine. System deps remain the
+# platform's job (WebKitGTK on Linux; none needed on Windows/macOS).
 
 [workspace.package]
 version = "0.1.0"
