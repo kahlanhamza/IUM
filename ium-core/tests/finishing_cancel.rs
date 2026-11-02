@@ -13,8 +13,6 @@
 //! Verify-before-declare is untouched: Done is only ever journaled from a
 //! clean gate.
 
-mod common;
-
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
