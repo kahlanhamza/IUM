@@ -28,8 +28,11 @@ pub enum JobState {
     Failed,
     /// User canceled (issue #15): a first-class terminal state — a cancel
     /// must never be recorded as `Failed` (honest endings rule). Legal from
-    /// Created/Probing/Running/Paused; NOT from Finishing (verify is already
-    /// in flight and completes honestly as Done). Journaled BEFORE the drive
+    /// Created/Probing/Running/Paused AND from Finishing (issue #26: the
+    /// verify gate is real network I/O on a KB/s uplink — seconds during
+    /// which Cancel must not be refused; the gate honors it BEFORE any
+    /// verify/Complete I/O, so a canceled upload never completes the
+    /// object). NOT from any terminal state. Journaled BEFORE the drive
     /// task is aborted (ADR-002).
     Canceled,
 }
@@ -69,6 +72,7 @@ impl JobState {
                 | (Finishing, Done)
                 | (Finishing, Running) // verify failed → repair loop
                 | (Finishing, Failed)
+                | (Finishing, Canceled) // issue #26: cancel honored at the gate entry
         );
         if legal {
             Ok(to)
@@ -143,12 +147,13 @@ mod tests {
     }
 
     #[test]
-    fn cancel_is_reachable_from_every_pre_finish_state_and_terminal() {
+    fn cancel_is_reachable_from_every_pre_terminal_state_and_terminal() {
         for from in [
             JobState::Created,
             JobState::Probing,
             JobState::Running,
             JobState::Paused,
+            JobState::Finishing, // issue #26: the verify gate is cancellable
         ] {
             let s = from.transition(JobState::Canceled).unwrap();
             assert_eq!(s, JobState::Canceled);
@@ -157,9 +162,6 @@ mod tests {
             assert!(s.transition(JobState::Running).is_err());
             assert!(s.transition(JobState::Paused).is_err());
         }
-        // Finishing is past canceling: verify is already in flight and
-        // completes honestly as Done (issue #15 design).
-        assert!(JobState::Finishing.transition(JobState::Canceled).is_err());
         assert!(JobState::Canceled.transition(JobState::Failed).is_err());
     }
 

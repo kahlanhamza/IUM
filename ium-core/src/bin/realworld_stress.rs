@@ -251,14 +251,26 @@ async fn s4cancel(journal: &str, file: &str, endpoint: &str) -> Result<serde_jso
     let rec = m.create_job(&spec, 4).map_err(|e| e.to_string())?;
     let t0 = Instant::now();
     sup.drive(&rec.id);
-    // cancel once ≥1 whole part is confirmed (frontier > 0)
+    // cancel once ≥1 whole part is confirmed. ONE snapshot is the decision
+    // input (state AND frontier from the same journal view): on a fast link
+    // all parallel parts confirm in one step, so the first sight of progress
+    // may already be Finishing — cancellable since issue #26. A job that
+    // went terminal before any cancelable moment is the honest loud outcome.
     let frontier_at_cancel = loop {
-        let f = frontier_of(&m, &rec.id)?;
+        let snap = m.snapshot(&rec.id).map_err(|e| e.to_string())?;
+        let f: u64 = snap.chunks.iter().map(|c| c.bytes_confirmed).sum();
+        if matches!(
+            snap.job.state,
+            JobState::Done | JobState::Failed | JobState::Unresumable
+        ) {
+            return Err(format!(
+                "s4cancel: job reached {:?} before any cancelable moment \
+                        (upload too fast on this link)",
+                snap.job.state
+            ));
+        }
         if f > 0 {
             break f;
-        }
-        if !sup.is_driving(&rec.id) {
-            return Err("s4cancel: job went terminal before any part confirmed".into());
         }
         if t0.elapsed() > Duration::from_secs(120) {
             return Err("s4cancel: timeout waiting for the first confirmation".into());

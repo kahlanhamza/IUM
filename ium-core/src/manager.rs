@@ -286,8 +286,10 @@ impl JobManager {
     /// are journaled before they execute — here "execute" is the flag flip
     /// and the supervisor's task abort), then the cancel flag wakes every
     /// worker and drive-round loop point. Legal from Created/Probing/Running/
-    /// Paused; NOT from Finishing (verify is in flight and completes
-    /// honestly) nor any terminal state.
+    /// Paused and — since issue #26 — from Finishing: the verify gate is real
+    /// network I/O on a KB/s uplink, and the gate honors the cancel at its
+    /// entry (before any verify/Complete I/O), so a canceled upload never
+    /// completes the object. NOT from any terminal state.
     pub async fn cancel(&self, job_id: &str) -> Result<JobRecord> {
         let job = self.require_job(job_id)?;
         if job.state.is_terminal() {
@@ -1036,6 +1038,14 @@ impl JobManager {
             .map_err(EngineError::from)?
             .iter()
             .any(|(_, k, _)| k == "verify_repair");
+        // Issue #26: a cancel that lands around the gate is honored HERE —
+        // before any verify/Complete I/O — so a canceled job never completes
+        // the multipart and the object never exists. cancel() journaled
+        // Canceled journal-first; the gate just stands down. The journal is
+        // the authority (ADR-002), not the flag.
+        if self.require_job(job_id)?.state == JobState::Canceled {
+            return Ok(JobState::Canceled);
+        }
         let ok_detail: Option<String> = loop {
             // Issue #12, hole 2: reconcile the adapter's session state FROM
             // THE JOURNAL before verifying — a fresh process's adapter map
@@ -1166,7 +1176,25 @@ impl JobManager {
                 &serde_json::json!({ "detail": ok_detail }),
             )
             .map_err(EngineError::from)?;
-        self.transition(job_id, JobState::Done).await
+        // Issue #26 razor tolerance: a cancel that raced the verify call
+        // journaled Canceled underneath the gate while the server already
+        // completed the object (verify fired Complete). The engine never
+        // declares a false Done: the journal keeps the user's Canceled and
+        // this event records the server truth.
+        match self.transition(job_id, JobState::Done).await {
+            Ok(s) => Ok(s),
+            Err(EngineError::IllegalTransition(ref e)) if e.from == JobState::Canceled => {
+                self.j()
+                    .append_event(
+                        job_id,
+                        "complete_after_cancel",
+                        &serde_json::json!({ "detail": ok_detail }),
+                    )
+                    .map_err(EngineError::from)?;
+                Ok(JobState::Canceled)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Replay the job's LAST journaled `probe` event's `session_token` into

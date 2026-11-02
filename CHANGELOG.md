@@ -11,6 +11,19 @@ prose. An entry without verifiable issue numbers does not belong here.
 ## [Unreleased]
 
 ### Fixed
+- #26 — Finishing is no longer past canceling. The first free-cloud stress run
+  (GitHub Actions, real 308 MiB film) failed S4-cancel with `Finishing -> Canceled
+  is not a legal transition`: four parallel parts confirm in ONE step on a fast
+  link, so the cancel driver's first sight of progress already coincided with the
+  verify gate — and on a real KB/s uplink that gate is seconds of genuine network
+  I/O (reattach → ListParts reconcile → CompleteMultipartUpload) during which
+  Cancel was refused. Fix: `Finishing → Canceled` is legal; the gate honors a
+  journal-Canceled state at ENTRY, before any verify/Complete I/O, so a canceled
+  upload never completes the object; the razor window (cancel raced the verify
+  call, the server completed anyway) gains explicit tolerance — the journal keeps
+  the user's `Canceled`, a `complete_after_cancel` event records the server truth,
+  and no false Done is ever declared. Verify-before-declare untouched. Pinned by
+  `tests/finishing_cancel.rs` (RED at the pre-fix HEAD with the exact CI error).
 - #22 (harness, first full execution) — the committed drill had never actually run
   end-to-end; its first real run caught three harness defects, engine clean every
   time. (1) `throttle_proxy.py` deadlocked EVERY proxied PUT: it parsed the request
