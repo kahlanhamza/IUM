@@ -109,12 +109,19 @@ fn fresh_manager(journal_dir: &str) -> Result<Arc<JobManager>, String> {
 /// stays HEAD 404.
 struct WedgeAdapter {
     inner: Arc<dyn TransferAdapter>,
-    /// Calls numbered `wedge_after .. wedge_until` await at entry; everything
+    /// Calls numbered `wedge_after .. wedge_until` wedge at entry; everything
     /// else passes. `wedge_until = None` wedges every later call forever
-    /// (s4cancel — never resumes); `Some(fleet)` releases the post-resume
-    /// re-leased calls so a paused job can still finish (s4pause).
+    /// (s4cancel — never resumes).
     wedge_after: u32,
     wedge_until: Option<u32>,
+    /// How long a wedged call holds before proceeding with the real upload.
+    /// `None` = hold forever (s4cancel). A bounded hold gives s4pause a
+    /// deterministic plateau: the frontier sits at 25% for the whole hold,
+    /// the pause poll cannot miss it, and the release creates the lease
+    /// boundary the cooperative Paused needs to journal (cloud RED
+    /// 41575158721: the whole film confirmed between two 25 ms polls —
+    /// twice; even a 2 MiB/s leg throttle left a sub-second window).
+    hold: Option<Duration>,
     calls: AtomicU32,
 }
 
@@ -141,9 +148,18 @@ impl TransferAdapter for WedgeAdapter {
         let n = self.calls.fetch_add(1, Ordering::Relaxed);
         let wedged = n >= self.wedge_after && self.wedge_until.map_or(true, |until| n < until);
         if wedged {
-            // Wedge at ENTRY: droppable forever, zero wire bytes. The drive
-            // loop's select! abandons it the moment cancel_rx fires.
-            return std::future::pending::<Result<ChunkConfirm, AdapterError>>().await;
+            // Wedge at ENTRY: zero wire bytes. The drive loop's select!
+            // abandons the unbounded wedge the moment cancel_rx fires; the
+            // bounded wedge releases itself after `hold` and proceeds — the
+            // cooperative pause needs that lease boundary to journal.
+            match self.hold {
+                None => {
+                    return std::future::pending::<Result<ChunkConfirm, AdapterError>>().await;
+                }
+                Some(hold) => {
+                    let _ = tokio::time::timeout(hold, std::future::pending::<()>()).await;
+                }
+            }
         }
         self.inner.upload_chunk(spec, lease, progress).await
     }
@@ -162,6 +178,7 @@ fn wedge_manager(
     journal_dir: &str,
     wedge_after: u32,
     wedge_until: Option<u32>,
+    hold: Option<Duration>,
 ) -> Result<Arc<JobManager>, String> {
     let db = std::path::Path::new(journal_dir).join("journal.db");
     let journal = SessionJournal::open(&db).map_err(|e| format!("journal open: {e}"))?;
@@ -172,6 +189,7 @@ fn wedge_manager(
         inner: Arc::new(real),
         wedge_after,
         wedge_until,
+        hold,
         calls: AtomicU32::new(0),
     }));
     m.set_eviction_policy(EvictionPolicy::default());
@@ -277,14 +295,14 @@ async fn s3hostile(journal: &str, file: &str, endpoint: &str) -> Result<serde_js
 }
 
 async fn s4pause(journal: &str, file: &str, endpoint: &str) -> Result<serde_json::Value, String> {
-    // Issue #29, second face: this poll raced fast links (cloud run
-    // 41569827742: the whole film completed between two 25 ms polls). The
-    // WEDGE cannot fix it — pause is COOPERATIVE (journaled at the next lease
-    // boundary) and a wedged call never returns, so Paused would never land.
-    // The harness therefore runs this leg through a mild uniform throttle
-    // (2 MiB/s): the 10% pause point then lasts ~4 s — a real mid-flight
-    // pause on a realistic link, no race, no engine change.
-    let m = fresh_manager(journal)?;
+    // Issue #29, second face — TWICE RED on runners (41569827742, then
+    // 41575158721 even through a 2 MiB/s leg throttle): the poll cannot
+    // catch a sub-second confirm window. The BOUNDED wedge is the
+    // deterministic answer: parts 2-4 hold at entry for 10 s — the frontier
+    // sits at 25% (>= the 10% pause point) for TEN seconds, the poll cannot
+    // miss it, and the release creates the lease boundary the cooperative
+    // Paused needs to journal. Zero race, zero engine-policy change.
+    let m = wedge_manager(journal, 1, Some(4), Some(Duration::from_secs(10)))?;
     let sup = Supervisor::new(Arc::clone(&m));
     let spec = spec_for(file, endpoint)?;
     let size = spec.source_size;
@@ -369,7 +387,7 @@ async fn s4cancel(journal: &str, file: &str, endpoint: &str) -> Result<serde_jso
     // runner the whole 30 MB film previously completed between two polls and
     // the scenario never saw a cancelable moment. The journal is provably
     // stable at one confirmed part when the cancel lands.
-    let m = wedge_manager(journal, 1, None)?;
+    let m = wedge_manager(journal, 1, None, None)?;
     let sup = Supervisor::new(Arc::clone(&m));
     let spec = spec_for(file, endpoint)?;
     let rec = m.create_job(&spec, 4).map_err(|e| e.to_string())?;
