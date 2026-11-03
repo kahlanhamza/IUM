@@ -110,3 +110,38 @@ jobs:
         run: cargo clippy -p ium-app --all-targets -- -D warnings
       - name: Shell lane (tests)
         run: cargo test -p ium-app
+
+  # Issue #35: the shell was never DRIVEN — tauri-driver (WebDriver) e2e on
+  # the ubuntu lane against the HTTP loopback recorder: real file in →
+  # create → live progress → pause/resume → Done badge; inspect_chunks
+  # through real IPC; cancel → no server object (HEAD 404). Ubuntu-only by
+  # the issue's scope (no native WebDriver for WKWebView on macOS).
+  app-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System deps (WebKitGTK build libs + driver + xvfb)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            librsvg2-dev libxdo-dev libssl-dev build-essential \
+            webkit2gtk-driver xvfb
+      - name: Frontend (npm ci + tsc strict + vite build)
+        working-directory: ium-app
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Install tauri-driver (locked, cached)
+        run: cargo install tauri-driver --locked
+      - name: Build shell + loopback recorder
+        run: |
+          cargo build -p ium-app --bin ium-app
+          cargo build -p ium-core --bin loopback_recorder
+      - name: Drive the shell once (create/progress/pause/resume/done/inspect/cancel)
+        run: bash scripts/app-e2e.sh --skip-build

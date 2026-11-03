@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["ium-core", "ium-app/src-tauri"]
+members = ["ium-core", "ium-app/src-tauri", "ium-e2e"]
 # ADR-006 amendment (issue #14): the M2+M3 freeze is lifted — the shell
 # compiles under the same gates as the engine. System deps remain the
 # platform's job (WebKitGTK on Linux; none needed on Windows/macOS).

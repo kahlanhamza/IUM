@@ -1,0 +1,17 @@
+[package]
+name = "ium-e2e"
+description = "Real-shell WebDriver e2e for the IUM desktop shell (issue #35)"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["IUM community"]
+
+# Deliberately NOT a dependency of anything else, and dependent on nothing
+# Tauri: this crate must compile in any sandbox (WebKitGTK is not needed to
+# build it — only to RUN the app it drives). The test skips loudly without
+# its env contract, so the offline lane stays green everywhere.
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde_json.workspace = true
+tokio.workspace = true
