@@ -272,3 +272,85 @@ async fn pause_then_resume_through_the_supervisor_re_spawns_to_done() {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
+
+#[test]
+fn drive_is_callable_off_the_runtime_thread() {
+    // The shell's exact situation (issue #39, CI runs #65–#70): tauri runs
+    // SYNC commands on the main thread ("Commands without the async keyword
+    // are executed on the main thread"), and create_job/resume_signal both
+    // call drive() there — on the GTK main thread, where NO tokio runtime
+    // context is entered. A raw tokio::spawn panics in that context; the
+    // unwind crosses the webview IPC FFI boundary, Rust aborts the whole
+    // process, and WebKitWebDriver reports "Session terminated without a
+    // reply" at the first Upload click. Contract: drive() spawns through a
+    // runtime handle the supervisor captured at construction — callable
+    // from ANY thread.
+    let dir = tempfile::tempdir().unwrap();
+    let path = make_source(dir.path(), "offthread.bin", 8 * MIB);
+    let journal = SessionJournal::open_in_memory().unwrap();
+    let mut m = JobManager::with_journal(journal).unwrap();
+    m.register_adapter(Arc::new(WedgeMock::new()));
+    let m = Arc::new(m);
+    let rec = m.create_job(&spec_for(&path, 8 * MIB), 2).unwrap();
+
+    // The runtime lives on this thread's stack, but its CONTEXT is only
+    // entered inside block_on — drive() below is deliberately context-less,
+    // which is the state the GTK main thread is always in.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let sup = rt.block_on(async {
+        // Construction inside the context captures the runtime handle
+        // (the #39 fix); at HEAD this line is context-agnostic and the
+        // panic surfaces at the drive() below instead.
+        Supervisor::new(Arc::clone(&m))
+    });
+    sup.drive(&rec.id);
+
+    // Journal-truth polling — the drive task runs on `rt`'s workers while
+    // this thread just reads the journal, exactly like the shell's watcher.
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let state = m.snapshot(&rec.id).unwrap().job.state;
+        if state == JobState::Done || std::time::Instant::now() > deadline {
+            assert_eq!(state, JobState::Done, "off-thread drive must reach Done");
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn with_handle_constructs_off_runtime_and_drives_off_runtime() {
+    // The shell's construction shape (issue #39): tauri setup runs on the
+    // main thread with NO runtime context, so the supervisor is built via
+    // with_handle(…, async_runtime handle) — construction AND drive both
+    // happen context-less here, mirroring that host exactly.
+    let dir = tempfile::tempdir().unwrap();
+    let path = make_source(dir.path(), "withhandle.bin", 8 * MIB);
+    let journal = SessionJournal::open_in_memory().unwrap();
+    let mut m = JobManager::with_journal(journal).unwrap();
+    m.register_adapter(Arc::new(WedgeMock::new()));
+    let m = Arc::new(m);
+    let rec = m.create_job(&spec_for(&path, 8 * MIB), 2).unwrap();
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    // Construction and drive on the context-less test thread; only the
+    // handle names the runtime the task lands on.
+    let sup = Supervisor::with_handle(Arc::clone(&m), rt.handle().clone());
+    sup.drive(&rec.id);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let state = m.snapshot(&rec.id).unwrap().job.state;
+        if state == JobState::Done || std::time::Instant::now() > deadline {
+            assert_eq!(state, JobState::Done, "with_handle drive must reach Done");
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}

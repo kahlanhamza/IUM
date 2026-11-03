@@ -165,7 +165,20 @@ pub fn run() {
             let manager = JobManager::open(db_path(app.handle())).map_err(|e| e.to_string())?;
             let mut manager = manager;
             register_adapters(&mut manager);
-            app.manage(Engine(Arc::new(Supervisor::new(Arc::new(manager)))));
+            // Issue #39: setup runs on the main thread — the same thread
+            // tauri runs SYNC commands on — and no tokio context is entered
+            // there. The supervisor must spawn drive tasks through an
+            // explicit handle (tauri's async runtime, whose tokio handle we
+            // read from inside a block_on-entered context); a raw
+            // tokio::spawn in create_job/resume_signal panicked here and
+            // aborted the whole shell on the first Upload click
+            // ("Session terminated without a reply", CI #65–#70).
+            let runtime_handle =
+                tauri::async_runtime::block_on(async { tokio::runtime::Handle::current() });
+            app.manage(Engine(Arc::new(Supervisor::with_handle(
+                Arc::new(manager),
+                runtime_handle,
+            ))));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

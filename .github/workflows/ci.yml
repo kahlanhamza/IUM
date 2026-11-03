@@ -7,7 +7,10 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Issue #39 forensics: cancel-in-progress made run #62 red without any
+  # failing test (the macos core job was cancelled mid-build). Red must mean
+  # RED — every pushed run completes; the cost is some queueing, not honesty.
+  cancel-in-progress: false
 
 jobs:
   # Format is platform-independent — one fast job.

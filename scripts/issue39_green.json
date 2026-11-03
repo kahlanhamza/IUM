@@ -1,0 +1,48 @@
+## GREEN evidence (after the fix)
+
+**Test result — `cargo test -p ium-core --test supervisor`:**
+
+```
+running 6 tests
+test cancel_after_done_is_rejected_and_cancel_is_never_a_failure ... ok
+test cancel_mid_running_lands_canceled_in_the_journal_and_survives_reopen ... ok
+test drive_is_callable_off_the_runtime_thread ... ok
+test pause_then_resume_through_the_supervisor_re_spawns_to_done ... ok
+test supervisor_drive_spawns_the_transfer_and_reaches_done ... ok
+test with_handle_constructs_off_runtime_and_drives_off_runtime ... ok
+
+test result: ok. 6 passed; 0 failed
+```
+
+The RED test now passes: a supervisor constructed inside a runtime, driven from a
+thread with **no tokio context** (the GTK main thread's permanent state), drives the
+job to `Done`. The second new test pins the shell's exact shape — `Supervisor::with_handle`
+constructed **and** driven on a context-less thread → `Done`.
+
+**The fix:**
+
+* `ium-core/src/supervisor.rs` — `Supervisor` captures a `tokio::runtime::Handle`
+  at construction (`new()` via `Handle::try_current().ok()`, or explicitly via the
+  new `Supervisor::with_handle(manager, handle)` for context-less hosts); `drive()`
+  spawns through the stored handle, falling back to the ambient context only when
+  nothing is stored, and panics honestly (with the repair in the message) only when
+  a host constructed context-less AND gave no handle — a host bug, not an ambient
+  accident.
+* `ium-app/src-tauri/src/lib.rs` — setup passes tauri's async-runtime tokio handle:
+  `tauri::async_runtime::block_on(async { tokio::runtime::Handle::current() })`
+  (note: `tauri::async_runtime::handle()` returns tauri's own `RuntimeHandle`
+  enum, not the tokio handle — the block_on form reads the real `Handle` with
+  verified-stable APIs).
+
+**Full gates on the same tree:** `cargo fmt --all -- --check` clean;
+`cargo clippy -p ium-core --all-targets -- -D warnings` clean;
+`cargo test -p ium-core` = **87/87 green** (adapter_s3 23, adapter_tus 12,
+adaptive_resplit 1, enospc drills 3, finishing_cancel 1, frozen_link_resplit 1,
+http_one_shot 5, integration 22, lone_worker_eviction 1, real_data 3, s3_drill 1,
+slow_connection 1, soak_bounds 1, supervisor 6, tus_drill 1, verify_is_required 1,
+verify_repair 3).
+
+**Ride-along CI honesty fixes (same commit):** `ci.yml` `cancel-in-progress: false`
+(run #62's macos job was concurrency-cancelled into a red run with no failing test —
+red must mean RED); `scripts/app-e2e.sh` driver-log forensics `tail -200` (the
+25-line tail cut off the actual panic message on run #70 and cost a diagnosis cycle).

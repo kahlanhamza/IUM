@@ -14,10 +14,18 @@
 //!   terminal journal.
 //! * `resume_signal()` re-spawns the drive task — the old one exited when it
 //!   journaled Paused; a flag flip alone would resurrect nothing.
+//! * Drive tasks spawn through a runtime [`Handle`] captured at
+//!   construction (or given explicitly via [`Supervisor::with_handle`]) —
+//!   NEVER through the ambient context. The shell runs `create_job` /
+//!   `resume_signal` as sync tauri commands on the GTK main thread, where
+//!   no tokio context is entered; a raw `tokio::spawn` there panics and,
+//!   unwinding across the webview IPC FFI boundary, aborts the whole
+//!   shell (issue #39, CI #65–#70: "Session terminated without a reply").
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
 use crate::manager::JobManager;
@@ -26,6 +34,10 @@ use crate::{JobRecord, Result};
 struct Inner {
     manager: Arc<JobManager>,
     tasks: Mutex<HashMap<String, JoinHandle<()>>>,
+    /// The runtime drive tasks spawn on: captured from the construction
+    /// context when there is one, given explicitly by hosts that construct
+    /// off-runtime (the tauri shell's setup runs on the main thread).
+    runtime: Option<Handle>,
 }
 
 /// Spawn/pause/resume/cancel over one shared [`JobManager`] — the engine
@@ -37,12 +49,27 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
-    /// Wrap a manager; drive tasks are spawned per job on demand.
+    /// Wrap a manager; drive tasks are spawned per job on demand. Captures
+    /// the current runtime context when one is entered; hosts that construct
+    /// off-runtime (the tauri shell) must use [`Supervisor::with_handle`].
     pub fn new(manager: Arc<JobManager>) -> Self {
+        Self::with_handle_opt(manager, Handle::try_current().ok())
+    }
+
+    /// Wrap a manager, naming the runtime drive tasks spawn on. For hosts
+    /// whose construction thread has no runtime context (tauri setup runs
+    /// on the main thread — issue #39): pass `tauri::async_runtime`'s tokio
+    /// handle and every later `drive()` works from any thread.
+    pub fn with_handle(manager: Arc<JobManager>, runtime: Handle) -> Self {
+        Self::with_handle_opt(manager, Some(runtime))
+    }
+
+    fn with_handle_opt(manager: Arc<JobManager>, runtime: Option<Handle>) -> Self {
         Self {
             inner: Arc::new(Inner {
                 manager,
                 tasks: Mutex::new(HashMap::new()),
+                runtime,
             }),
         }
     }
@@ -66,15 +93,32 @@ impl Supervisor {
     /// Spawn the drive task for `job_id` (idempotent while one is alive).
     /// The task removes itself when `run_job` returns — Done, Failed,
     /// Paused, Canceled or error: the journal holds whatever is true.
+    ///
+    /// Callable from ANY thread: the spawn goes through the runtime handle
+    /// captured at construction (or given to [`Supervisor::with_handle`]),
+    /// falling back to the ambient context only when no handle is stored.
+    /// Panics honestly only when a host constructed context-less, gave no
+    /// handle, and drives from context-less code — a host bug, not an
+    /// ambient accident (issue #39).
     pub fn drive(&self, job_id: &str) {
         let mut tasks = self.inner.tasks.lock().unwrap();
         if tasks.get(job_id).is_some_and(|h| !h.is_finished()) {
             return;
         }
+        let runtime = self
+            .inner
+            .runtime
+            .clone()
+            .or_else(|| Handle::try_current().ok())
+            .expect(
+                "Supervisor::drive called with no runtime: construct with \
+                 Supervisor::with_handle (runtime-less hosts) or call from \
+                 a tokio runtime context",
+            );
         let manager = Arc::clone(&self.inner.manager);
         let inner = Arc::clone(&self.inner);
         let id = job_id.to_string();
-        let handle = tokio::spawn(async move {
+        let handle = runtime.spawn(async move {
             let _ = manager.run_job(&id).await;
             inner.tasks.lock().unwrap().remove(&id);
         });

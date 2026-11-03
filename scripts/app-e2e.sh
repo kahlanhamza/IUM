@@ -103,7 +103,11 @@ RC=$?
 set -e
 
 say "--- recorder A: $(cat "$REC_A" 2>/dev/null || echo 'no record')  B: $(cat "$REC_B" 2>/dev/null || echo 'no record')"
-say "--- driver log tail:"; tail -25 "$WORK/driver.log" || true
+# Forensics (issue #39 lesson): the panic that kills the session lives in
+# driver.log (the app's stderr is piped through WebKitWebDriver →
+# tauri-driver), and `tail -25` cut off the actual panic message — keep a
+# full tail so a red run is self-diagnosing.
+say "--- driver log tail:"; tail -200 "$WORK/driver.log" || true
 if [ $RC -ne 0 ]; then
   die "e2e FAILED (rc=$RC) — workdir $WORK kept for forensics"
 fi
