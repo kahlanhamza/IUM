@@ -59,3 +59,20 @@ throttled slow connection) — see docs/05 "Real data only".
 - [x] #19 — `ium-core` public API reviewed and documented (`missing_docs` enforced,
       `cargo doc` clean)
 - [x] #20 — versioning policy (semver), CHANGELOG.md discipline
+
+## M6 — Production readiness: the probe generation (filed 2026-11-03, milestone 5)
+The engine is feature-complete and reliability-hardened — but on TWO pinned servers, ONE
+impairment axis (bandwidth), minute-scale horizons, and fast CI links. Motivated by the
+boundary register (docs/08 §5): each probe class exercises seams for the FIRST time.
+- [ ] #32 — real-network impairment: packet loss, latency/jitter, mid-body RST
+      (proxy upgrade; eviction/retry seams at risk — lossy-but-alive must not be falsely evicted)
+- [ ] #33 — server diversity: a third S3 implementation (`rclone serve s3`) + a second TUS
+      lane if pinnable; every wire-fact delta pinned or honestly recorded (optional
+      owner-cred lane for real AWS/B2 smoke)
+- [ ] #34 — long horizon & resource honesty: overnight B/s leg, journal growth + RSS
+      bounds, ENOSPC-while-journaling drill (what happens when TRUTH cannot be written)
+- [ ] #35 — the real shell driven end-to-end: tauri-driver e2e on the ubuntu lane
+      (create → progress → pause/resume → Done; cancel → no server object)
+
+DoD: every probe closed with wire evidence; the readiness verdict in STATUS.md upgraded
+per axis; any gap found files its own issue through the register discipline.
