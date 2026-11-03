@@ -53,9 +53,13 @@ use ium_core::{JobManager, JobSpec, JobState, Lease, SessionJournal, TusAdapter}
 ///   resource: no concurrent PATCH, no realign-behind-a-later-chunk chaos.
 /// * WIRE — what the progress telemetry reported on every call that ended
 ///   Ok; failed calls add nothing.
+/// * WASTED (issue #30) — of those bytes, what the engine itself classified
+///   as waste: the rejected 409 attempt's socket flush, persisted nowhere
+///   by the server. The parent asserts `WIRE − WASTED == missing` exactly.
 struct DrillAdapter {
     inner: TusAdapter,
     wire: Arc<AtomicU64>,
+    wasted: Arc<AtomicU64>,
     gate_idx: Option<u32>,
     hold: Option<(u32, u64, Arc<AtomicBool>)>,
     order_after: Option<(u32, Arc<AtomicBool>)>,
@@ -65,6 +69,7 @@ impl DrillAdapter {
     fn upload_mode(
         inner: TusAdapter,
         wire: Arc<AtomicU64>,
+        wasted: Arc<AtomicU64>,
         hold_ms: u64,
     ) -> (Arc<Self>, Arc<AtomicBool>) {
         let acked = Arc::new(AtomicBool::new(false));
@@ -72,6 +77,7 @@ impl DrillAdapter {
             Arc::new(Self {
                 inner,
                 wire,
+                wasted,
                 gate_idx: Some(0),
                 hold: Some((0, hold_ms, Arc::clone(&acked))),
                 order_after: None,
@@ -80,12 +86,17 @@ impl DrillAdapter {
         )
     }
 
-    fn resume_mode(inner: TusAdapter, wire: Arc<AtomicU64>) -> (Arc<Self>, Arc<AtomicBool>) {
+    fn resume_mode(
+        inner: TusAdapter,
+        wire: Arc<AtomicU64>,
+        wasted: Arc<AtomicU64>,
+    ) -> (Arc<Self>, Arc<AtomicBool>) {
         let first_done = Arc::new(AtomicBool::new(false));
         (
             Arc::new(Self {
                 inner,
                 wire,
+                wasted,
                 gate_idx: None,
                 hold: None,
                 order_after: Some((0, Arc::clone(&first_done))),
@@ -150,6 +161,7 @@ impl TransferAdapter for DrillAdapter {
         }
         let confirm = self.inner.upload_chunk(spec, lease, progress).await?;
         self.wire.fetch_add(progress.moved(), Ordering::SeqCst);
+        self.wasted.fetch_add(progress.wasted(), Ordering::SeqCst);
         if let Some((first_idx, first_done)) = &self.order_after {
             if lease.idx == *first_idx {
                 first_done.store(true, Ordering::SeqCst);
@@ -213,7 +225,13 @@ async fn run_upload(journal_path: &str, file: &str, hold_ms: u64) -> Result<(), 
     let journal = SessionJournal::open(journal_path).map_err(|e| e.to_string())?;
     let mut mgr = JobManager::with_journal(journal).map_err(|e| e.to_string())?;
     let wire = Arc::new(AtomicU64::new(0));
-    let (holder, _acked) = DrillAdapter::upload_mode(TusAdapter::new(), Arc::clone(&wire), hold_ms);
+    let wasted = Arc::new(AtomicU64::new(0));
+    let (holder, _acked) = DrillAdapter::upload_mode(
+        TusAdapter::new(),
+        Arc::clone(&wire),
+        Arc::clone(&wasted),
+        hold_ms,
+    );
     mgr.register_adapter(holder);
     let mgr = Arc::new(mgr);
 
@@ -237,6 +255,7 @@ async fn run_resume(journal_path: &str) -> Result<(), String> {
     let journal = SessionJournal::open(journal_path).map_err(|e| e.to_string())?;
     let mut mgr = JobManager::with_journal(journal).map_err(|e| e.to_string())?;
     let wire = Arc::new(AtomicU64::new(0));
+    let wasted = Arc::new(AtomicU64::new(0));
     // FRESH adapter, EMPTY session map. No explicit restore: the map-miss →
     // SessionLost → manager Action::Reattach (#12) → journaled-token replay
     // path IS part of what this drill proves.
@@ -277,7 +296,8 @@ async fn run_resume(journal_path: &str) -> Result<(), String> {
         .ok_or_else(|| "no Upload-Offset header on the server-offset HEAD".to_string())?;
     println!("SERVER_OFFSET {server_offset}");
 
-    let (adapter, _first_done) = DrillAdapter::resume_mode(inner, Arc::clone(&wire));
+    let (adapter, _first_done) =
+        DrillAdapter::resume_mode(inner, Arc::clone(&wire), Arc::clone(&wasted));
     mgr.register_adapter(adapter);
     let mgr = Arc::new(mgr);
     let done = mgr
@@ -285,6 +305,7 @@ async fn run_resume(journal_path: &str) -> Result<(), String> {
         .await
         .map_err(|e| format!("run_job: {e}"))?;
     println!("WIRE {}", wire.load(Ordering::SeqCst));
+    println!("WASTED {}", wasted.load(Ordering::SeqCst));
     println!("DONE {}", done.state.as_str());
     if done.state != JobState::Done {
         return Err(format!(

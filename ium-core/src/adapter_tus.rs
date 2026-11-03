@@ -340,6 +340,9 @@ impl TransferAdapter for TusAdapter {
             });
         }
 
+        // Issue #30 wire honesty: snapshot before the first PATCH so the
+        // rejected attempt's flush can be reclassified exactly.
+        let first_attempt_from = progress.moved();
         let sent = self
             .patch(spec, &location, lease.resume_from, lease.end, progress)
             .await;
@@ -351,6 +354,14 @@ impl TransferAdapter for TusAdapter {
             // drifted bytes were server-acked — counting them in THIS call's
             // confirm is honest and makes the journal converge to the truth.
             Err(PatchFailure::Conflict) => {
+                // The server decided the 409 on the request HEAD and read
+                // none of the body; whatever this attempt flushed into the
+                // socket before the rejection surfaced crossed the wire and
+                // was persisted NOWHERE (server-verified: the offset never
+                // moves on a rejected PATCH). Its size is a scheduling race,
+                // not a protocol constant (issue #30) — so it is MEASURED
+                // waste, and the realign's bytes below stay honest movement.
+                progress.waste(progress.moved() - first_attempt_from);
                 let (_, server_offset) = self.head(&location).await?;
                 if server_offset < lease.resume_from {
                     return Err(AdapterError::Unresumable(format!(

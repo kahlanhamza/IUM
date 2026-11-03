@@ -39,8 +39,66 @@ prose. An entry without verifiable issue numbers does not belong here.
   when a connection dies mid-part; docs say so. Pinned by
   `tests/adaptive_resplit.rs` (RED: the API was inexpressible, E0432/E0599
   at the pre-fix HEAD) + policy unit tests + the floor-regime pool test.
+- #28 — the worse-case ladder, free-cloud-proven, and "the resplit must
+  happen anyway": the owner's uplink is B/s-class, worse than the 32 KiB/s
+  leg, so the bench now climbs 32768 → 2048 → 512 B/s. The throttle proxy
+  gained the UNIFORM whole-uplink model (`--victim-part all`: EVERY
+  UploadPart PUT throttled, no latch/expiry — the median collapses and the
+  resplit fires once, floor-clamped to 5 MiB pieces; the victim mode's
+  latched leg is outvoted by fast peers and cannot resplit — honest
+  expectation stated on the issue). The `realworld_stress` driver gained
+  `s6worse` (timeboxed observation legs: no Done assertion — at 512 B/s a
+  30 MB upload takes ~17 h; the leg cancels at the timebox, exercising
+  cancel under a dying link) and surfaces `chunk_resplit` payloads in
+  `s3hostile` evidence (honestly empty in victim legs). Cloud RED
+  41571828134 produced the deeper rule: on a runner with tiny buffers the
+  adapter's first write never completed, the median was UNMEASURABLE, and
+  nothing fired — so `ResplitPolicy::plan_frozen` now fires past
+  `slow_confirm` with the JOB-level clock (hostile servers reset per-lease
+  clocks with their own 30 s read deadlines) and a floor-only target with
+  hysteresis: adaptation when NOTHING is measurable. Wire-accounting
+  lessons landed in the harness: the proxy relays in ≤1 s granularity
+  (64 KB bursts left ~32 s of upstream silence → SeaweedFS's 30 s volume
+  idle timeout killed every slow PUT), and `s6worse` reports its progress
+  curve to stderr. Proven in the free cloud (canonical run 41578950703 @
+  `1022bb9`): 32768 B/s via the measured path (median 72,090 B/s → 5 MiB
+  floor), 2048 + 512 B/s via the frozen rule (`median_bps: 0.0`).
+- #29 — deterministic mid-flight cancel on fast links. S4cancel raced them:
+  parallel parts confirm in one step, so the cancel driver's first sight of
+  progress already sat at the verify gate, and a post-completion kill hit an
+  already-Done journal. The `--allow-calls 1` wedge shape (one confirmed
+  call, then a bounded hold) makes the kill land deterministically at 25%:
+  S4cancel cancels in 0.079 s with server HEAD 404; the same wedge gave
+  S4pause a BOUNDED 10 s plateau (`pause_latency_s: 10.04`).
 
 ### Fixed
+- #30 — the kill-9 TUS drill's wire ceiling was a calibrated race, now the
+  zero-re-upload invariant is EXACT. Nightly run 41618615182 failed with
+  `resume moved 21168128 for 20971520 missing — beyond the 64 KiB slack`: the
+  rejected 409 PATCH's socket flush (frames hyper pulls before `send()`
+  resolves) is a client↔server scheduling race — 0–48 KiB on a quiet machine,
+  192 KiB on a loaded runner — and the drill had pinned that timing artifact
+  at 64 KiB (the #10 finding's 16–24 KiB, one quiet day). Investigation
+  (A/B worktrees at pre-#27/pre-#28 + the new `scripts/dbg-tus-drill.sh`
+  journal-capturing driver) exonerated the manager completely: the resume
+  event log shows exactly `SessionLost → Reattach → realign confirm`, no
+  resplit/stale/retry involvement, and the flush distributions are identical
+  across the whole regression window. Protocol rehearsal: tusd consumes
+  NOTHING of a rejected body (offset immutable), and `Expect: 100-continue`
+  was REJECTED by rehearsal — reqwest 0.12/hyper 1.12 neither holds the body
+  on conflict (8192 pulled, same as the control) nor survives the happy path
+  (`BodyWriteAborted, NotEof`). Fix: measure the waste instead of bounding it
+  silently — `ProgressReporter::waste()/wasted()` reclassifies the rejected
+  attempt's flush (`moved()` semantics untouched: eviction/resplit keep
+  counting real wire bytes); `TusAdapter::upload_chunk` reclassifies at the
+  Conflict branch before the realign dance; the drill child prints `WASTED`
+  and the parent asserts `WIRE − WASTED == SIZE − SERVER_OFFSET` exactly —
+  every byte the server lacked crossed once, every wasted byte accounted,
+  and a manager that re-sends server-held bytes still fails loudly (re-sent
+  server-held bytes are not waste-reclassifiable). The offline realign test
+  gained the exact `moved() − wasted() == tail` claim (RED: E0599
+  pre-fix). Also adds `scripts/dbg-tus-drill.sh` (hand-driven drill with the
+  journal captured — the instrument that closed this).
 - #26 — Finishing is no longer past canceling. The first free-cloud stress run
   (GitHub Actions, real 308 MiB film) failed S4-cancel with `Finishing -> Canceled
   is not a legal transition`: four parallel parts confirm in ONE step on a fast

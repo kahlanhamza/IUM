@@ -289,15 +289,25 @@ async fn tus_offset_conflict_realigns_from_server_offset() {
         "confirm = final offset - resume_from: 2 MiB absorbed drift + 2 MiB newly sent"
     );
     assert_eq!(c.adapter_token.as_deref(), Some("5242880"));
-    // Telemetry floor, not exactness: the SUCCESSFUL re-PATCH must push the
-    // [server_offset, end) tail (2 MiB). The failed 409 attempt may buffer a
-    // few KiB into the socket before the rejection lands (observed: 24576 B),
-    // so this call's telemetry is tail + ε — the exact-bytes claim belongs to
-    // calls with no failed attempt (see the restart drill).
+    // The SUCCESSFUL re-PATCH must push the [server_offset, end) tail
+    // (2 MiB) — and the failed 409 attempt's socket flush (observed 0–48 KiB,
+    // issue #30) must now be MEASURED waste, not hidden in a floor:
+    // moved − wasted == the tail EXACTLY. Before #30 the waste was
+    // inexpressible (no wasted() on the reporter) and this call could only
+    // assert a floor — the tus_drill nightly raced it at 64 KiB (run
+    // 41618615182: 192 KiB on a loaded runner).
     assert!(
         p.moved() >= 2 * MIB,
         "at least the missing tail crossed the wire, got {}",
         p.moved()
+    );
+    assert_eq!(
+        p.moved() - p.wasted(),
+        2 * MIB,
+        "exactly the re-PATCH tail was server-persisted wire; the rejected \
+         attempt's flush is accounted waste, got moved={} wasted={}",
+        p.moved(),
+        p.wasted()
     );
 
     let v = adapter.verify(&s).await.unwrap();

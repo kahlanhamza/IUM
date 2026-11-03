@@ -16,12 +16,18 @@
 //!   converges to the server offset without re-sending what the server has;
 //! * finish `DONE done` via the read-only HEAD verify.
 //!
-//! Byte-level zero re-upload, the issue's acceptance criterion: the resume
-//! child's wire movement must be exactly `SIZE - SERVER_OFFSET` — every byte
-//! the server lacked crossed once, nothing the server had was re-sent. The
-//! ONE permitted excess is a single rejected 409 attempt's buffered body
-//! chunk (~16-24 KiB, the #10 telemetry finding) that the server never
-//! persists; the drill pins that slack at 64 KiB.
+//! Byte-level zero re-upload, the issue's acceptance criterion (made EXACT
+//! by #30): the resume child's wire movement must cover exactly the bytes
+//! the server lacked. The ONE permitted imperfection — a rejected 409
+//! attempt's buffered body flush (#10 telemetry finding) — is a scheduling
+//! race (0–48 KiB quiet, 192 KiB on a loaded runner; the old calibrated
+//! `WIRE_SLACK = 64 KiB` ceiling raced it in nightly run 41618615182), so it
+//! is now MEASURED, not bounded: the child prints `WASTED <bytes>` (the
+//! engine's own waste accounting for the rejected attempt's flush) and the
+//! parent asserts `WIRE − WASTED == SIZE − SERVER_OFFSET` exactly — every
+//! byte the server lacked crossed once, every wasted byte accounted, and a
+//! manager that re-sends server-held bytes still fails loudly (re-sent
+//! server-held bytes are not waste-reclassifiable).
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
@@ -29,8 +35,6 @@ use std::time::Duration;
 
 const SIZE: u64 = 40 * 1024 * 1024; // 2 chunks × 20 MiB
 const CHUNK: u64 = SIZE / 2;
-/// Slack for ONE rejected attempt's buffered body chunk (#10 finding).
-const WIRE_SLACK: u64 = 64 * 1024;
 
 fn live_endpoint() -> Option<String> {
     match std::env::var("IUM_TUS_ENDPOINT") {
@@ -173,6 +177,12 @@ fn kill9_after_server_ack_before_journal_write_then_realign_resume() {
         .expect("WIRE line")
         .parse()
         .expect("WIRE <u64>");
+    let wasted: u64 = stdout2
+        .lines()
+        .find_map(|l| l.strip_prefix("WASTED "))
+        .expect("WASTED line — the engine's waste accounting (#30)")
+        .parse()
+        .expect("WASTED <u64>");
     assert!(
         stdout2.lines().any(|l| l == "DONE done"),
         "honest Done after the read-only HEAD verify, stdout was:\n{stdout2}"
@@ -185,15 +195,22 @@ fn kill9_after_server_ack_before_journal_write_then_realign_resume() {
          and SERVER_OFFSET >= last journaled CONFIRMED (0) holds a fortiori"
     );
     // Byte-level zero re-upload (stronger than S3's part-level): the resume
-    // process pushed exactly the bytes the server lacked.
+    // process pushed exactly the bytes the server lacked. The rejected 409
+    // attempt's flush is measured waste (#30) — subtracted, not slack-bounded.
     let missing = SIZE - server_offset;
+    assert!(
+        wasted <= wire,
+        "waste ({wasted}) cannot exceed wire movement ({wire})"
+    );
     assert!(
         wire >= missing,
         "resume moved {wire} of {missing} missing bytes — bytes skipped"
     );
-    assert!(
-        wire <= missing + WIRE_SLACK,
-        "resume moved {wire} for {missing} missing bytes — re-upload beyond \
-         the single rejected-attempt slack ({WIRE_SLACK})"
+    assert_eq!(
+        wire - wasted,
+        missing,
+        "zero re-upload must be EXACT once the rejected attempt's flush is \
+         accounted: every byte the server lacked crossed once, every wasted \
+         byte is accounted (wasted={wasted})"
     );
 }

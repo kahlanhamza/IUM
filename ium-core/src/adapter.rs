@@ -102,6 +102,7 @@ pub struct VerifyReport {
 #[derive(Clone, Default)]
 pub struct ProgressReporter {
     bytes: Arc<AtomicU64>,
+    wasted: Arc<AtomicU64>,
 }
 
 impl ProgressReporter {
@@ -118,12 +119,36 @@ impl ProgressReporter {
     pub fn moved(&self) -> u64 {
         self.bytes.load(Ordering::Relaxed)
     }
+    /// Reclassify `n` of the already-counted [`ProgressReporter::moved`]
+    /// bytes as WASTED (issue #30): they crossed the wire, but the server
+    /// persisted none of them — a rejected 409 PATCH's socket flush, whose
+    /// size is a client↔server scheduling race (0–48 KiB quiet, 192 KiB on a
+    /// loaded runner; nightly run 41618615182), not a protocol constant.
+    /// Waste stays in [`ProgressReporter::moved`] — it is real wire time and
+    /// eviction/resplit must measure it — but wire-accounting consumers can
+    /// now separate persisted movement from refused flush exactly:
+    /// `moved() − wasted()` == bytes the server actually took. Never call
+    /// this for bytes a later attempt re-sent successfully; those are
+    /// persisted movement, not waste.
+    pub fn waste(&self, n: u64) {
+        debug_assert!(
+            n <= self.bytes.load(Ordering::Relaxed),
+            "waste reclassifies already-counted bytes"
+        );
+        self.wasted.fetch_add(n, Ordering::Relaxed);
+    }
+    /// Bytes counted in [`ProgressReporter::moved`] that the server never
+    /// persisted (see [`ProgressReporter::waste`]).
+    pub fn wasted(&self) -> u64 {
+        self.wasted.load(Ordering::Relaxed)
+    }
 }
 
 impl std::fmt::Debug for ProgressReporter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProgressReporter")
             .field("moved", &self.moved())
+            .field("wasted", &self.wasted())
             .finish()
     }
 }
