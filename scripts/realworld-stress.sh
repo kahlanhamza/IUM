@@ -131,8 +131,9 @@ except sqlite3.Error:
 EOF
 }
 
-run_bin() { # scenario args... → captured stdout (builds once, runs quietly)
-  cargo run -q -p ium-core --bin realworld_stress -- "$@"
+run_bin() { # scenario args... → captured stdout+stderr (builds once, runs quietly;
+  # stderr is captured so a bin failure prints its REASON, issue #29)
+  cargo run -q -p ium-core --bin realworld_stress -- "$@" 2>&1
 }
 # S2 kills the upload process itself — run the built binary directly so the
 # SIGKILL lands on the uploader, not on a cargo wrapper.

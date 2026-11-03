@@ -37,11 +37,17 @@
 //! PRODUCTION default everywhere (10 s window, 0.4× median floor, 2 strikes)
 //! — no test shrink: the real-world drill earns real-world timings.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
+use ium_core::adapter::{
+    AdapterError, Capability, ChunkConfirm, ProbeReport, ProgressReporter, TransferAdapter,
+    VerifyReport,
+};
 use ium_core::adapter_s3::{S3MultipartAdapter, S3MultipartConfig};
-use ium_core::chunk::{CHUNK_MAX, CHUNK_MIN};
+use ium_core::chunk::{Lease, CHUNK_MAX, CHUNK_MIN};
 use ium_core::eviction::{EvictionPolicy, ResplitPolicy};
 use ium_core::state::JobState;
 use ium_core::{ChunkState, JobManager, JobSpec, SessionJournal, Supervisor};
@@ -87,6 +93,76 @@ fn fresh_manager(journal_dir: &str) -> Result<Arc<JobManager>, String> {
         S3MultipartAdapter::new(S3MultipartConfig::from_env().map_err(|e| e.to_string())?)
             .map_err(|e| format!("adapter: {e}"))?,
     ));
+    m.set_eviction_policy(EvictionPolicy::default());
+    Ok(Arc::new(m))
+}
+
+/// The S2 wedge technique, in-process (issue #29): the first `wedge_after`
+/// upload calls pass through to the real adapter; every later call awaits
+/// `pending()` AT ENTRY — zero bytes on the wire, the journal frozen at one
+/// confirmed part forever. The cancel window is then GUARANTEED, not raced:
+/// on a GitHub runner the loopback server uploads the whole 30 MB film in
+/// ~0.2 s and the job reached Done between two 25 ms polls (RED: cloud run
+/// 41561114324, "job reached Done before any cancelable moment"). The wedged
+/// future is droppable — the cancel tears it off the select! and the job
+/// lands Canceled; the multipart is never completed, so the server truth
+/// stays HEAD 404.
+struct WedgeAdapter {
+    inner: Arc<dyn TransferAdapter>,
+    wedge_after: u32,
+    calls: AtomicU32,
+}
+
+#[async_trait]
+impl TransferAdapter for WedgeAdapter {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn capabilities(&self) -> Capability {
+        self.inner.capabilities()
+    }
+
+    async fn probe(&self, spec: &JobSpec) -> Result<ProbeReport, AdapterError> {
+        self.inner.probe(spec).await
+    }
+
+    async fn upload_chunk(
+        &self,
+        spec: &JobSpec,
+        lease: &Lease,
+        progress: &ProgressReporter,
+    ) -> Result<ChunkConfirm, AdapterError> {
+        let n = self.calls.fetch_add(1, Ordering::Relaxed);
+        if n >= self.wedge_after {
+            // Wedge at ENTRY: droppable forever, zero wire bytes. The drive
+            // loop's select! abandons it the moment cancel_rx fires.
+            return std::future::pending::<Result<ChunkConfirm, AdapterError>>().await;
+        }
+        self.inner.upload_chunk(spec, lease, progress).await
+    }
+
+    async fn verify(&self, spec: &JobSpec) -> Result<VerifyReport, AdapterError> {
+        self.inner.verify(spec).await
+    }
+
+    async fn reattach(&self, endpoint: &str, token: &str) -> Result<(), AdapterError> {
+        self.inner.reattach(endpoint, token).await
+    }
+}
+
+/// A fresh manager whose real adapter is wrapped in the deterministic wedge.
+fn wedge_manager(journal_dir: &str, wedge_after: u32) -> Result<Arc<JobManager>, String> {
+    let db = std::path::Path::new(journal_dir).join("journal.db");
+    let journal = SessionJournal::open(&db).map_err(|e| format!("journal open: {e}"))?;
+    let mut m = JobManager::with_journal(journal).map_err(|e| format!("manager: {e}"))?;
+    let real = S3MultipartAdapter::new(S3MultipartConfig::from_env().map_err(|e| e.to_string())?)
+        .map_err(|e| format!("adapter: {e}"))?;
+    m.register_adapter(Arc::new(WedgeAdapter {
+        inner: Arc::new(real),
+        wedge_after,
+        calls: AtomicU32::new(0),
+    }));
     m.set_eviction_policy(EvictionPolicy::default());
     Ok(Arc::new(m))
 }
@@ -270,17 +346,20 @@ async fn s4pause(journal: &str, file: &str, endpoint: &str) -> Result<serde_json
 }
 
 async fn s4cancel(journal: &str, file: &str, endpoint: &str) -> Result<serde_json::Value, String> {
-    let m = fresh_manager(journal)?;
+    // Issue #29: the cancel window is GUARANTEED by the in-process wedge (the
+    // first upload call passes, every later call awaits at entry) — on a CI
+    // runner the whole 30 MB film previously completed between two polls and
+    // the scenario never saw a cancelable moment. The journal is provably
+    // stable at one confirmed part when the cancel lands.
+    let m = wedge_manager(journal, 1)?;
     let sup = Supervisor::new(Arc::clone(&m));
     let spec = spec_for(file, endpoint)?;
     let rec = m.create_job(&spec, 4).map_err(|e| e.to_string())?;
     let t0 = Instant::now();
     sup.drive(&rec.id);
     // cancel once ≥1 whole part is confirmed. ONE snapshot is the decision
-    // input (state AND frontier from the same journal view): on a fast link
-    // all parallel parts confirm in one step, so the first sight of progress
-    // may already be Finishing — cancellable since issue #26. A job that
-    // went terminal before any cancelable moment is the honest loud outcome.
+    // input (state AND frontier from the same journal view). With the wedge
+    // the frontier cannot run away: later calls never move a byte.
     let frontier_at_cancel = loop {
         let snap = m.snapshot(&rec.id).map_err(|e| e.to_string())?;
         let f: u64 = snap.chunks.iter().map(|c| c.bytes_confirmed).sum();
