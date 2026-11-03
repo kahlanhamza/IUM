@@ -11,7 +11,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$HERE/../.." && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
 SCENARIO="${1:-smoke}"
 case "$SCENARIO" in smoke|stress|longhaul) ;; *) echo "unknown scenario: $SCENARIO" >&2; exit 2;; esac
 
