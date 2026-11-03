@@ -338,7 +338,16 @@ impl ChunkPool {
                 rebuilt.push(c);
                 continue;
             }
-            let pieces = c.len().div_ceil(target);
+            // Issue #27 (floor regime): `ceil(len/target)` pieces can each
+            // fall BELOW `chunk_min` (12 MiB at target 5 MiB → 3×4 MiB) —
+            // every such piece was dropped and the chunk silently stayed
+            // whole, exactly when a slow link needs the split most. Cap the
+            // piece count by the floor: pieces = min(ceil(len/target),
+            // floor(len/chunk_min)) — then every piece is ≥ chunk_min by
+            // construction.
+            let pieces_by_target = c.len().div_ceil(target);
+            let pieces_by_floor = (c.len() / chunk_min).max(1);
+            let pieces = pieces_by_target.min(pieces_by_floor).max(1);
             let piece_len = c.len() / pieces;
             let mut offset = c.begin;
             for p in 0..pieces {
@@ -397,6 +406,19 @@ impl ChunkPool {
     pub fn suggested_chunk_size(avg_bps: f64, chunk_min: u64) -> u64 {
         let raw = (avg_bps * 30.0) as u64;
         raw.clamp(chunk_min, CHUNK_MAX)
+    }
+
+    /// The pool's current resplit target (issue #27): the largest
+    /// outstanding (Pending or Leased) part. Uploaded/verified chunks are
+    /// finished work, not shape — a fleet waiting on one 22 MiB straggler
+    /// reports 22 MiB, not the average.
+    pub fn outstanding_target(&self) -> u64 {
+        self.chunks
+            .iter()
+            .filter(|c| matches!(c.state, ChunkState::Pending | ChunkState::Leased))
+            .map(|c| c.len())
+            .max()
+            .unwrap_or(0)
     }
 
     /// The job's total source length the pool was built for.
@@ -617,6 +639,56 @@ mod tests {
         assert!(!pool.is_leased(l.idx));
         assert_eq!(pool.chunks()[l.idx as usize].bytes_confirmed, 1024);
         assert_cover_invariant(&pool);
+    }
+
+    #[test]
+    fn resplit_splits_at_the_floor_regime_instead_of_staying_whole() {
+        // Issue #27 RED: a 12.4 MiB pending chunk with target CHUNK_MIN
+        // (5 MiB) used to compute 3 pieces of ~4.1 MiB, drop them all as
+        // sub-floor, and stay whole — exactly when a slow link needs the
+        // split most. The floor-capped piece count makes it 2 × 6.2 MiB.
+        const MIB: u64 = 1024 * 1024;
+        let mut pool = ChunkPool::new(12 * MIB + 2 * MIB / 5, 1); // 12.4 MiB, 1 chunk
+        assert_eq!(pool.chunks().len(), 1);
+        let l = pool.lease("w").unwrap();
+        pool.evict(l.idx, "w"); // back to Pending, zero confirmed
+        pool.resplit_pending(CHUNK_MIN, CHUNK_MIN);
+        assert_cover_invariant(&pool);
+        let pieces: Vec<_> = pool.chunks().to_vec();
+        assert_eq!(
+            pieces.len(),
+            2,
+            "12.4 MiB at a 5 MiB target must split into 2 floor-respecting pieces: {pieces:?}"
+        );
+        assert!(pieces.iter().all(|c| c.len() >= CHUNK_MIN));
+        assert_eq!(pieces[0].begin, 0);
+        assert_eq!(pieces[1].end, pool.total_len(), "no byte lost in the split");
+        assert!(
+            pieces.windows(2).all(|w| w[0].end == w[1].begin),
+            "contiguous cover"
+        );
+    }
+
+    #[test]
+    fn outstanding_target_reports_the_largest_unfinished_part() {
+        // 3 chunks of 4 MiB… CHUNK_MIN forbids that plan — build rows directly.
+        let mk = |idx: u32, begin: u64, end: u64, state: ChunkState| ChunkRow {
+            idx,
+            begin,
+            end,
+            state,
+            bytes_confirmed: 0,
+            adapter_token: None,
+        };
+        let rows = vec![
+            mk(0, 0, CHUNK_MIN, ChunkState::Uploaded),
+            mk(1, CHUNK_MIN, 2 * CHUNK_MIN, ChunkState::Leased),
+            mk(2, 2 * CHUNK_MIN, 4 * CHUNK_MIN, ChunkState::Pending),
+        ];
+        let pool = ChunkPool::from_rows(4 * CHUNK_MIN, rows);
+        // The Uploaded 5 MiB chunk is finished work — not shape. The largest
+        // outstanding is the 10 MiB pending straggler.
+        assert_eq!(pool.outstanding_target(), 2 * CHUNK_MIN);
     }
 
     #[test]

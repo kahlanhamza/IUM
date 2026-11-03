@@ -10,6 +10,36 @@ prose. An entry without verifiable issue numbers does not belong here.
 
 ## [Unreleased]
 
+### Added
+- #27 — adaptive resplit: pattern #9 is now driven from measured throughput.
+  The pool's `resplit_pending` and `suggested_chunk_size` existed, were
+  invariant-fuzz-tested, and had ZERO runtime callers — planning was one-shot
+  per attempt, so on the owner's 32 KiB/s-class reality a planned 22 MiB part
+  confirmed its first byte after ~11 s (S3 lanes: the 5 MiB protocol floor
+  bounds the best case) and nothing adapted. Now the drive loop's window-close
+  path consults a pure, shrink-only `ResplitPolicy` (fleet median bps in,
+  target-or-None out; ~30 s of wire time per part at the observed median,
+  90 s slow-confirm default, 25% deadband, and a would-actually-split gate
+  that also pinned a REAL resplit helper defect: at the floor regime the split
+  loop dropped every sub-floor piece and silently stayed whole — 12.4 MiB at a
+  5 MiB target split into nothing). The single-flight winner retires leases
+  (peers cancel their in-flight PUTs via an epoch watch BEFORE the pool is
+  reshaped), persists the whole plan transactionally (`replace_chunks`),
+  journals `chunk_resplit` with its real inputs, and restarts retry budgets
+  (the plan they keyed on no longer exists). Honest accounting under the
+  reshuffle: a confirm/error arriving for a retired lease is verified against
+  the lease's byte range under the same pool lock and dropped with a journaled
+  `stale_confirm_dropped`/`stale_error_dropped` event — never applied to a
+  stranger chunk, never charged to a budget. The grow direction (merge parts
+  on fast links) was drafted and deliberately rejected: S3 parts confirm
+  atomically, so bigger parts mean worse feedback and abandoned prefixes for
+  only marginal request savings — no measured scenario needed it. Splitting
+  never creates bandwidth (N parts on one slow uplink still share it) — the
+  win is first-confirmation latency, sooner eviction votes, less wire re-sent
+  when a connection dies mid-part; docs say so. Pinned by
+  `tests/adaptive_resplit.rs` (RED: the API was inexpressible, E0432/E0599
+  at the pre-fix HEAD) + policy unit tests + the floor-regime pool test.
+
 ### Fixed
 - #26 — Finishing is no longer past canceling. The first free-cloud stress run
   (GitHub Actions, real 308 MiB film) failed S4-cancel with `Finishing -> Canceled

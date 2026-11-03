@@ -35,7 +35,7 @@ use crate::adapter::{
     AdapterError, AdapterRegistry, ChunkConfirm, ProgressReporter, TransferAdapter,
 };
 use crate::chunk::{ChunkPool, ChunkState};
-use crate::eviction::{below_floor, median, EvictionPolicy, ThroughputWatch};
+use crate::eviction::{below_floor, median, EvictionPolicy, ResplitPolicy, ThroughputWatch};
 use crate::journal::{JobRecord, SessionJournal};
 use crate::retry::{Action, RetryPolicy};
 use crate::state::JobState;
@@ -67,6 +67,10 @@ pub struct JobManager {
     registry: AdapterRegistry,
     policy: RetryPolicy,
     eviction: EvictionPolicy,
+    /// Pattern #9 tuning (issue #27): when to reshape the pending plan from
+    /// measured throughput. See [`ResplitPolicy`] — the honest goal is
+    /// feedback latency, not bandwidth.
+    resplit: ResplitPolicy,
     /// job_id -> pause flag (watch keeps the last value; workers observe it).
     pause_flags: Mutex<HashMap<String, watch::Sender<bool>>>,
     /// job_id -> cancel flag (issue #15). The flag is a request signal; the
@@ -124,6 +128,17 @@ struct DriveShared {
     /// Issue #15: the journal already holds Canceled before this flips; the
     /// nap and the loop top just obey it promptly.
     cancel_rx: watch::Receiver<bool>,
+    /// Issue #27: bumped (epoch+1) by the single resplit winner BEFORE the
+    /// pool is reshaped; every peer's `select!` watches it and drops its
+    /// in-flight call (its lease was just retired) instead of letting a
+    /// stale confirm/error land on the renumbered plan.
+    resplit_rx: watch::Receiver<u64>,
+    /// Issue #27: the epoch sender (cloned into DriveShared so the winning
+    /// worker can bump it; peers hold only receivers).
+    resplit_tx: watch::Sender<u64>,
+    /// Issue #27 single-flight gate: only one worker per round may execute
+    /// a resplit; every other proposer re-checks on its next window.
+    resplit_in_flight: Arc<AtomicBool>,
 }
 
 impl JobManager {
@@ -136,6 +151,7 @@ impl JobManager {
             registry: AdapterRegistry::new(),
             policy: RetryPolicy::default(),
             eviction: EvictionPolicy::default(),
+            resplit: ResplitPolicy::default(),
             pause_flags: Mutex::new(HashMap::new()),
             cancel_flags: Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
@@ -150,6 +166,7 @@ impl JobManager {
             registry: AdapterRegistry::new(),
             policy: RetryPolicy::default(),
             eviction: EvictionPolicy::default(),
+            resplit: ResplitPolicy::default(),
             pause_flags: Mutex::new(HashMap::new()),
             cancel_flags: Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
@@ -170,6 +187,11 @@ impl JobManager {
     /// Slow-chunk eviction tuning (spec §4.2). Shrink the window in tests.
     pub fn set_eviction_policy(&mut self, eviction: EvictionPolicy) {
         self.eviction = eviction;
+    }
+
+    /// Adaptive-resplit tuning (issue #27). Shrink the thresholds in tests.
+    pub fn set_resplit_policy(&mut self, resplit: ResplitPolicy) {
+        self.resplit = resplit;
     }
 
     /// Registry keys, for diagnostics and the shell's status line.
@@ -573,6 +595,9 @@ impl JobManager {
         let paused_rx = self.ensure_pause_flag(job_id).subscribe();
         let cancel_rx = self.ensure_cancel_flag(job_id).subscribe();
         let (abort_tx, abort_rx) = watch::channel(false);
+        // Issue #27: the resplit epoch. The single winner bumps it BEFORE
+        // reshaping the pool; peers drop their in-flight calls on the change.
+        let (resplit_tx, resplit_rx) = watch::channel(0u64);
         let attempts: Arc<Mutex<HashMap<u32, u32>>> = Arc::new(Mutex::new(HashMap::new()));
         let live_bps: Arc<Mutex<HashMap<u32, f64>>> = Arc::new(Mutex::new(HashMap::new()));
         let done_bps: Arc<Mutex<HashMap<u32, f64>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -656,6 +681,9 @@ impl JobManager {
                 paused_seen: paused_seen.clone(),
                 paused_rx: paused_rx.clone(),
                 cancel_rx: cancel_rx.clone(),
+                resplit_rx: resplit_rx.clone(),
+                resplit_tx: resplit_tx.clone(),
+                resplit_in_flight: Arc::new(AtomicBool::new(false)),
             };
             let futs: Vec<_> = (0..fleet)
                 .map(|w| {
@@ -729,6 +757,7 @@ impl JobManager {
         // watch receivers need `&mut` for `changed()`; every worker owns its
         // clone (watch is multi-consumer by design).
         let mut abort_rx = shared.abort_rx.clone();
+        let mut resplit_rx = shared.resplit_rx.clone();
         let paused_rx = shared.paused_rx.clone();
         loop {
             if *abort_rx.borrow() {
@@ -740,27 +769,24 @@ impl JobManager {
             }
 
             // -- lease: the in-memory pool decides, the journal mirrors it --
+            // The pool lock is held across the journal mirror: a resplit
+            // (issue #27) rewrites the whole chunks table by idx under that
+            // same lock, so a lease and its durable mirror are atomic
+            // against it — no "Leased" lie can land on the renumbered plan.
             let (lease, confirmed_at_lease) = {
                 let mut pool = shared.pool.lock().expect("pool mutex poisoned");
-                match pool.lease(worker_id) {
-                    Some(l) => {
-                        let confirmed = pool.chunks()[l.idx as usize].bytes_confirmed;
-                        (l, confirmed)
-                    }
+                let lease = match pool.lease(worker_id) {
+                    Some(l) => l,
                     // Every chunk is done or held by a peer; the driver
                     // re-arms a fresh round when the fleet thins out.
                     None => return Ok(()),
-                }
+                };
+                let confirmed = pool.chunks()[lease.idx as usize].bytes_confirmed;
+                self.j()
+                    .update_chunk(job_id, lease.idx, ChunkState::Leased, confirmed, None)
+                    .map_err(EngineError::from)?;
+                (lease, confirmed)
             };
-            self.j()
-                .update_chunk(
-                    job_id,
-                    lease.idx,
-                    ChunkState::Leased,
-                    confirmed_at_lease,
-                    None,
-                )
-                .map_err(EngineError::from)?;
 
             // Attempt number for THIS lease. Errors and evictions count
             // toward the retry budget; plain re-leases (pause/resume) do not.
@@ -784,6 +810,10 @@ impl JobManager {
                 Errored(AdapterError),
                 Evicted,
                 Aborted,
+                /// Issue #27: the plan was reshaped under this lease — the
+                /// lease identity is dead. Charge nothing (a resplit is not
+                /// a failure) and re-lease from the new plan.
+                ResplitUnderneath,
             }
 
             let upload = adapter.upload_chunk(spec, &lease, &progress);
@@ -792,6 +822,11 @@ impl JobManager {
                 tokio::select! {
                     biased;
                     _ = abort_rx.changed() => break Step::Aborted,
+                    // Issue #27: the resplit winner bumped the epoch BEFORE
+                    // reshaping the pool — drop this in-flight call (its
+                    // lease was retired) instead of letting a stale
+                    // confirm/error land on the renumbered plan.
+                    _ = resplit_rx.changed() => break Step::ResplitUnderneath,
                     res = &mut upload => break match res {
                         Ok(confirm) => Step::Confirmed(confirm),
                         Err(err) => Step::Errored(err),
@@ -822,6 +857,15 @@ impl JobManager {
                             .fetch_max(bps.to_bits(), Ordering::Relaxed);
                         if watch.exhausted(&self.eviction) {
                             break Step::Evicted;
+                        }
+                        // Issue #27 (pattern #9): reshape the plan when the
+                        // measured fleet rate says the outstanding parts are
+                        // too coarse. Single-flight; the winner's own lease
+                        // is retired with everyone else's.
+                        if let Some(median_bps) = last_median {
+                            if self.execute_resplit(shared, job_id, median_bps) {
+                                break Step::ResplitUnderneath;
+                            }
                         }
                     }
                 }
@@ -865,8 +909,35 @@ impl JobManager {
                         .lock()
                         .expect("attempts poisoned")
                         .remove(&lease.idx);
-                    let (total, full) = self.apply_confirm(job_id, &confirm)?;
+                    // Issue #27 guard: the plan may have been reshaped under
+                    // this lease between the select! verdict and this arm —
+                    // confirm.idx may now name a STRANGER chunk. Verify the
+                    // row identity under the same pool lock the resplit
+                    // winner holds, and drop a stale confirm honestly (its
+                    // bytes are not part of the new plan; for S3 they are an
+                    // orphaned server-side part the finish gate never lists).
                     let mut pool = shared.pool.lock().expect("pool mutex poisoned");
+                    let stale = match pool.chunks().iter().find(|c| c.idx == confirm.idx) {
+                        Some(c) => c.begin != lease.begin || c.end != lease.end,
+                        None => true,
+                    };
+                    if stale {
+                        drop(pool);
+                        self.j()
+                            .append_event(
+                                job_id,
+                                "stale_confirm_dropped",
+                                &serde_json::json!({
+                                    "idx": confirm.idx,
+                                    "lease_begin": lease.begin,
+                                    "lease_end": lease.end,
+                                    "bytes": confirm.bytes_confirmed,
+                                }),
+                            )
+                            .map_err(EngineError::from)?;
+                        continue;
+                    }
+                    let (total, full) = self.apply_confirm(job_id, &confirm)?;
                     pool.report_confirmed(confirm.idx, total);
                     if full {
                         pool.complete(confirm.idx);
@@ -883,42 +954,71 @@ impl JobManager {
                         _ => None,
                     };
                     let action = self.policy.decide(err.kind(), attempt, server_retry_after);
-                    self.j()
-                        .append_event(
-                            job_id,
-                            "chunk_error",
-                            &serde_json::json!({
-                                "idx": lease.idx,
-                                "kind": format!("{:?}", err.kind()),
-                                "attempt": attempt,
-                                "action": format!("{action:?}"),
-                            }),
-                        )
-                        .map_err(EngineError::from)?;
-                    // Back to the pool in the JOURNAL first, keeping whatever
-                    // the server had confirmed before the error — the next
-                    // lease resumes from there.
-                    self.j()
-                        .update_chunk(
-                            job_id,
-                            lease.idx,
-                            ChunkState::Pending,
-                            confirmed_at_lease,
-                            None,
-                        )
-                        .map_err(EngineError::from)?;
-                    shared
-                        .pool
-                        .lock()
-                        .expect("pool mutex poisoned")
-                        .evict(lease.idx, worker_id);
-                    match action {
-                        Action::Retry(delay) => {
+                    // Issue #27 guard (same identity check as the confirm
+                    // path): a stale error on a retired lease names a
+                    // stranger idx — drop it honestly, charge no budget, and
+                    // re-lease from the new plan.
+                    let charge_budget = matches!(action, Action::Retry(_) | Action::Reattach);
+                    {
+                        let mut pool = shared.pool.lock().expect("pool mutex poisoned");
+                        let stale = match pool.chunks().iter().find(|c| c.idx == lease.idx) {
+                            Some(c) => c.begin != lease.begin || c.end != lease.end,
+                            None => true,
+                        };
+                        if stale {
+                            drop(pool);
+                            self.j()
+                                .append_event(
+                                    job_id,
+                                    "stale_error_dropped",
+                                    &serde_json::json!({
+                                        "idx": lease.idx,
+                                        "lease_begin": lease.begin,
+                                        "lease_end": lease.end,
+                                        "kind": format!("{:?}", err.kind()),
+                                    }),
+                                )
+                                .map_err(EngineError::from)?;
+                            continue;
+                        }
+                        self.j()
+                            .append_event(
+                                job_id,
+                                "chunk_error",
+                                &serde_json::json!({
+                                    "idx": lease.idx,
+                                    "kind": format!("{:?}", err.kind()),
+                                    "attempt": attempt,
+                                    "action": format!("{action:?}"),
+                                }),
+                            )
+                            .map_err(EngineError::from)?;
+                        // Back to the pool in the JOURNAL first, keeping
+                        // whatever the server had confirmed before the error
+                        // — the next lease resumes from there.
+                        self.j()
+                            .update_chunk(
+                                job_id,
+                                lease.idx,
+                                ChunkState::Pending,
+                                confirmed_at_lease,
+                                None,
+                            )
+                            .map_err(EngineError::from)?;
+                        pool.evict(lease.idx, worker_id);
+                        // Retry-budget charge under the same lock: a resplit
+                        // clears this map when it rebuilds the plan; a stale
+                        // insert racing it could resurrect a dead budget.
+                        if charge_budget {
                             shared
                                 .attempts
                                 .lock()
                                 .expect("attempts poisoned")
                                 .insert(lease.idx, attempt);
+                        }
+                    }
+                    match action {
+                        Action::Retry(delay) => {
                             tracing::warn!(job = job_id, idx = lease.idx, ?delay, "retrying chunk");
                             if !Self::nap(shared, delay).await {
                                 return Ok(()); // abort/pause woke us early
@@ -940,11 +1040,6 @@ impl JobManager {
                                 "mid_transfer",
                             )
                             .await?;
-                            shared
-                                .attempts
-                                .lock()
-                                .expect("attempts poisoned")
-                                .insert(lease.idx, attempt);
                         }
                         Action::Reauthenticate | Action::Fail => {
                             tracing::warn!(job = job_id, idx = lease.idx, "chunk failed for good");
@@ -955,6 +1050,32 @@ impl JobManager {
                     }
                 }
                 Step::Evicted => {
+                    // Issue #27 guard: an eviction decided just before a
+                    // resplit landed names a retired lease — drop honestly,
+                    // charge nothing, re-lease from the new plan.
+                    {
+                        let pool = shared.pool.lock().expect("pool mutex poisoned");
+                        let stale = match pool.chunks().iter().find(|c| c.idx == lease.idx) {
+                            Some(c) => c.begin != lease.begin || c.end != lease.end,
+                            None => true,
+                        };
+                        if stale {
+                            drop(pool);
+                            self.j()
+                                .append_event(
+                                    job_id,
+                                    "stale_error_dropped",
+                                    &serde_json::json!({
+                                        "idx": lease.idx,
+                                        "lease_begin": lease.begin,
+                                        "lease_end": lease.end,
+                                        "kind": "eviction",
+                                    }),
+                                )
+                                .map_err(EngineError::from)?;
+                            continue;
+                        }
+                    }
                     // Slow-chunk eviction (spec §4.2): in-flight bytes were
                     // never server-confirmed, so the chunk returns to the
                     // pool keeping exactly its lease-time confirmation.
@@ -1007,7 +1128,90 @@ impl JobManager {
                     // loop: this or a peer worker re-leases and resumes from
                     // the confirmed offset.
                 }
+                Step::ResplitUnderneath => {
+                    // Issue #27: the plan was reshaped under this lease.
+                    // resplit_pending retired every lease (including this
+                    // one) and the journal table was rewritten wholesale —
+                    // there is nothing to journal or evict by idx. Charge
+                    // no retry budget (a resplit is not a failure; the
+                    // winner cleared the budgets with the rebuild) and just
+                    // re-lease from the new plan.
+                }
                 Step::Aborted => return Ok(()),
+            }
+        }
+    }
+
+    /// Issue #27: consult the resplit policy and, when it fires and this
+    /// call wins the single-flight gate, reshape the pending plan from the
+    /// measured fleet rate: retire leases (peers cancel via the epoch bump
+    /// BEFORE the mutation), split/merge pending chunks around the new
+    /// target, persist the whole plan transactionally, journal the decision
+    /// with its real inputs, and restart the retry budgets (the plan they
+    /// keyed on no longer exists). Returns `true` when a resplit executed —
+    /// the caller's own lease is retired and it must re-lease.
+    fn execute_resplit(&self, shared: &DriveShared, job_id: &str, median_bps: f64) -> bool {
+        let candidate = {
+            let pool = shared.pool.lock().expect("pool mutex poisoned");
+            let current = pool.outstanding_target();
+            self.resplit
+                .plan(Some(median_bps), current, crate::chunk::CHUNK_MIN)
+        };
+        let Some(new_target) = candidate else {
+            return false;
+        };
+        // Single-flight: one reshaper per round; every other proposer just
+        // re-checks on its next window.
+        if shared
+            .resplit_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return false;
+        }
+        // Cancel peers FIRST (they drop their in-flight calls on the epoch
+        // change), then reshape under the pool lock — the same lock every
+        // journal-by-idx path holds, so no stale write can interleave.
+        shared.resplit_tx.send_modify(|e| *e += 1);
+        let mut pool = shared.pool.lock().expect("pool mutex poisoned");
+        let chunks_before = pool.chunks().len();
+        pool.resplit_pending(new_target, crate::chunk::CHUNK_MIN);
+        let rows = pool.rows();
+        let chunks_after = rows.len();
+        let journaled = (|| -> std::result::Result<(), EngineError> {
+            self.j()
+                .replace_chunks(job_id, &rows)
+                .map_err(EngineError::from)?;
+            self.j()
+                .append_event(
+                    job_id,
+                    "chunk_resplit",
+                    &serde_json::json!({
+                        "target": new_target,
+                        "median_bps": median_bps,
+                        "chunks_before": chunks_before,
+                        "chunks_after": chunks_after,
+                    }),
+                )
+                .map_err(EngineError::from)?;
+            Ok(())
+        })();
+        drop(pool);
+        // The plan identity was rebuilt: retry budgets restart on it.
+        // Charging old-idx attempts onto the renumbered plan would exhaust
+        // budgets for bytes never retried.
+        shared.attempts.lock().expect("attempts poisoned").clear();
+        shared.resplit_in_flight.store(false, Ordering::Release);
+        match journaled {
+            Ok(()) => true,
+            Err(err) => {
+                // The journal write failed: the in-memory pool is reshaped
+                // but NOT the durable truth — never run diverged from disk.
+                // Fail the job loudly (the driver journals Failed).
+                tracing::error!(job = job_id, "resplit journal write failed: {err}");
+                shared.failed.store(true, Ordering::SeqCst);
+                let _ = shared.abort_tx.send(true);
+                false
             }
         }
     }

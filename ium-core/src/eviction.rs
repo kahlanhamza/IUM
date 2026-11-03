@@ -127,6 +127,102 @@ pub(crate) fn below_floor(my_bps: f64, pool_samples: &mut [f64], policy: &Evicti
     my_bps < policy.floor_ratio * med
 }
 
+/// Pattern #9 tuning (issue #27): drive the pool's dormant `resplit_pending`
+/// from measured throughput. The honest goal is feedback latency, NOT
+/// bandwidth: finer parts confirm sooner, feed eviction votes sooner, and
+/// waste less wire when a connection dies mid-part — they never raise the
+/// link's total capacity. The floor is [`crate::chunk::CHUNK_MIN`] (the S3
+/// 5 MiB non-final-part protocol minimum), so on S3 lanes the win is bounded
+/// and the policy must respect it.
+///
+/// Deliberately SHRINK-ONLY. The grow direction (merge parts back on fast
+/// links) was drafted and rejected: S3 parts confirm atomically, so bigger
+/// parts mean WORSE feedback latency, and a grow retires in-flight PUTs —
+/// abandoning their unconfirmed prefixes (a full re-PUT of the span on S3)
+/// to save a handful of per-part requests. No measured scenario needed it;
+/// wiring it would trade real wire waste for nothing on the only lanes
+/// IUM ships today. If a lane with meaningful per-part overhead ever
+/// appears, grow returns as its own issue with its own evidence.
+///
+/// Defaults shape a part to ~30 s of wire time at the observed fleet median
+/// and only act when reality leaves a wide deadband — a resplit retires
+/// in-flight leases, so it must never flap on median noise.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResplitPolicy {
+    /// Target seconds of wire time per part at the observed median rate.
+    pub target_secs: f64,
+    /// Reshape (shrink) when the current largest outstanding part would take
+    /// longer than this at the median rate.
+    pub slow_confirm: Duration,
+    /// Ignore proposals that move the target less than this fraction of the
+    /// current target — the anti-flap deadband.
+    pub min_change_ratio: f64,
+}
+
+impl Default for ResplitPolicy {
+    fn default() -> Self {
+        Self {
+            target_secs: 30.0,
+            slow_confirm: Duration::from_secs(90),
+            min_change_ratio: 0.25,
+        }
+    }
+}
+
+impl ResplitPolicy {
+    /// The pure decision (no clocks, no I/O — unit-testable). Inputs: the
+    /// fleet median bps from the last closed window (`None` = no window has
+    /// closed — never act on no data), and the pool's current outstanding
+    /// target (largest Pending/Leased part; 0 = nothing outstanding).
+    /// Returns the new target to resplit around, or `None` for no change.
+    ///
+    /// A shrink may only fire when it would ACTUALLY split something: the
+    /// split keeps pieces ≥ `chunk_min`, so a part of ≤ 2×target never
+    /// splits — without that gate the policy would resplit (retiring
+    /// in-flight leases for zero shape change) every window in the
+    /// floor-bound regime, an infinite cancel-and-restart loop.
+    pub fn plan(
+        &self,
+        median_bps: Option<f64>,
+        current_target: u64,
+        chunk_min: u64,
+    ) -> Option<u64> {
+        let median = median_bps?;
+        if !median.is_finite() || median <= 0.0 || current_target == 0 {
+            return None;
+        }
+        let secs = current_target as f64 / median;
+        if secs <= self.slow_confirm.as_secs_f64() {
+            return None;
+        }
+        let implied = self.target_for(median, chunk_min);
+        if implied >= current_target {
+            return None;
+        }
+        // Would the split actually change the shape? A part of ≤ 2× target
+        // stays whole (`resplit_pending` keeps it), and pieces below
+        // `chunk_min` are dropped — at the floor regime nothing may be
+        // splittable, and re-planning anyway would retire in-flight leases
+        // for nothing.
+        let splittable = current_target > 2 * implied;
+        let moves_enough =
+            (current_target - implied) as f64 / current_target as f64 >= self.min_change_ratio;
+        if splittable && moves_enough {
+            Some(implied)
+        } else {
+            None
+        }
+    }
+
+    /// Throughput → part target (~`target_secs` of wire time), clamped to
+    /// the protocol floor and the pool's ceiling — `suggested_chunk_size`
+    /// semantics.
+    fn target_for(&self, median_bps: f64, chunk_min: u64) -> u64 {
+        let raw = (median_bps * self.target_secs) as u64;
+        raw.clamp(chunk_min, crate::chunk::CHUNK_MAX)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +286,124 @@ mod tests {
         assert!(!below_floor(400.0, &mut [1000.0, 400.0], &p));
         // healthy worker is above the floor → stays
         assert!(!below_floor(1000.0, &mut [1000.0, 0.0], &p));
+    }
+
+    // -- ResplitPolicy (issue #27) ------------------------------------------
+
+    fn resplit_policy() -> ResplitPolicy {
+        ResplitPolicy {
+            target_secs: 30.0,
+            slow_confirm: Duration::from_secs(90),
+            min_change_ratio: 0.25,
+        }
+    }
+
+    const MIB: u64 = 1024 * 1024;
+
+    #[test]
+    fn resplit_needs_data_and_outstanding_work() {
+        let p = resplit_policy();
+        // No window has closed → never act on no data.
+        assert_eq!(p.plan(None, 22 * MIB, crate::chunk::CHUNK_MIN), None);
+        // Zero/negative median (idle pool) → no signal.
+        assert_eq!(p.plan(Some(0.0), 22 * MIB, crate::chunk::CHUNK_MIN), None);
+        assert_eq!(
+            p.plan(Some(f64::NAN), 22 * MIB, crate::chunk::CHUNK_MIN),
+            None
+        );
+        // Nothing outstanding → nothing to reshape.
+        assert_eq!(
+            p.plan(Some(2.0 * MIB as f64), 0, crate::chunk::CHUNK_MIN),
+            None
+        );
+    }
+
+    #[test]
+    fn resplit_shrinks_a_part_that_confirms_too_slowly() {
+        let p = resplit_policy();
+        // 22 MiB part at 2.4 MiB/s ≈ 9.4 s ≫ 90 s? No — pick a REALLY slow
+        // link: 22 MiB at 128 KiB/s = 176 s ≫ 90 s → shrink. Implied target
+        // = 128 KiB/s × 30 s = 3.75 MiB → floored to CHUNK_MIN (5 MiB).
+        let slow = 128.0 * 1024.0;
+        assert_eq!(
+            p.plan(Some(slow), 22 * MIB, crate::chunk::CHUNK_MIN),
+            Some(crate::chunk::CHUNK_MIN),
+            "the implied target collapses to the S3 protocol floor"
+        );
+    }
+
+    #[test]
+    fn resplit_never_fires_when_the_floor_leaves_nothing_to_split() {
+        let p = ResplitPolicy {
+            target_secs: 0.5,
+            slow_confirm: Duration::from_secs(4),
+            min_change_ratio: 0.1,
+        };
+        let floor = crate::chunk::CHUNK_MIN;
+        // A 6 MiB part at 1 MiB/s = 6 s > 4 s and implied (0.5 MiB) floored
+        // to 5 MiB < 6 MiB — but 6 MiB ≤ 2×5 MiB: the split would keep the
+        // part whole. Resplitting anyway would retire in-flight leases for
+        // ZERO shape change, every window, forever.
+        assert_eq!(p.plan(Some(1.0 * MIB as f64), 6 * MIB, floor), None);
+        // 8 MiB at the same rate: still ≤ 2× floor → no resplit.
+        assert_eq!(p.plan(Some(1.0 * MIB as f64), 8 * MIB, floor), None);
+        // 12 MiB splits (2 × 6 MiB) → fires.
+        assert_eq!(p.plan(Some(1.0 * MIB as f64), 12 * MIB, floor), Some(floor));
+    }
+
+    #[test]
+    fn resplit_respects_the_deadband() {
+        let p = resplit_policy();
+        // 256 MiB at 1 MiB/s = 256 s > 90 s; implied 30 MiB. Change ratio
+        // (256-30)/256 = 0.88 ≥ 0.25 → fires.
+        assert_eq!(
+            p.plan(Some(1.0 * MIB as f64), 256 * MIB, crate::chunk::CHUNK_MIN),
+            Some(30 * MIB)
+        );
+        // 36 MiB at 1 MiB/s = 36 s > 90 s? No. At 256 KiB/s = 144 s > 90 s;
+        // implied 7.5 MiB; ratio (36-7.5)/36 = 0.79 → fires.
+        assert_eq!(
+            p.plan(Some(256.0 * 1024.0), 36 * MIB, crate::chunk::CHUNK_MIN),
+            Some((7.5 * MIB as f64) as u64),
+        );
+        // Sub-deadband move: 13 MiB at 512 KiB/s = 26 s < 90 s → no shrink
+        // at all (band, not just deadband).
+        assert_eq!(
+            p.plan(Some(512.0 * 1024.0), 13 * MIB, crate::chunk::CHUNK_MIN),
+            None
+        );
+    }
+
+    #[test]
+    fn resplit_is_shrink_only_and_never_touches_fast_fleets() {
+        let p = resplit_policy();
+        // The grow direction was deliberately rejected (see the policy docs):
+        // merging parts on a fast link retires in-flight PUTs — abandoning
+        // their unconfirmed prefixes on S3 — to save a handful of requests.
+        // No rate, however fast, may trigger a resplit: 5 MiB parts at
+        // 32 MiB/s confirm in 0.16 s — far inside the band → None.
+        assert_eq!(
+            p.plan(Some(32.0 * MIB as f64), 5 * MIB, crate::chunk::CHUNK_MIN),
+            None
+        );
+        // Even an absurd rate with tiny parts stays untouched.
+        assert_eq!(
+            p.plan(Some(1024.0 * MIB as f64), MIB, crate::chunk::CHUNK_MIN),
+            None
+        );
+    }
+
+    #[test]
+    fn resplit_stays_stable_after_its_own_shrink() {
+        // Post-shrink stability: the policy must not flap. After a shrink to
+        // the floor, the new outstanding target (~2× implied at most) must
+        // not re-trigger: 11 MiB outstanding (2×5.5 after a split of 22),
+        // median 128 KiB/s → 88 s < 90 s → no fire.
+        let p = resplit_policy();
+        assert_eq!(
+            p.plan(Some(128.0 * 1024.0), 11 * MIB, crate::chunk::CHUNK_MIN),
+            None
+        );
     }
 
     #[test]
