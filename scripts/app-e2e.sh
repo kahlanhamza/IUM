@@ -98,8 +98,11 @@ RC=$?
 set -e
 
 say "--- recorder A: $(cat "$REC_A" 2>/dev/null || echo 'no record')  B: $(cat "$REC_B" 2>/dev/null || echo 'no record')"
-say "--- driver log tail:"; tail -25 "$WORK/driver.log" || true
 if [ $RC -ne 0 ]; then
+  say "--- app/driver panic forensics:"
+  grep -n -B2 -A12 "panicked at" "$WORK/driver.log" | head -60 || true
+  say "--- driver log tail:"
+  tail -25 "$WORK/driver.log" || true
   die "e2e FAILED (rc=$RC) — workdir $WORK kept for forensics"
 fi
 say "GREEN: the shell was driven — create/progress/pause/resume/done/inspect + cancel-no-object"

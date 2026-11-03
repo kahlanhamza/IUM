@@ -73,9 +73,14 @@ fn engine_status(engine: State<Engine>) -> String {
     )
 }
 
+/// Async (issue #35 e2e caught this): sync commands run on the MAIN/GTK
+/// thread, and `drive()` → `tokio::spawn` panics outside a tokio runtime —
+/// a main-thread panic in GTK context ABORTS the app. The command body is
+/// blocking-fast (journal inserts); `async` only moves it onto the runtime
+/// so the supervisor's spawn is legal.
 #[tauri::command]
-fn create_job(
-    engine: State<Engine>,
+async fn create_job(
+    engine: State<'_, Engine>,
     app: tauri::AppHandle,
     spec: JobSpec,
     max_conns: u32,
@@ -111,9 +116,11 @@ fn pause_job(engine: State<Engine>, job_id: String) -> Result<(), String> {
     engine.0.pause(&job_id).map_err(engine_error)
 }
 
+/// Async for the same reason as `create_job`: `resume_signal` re-drives,
+/// and `drive()` needs the tokio context.
 #[tauri::command]
-fn resume_signal(
-    engine: State<Engine>,
+async fn resume_signal(
+    engine: State<'_, Engine>,
     app: tauri::AppHandle,
     job_id: String,
 ) -> Result<(), String> {
