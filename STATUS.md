@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-03** · Phase: **M5 COMPLETE + real-world stress campaign GREEN (#22 #24 #25 #26 closed — free-cloud bench proven, all engine invariants re-verified on a real 308 MiB film)**
+> Last updated: **2026-11-03** · Phase: **M5 COMPLETE + stress campaign GREEN + pattern #9 driven (#22 #24 #25 #26 #27 closed — adaptive resplit live: finer parts on slow links, floor-honest, byte-exact)**
 
 ---
 
@@ -14,7 +14,7 @@
 cd /home/z/my-project
 git pull                      # remote: github.com/kahlanhamza/IUM (private)
 . scripts/rust-env.sh         # persistent toolchain in .toolchain/ (gitignored)
-cargo test -p ium-core        # expect: 130 passed (57 unit + 23 adapter_s3 + 12 adapter_tus + 5 loopback HTTP + 22 integration + 4 supervisor + 3 real-data drill [HTTP live; TUS/S3 env-gated] + 1 slow-connection eviction drill + 1 s3 kill-9 drill [env-gated] + 1 tus kill-9 drill [env-gated] + 1 compile-fail contract)
+cargo test -p ium-core        # expect: 143 passed (65 unit + 23 adapter_s3 + 12 adapter_tus + 5 loopback HTTP + 22 integration + 4 supervisor + 3 real-data drill [HTTP live; TUS/S3 env-gated] + 1 slow-connection eviction drill + 1 adaptive-resplit drill [#27] + 1 s3 kill-9 drill [env-gated] + 1 tus kill-9 drill [env-gated] + 1 compile-fail contract + …)
 bash scripts/gate.sh          # before ANY push: gates on the COMMITTED tree (defect #11 rule)
 bash scripts/s3-test.sh       # live S3 suite vs pinned SeaweedFS 4.51 (downloads ~45 MB per run)
                               #   --with-real: also the real-data drill (#17)
@@ -128,7 +128,25 @@ discipline). M5 milestone complete per docs/04 — every box checked.
     honors cancel at entry before any Complete I/O, razor window journals
     `complete_after_cancel`, never a false Done; pinned by
     `tests/finishing_cancel.rs`, RED at the pre-fix HEAD).
-23. **Next tranche per docs/04**: more transports (WebDAV/Drive), accounts/OAuth,
+23. ~~**#27 — adaptive resplit: pattern #9 driven from measured throughput**~~ ✅
+    (2026-11-03, owner question "split chunks again and again for ultimate speed?"
+    answered honestly: the resplit machinery existed, fuzz-tested, with ZERO
+    runtime callers — and its split loop silently stayed whole at the floor
+    regime. Now shrink-only `ResplitPolicy` on the window-close path (median
+    bps → target-or-None, 90 s slow-confirm, 25% deadband, would-actually-split
+    gate), single-flight winner, epoch watch cancels peers' in-flight PUTs
+    BEFORE the reshape, transactional `replace_chunks` + `chunk_resplit` event,
+    budgets restart, stale confirms/errors journaled
+    (`stale_confirm_dropped`/`stale_error_dropped`) — never applied to a
+    stranger chunk. Grow direction drafted and deliberately rejected (S3 parts
+    confirm atomically: bigger parts = worse feedback + abandoned prefixes).
+    Physics in docs: splitting never creates bandwidth — the win is
+    first-confirmation latency, sooner eviction votes, less wire re-sent on
+    mid-part death. Pinned by `tests/adaptive_resplit.rs` (RED E0432/E0599;
+    GREEN: real ~22 MiB film, uniform 2 MiB/s lane, 1 part → floor-respecting
+    pieces, one abandoned prefix, sha256-exact) + the floor-regime pool test +
+    policy unit tests; commit `830a080`, gate + CI green).
+24. **Next tranche per docs/04**: more transports (WebDAV/Drive), accounts/OAuth,
     or the Sprint-2 UI — owner decides.
 
 ## 5. Defect audit trail
