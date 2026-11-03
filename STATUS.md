@@ -284,9 +284,29 @@ executed at least once.
     via RLIMIT_FSIZE, soak bounds (16,391 events → 2.4 MB journal / WAL→0 / RSS +5.5 MiB),
     `--with-longhaul` leg live vs SeaweedFS: telemetry + artifact + timebox-pause at a lease
     boundary + fresh-journal replay to Done byte-exact; docs/08 rows same-commit).
-30. **#35 — real-shell e2e probe**: tauri-driver on the ubuntu lane drives the actual UI
-    through create → progress → pause/resume → Done → cancel/no-object (register: the
-    shell ↔ supervisor seam — never driven once).
+30. ~~**#35 — real-shell e2e probe**: tauri-driver on the ubuntu lane drives the actual UI
+    through create → progress → pause/resume → Done → cancel/no-object~~ ✅ (2026-11-04,
+    BOTH legs green on CI run #75 through the real shell; issue closed with the full
+    seam-shakedown ledger; M6 COMPLETE — see docs/04).
+31. **Next tranche (owner decides the order)** — the readiness probes are done; the four
+    candidate directions from the M6 verdict, each filed as its own issue when started:
+    a. **Sprint-2 UX** — the shell is proven end-to-end but the UI is Sprint-1 dumb
+       components: drag-and-drop sources, notifications, settings persistence, queue
+       management, speed-cap control, per-job detail polish, installer assets.
+    b. **More transports** — WebDAV adapter first (plain HTTP family, resumability
+       honest-by-capability), then Google Drive (resumable upload protocol). Each new
+       transport is a new adapter↔wire probe class per the boundary register.
+    c. **Accounts / OAuth layer** — token storage via OS keyring (tauri plugin), account
+       model in the shell, adapter auth injection — design note FIRST (touches the
+       adapter trait's endpoint/token seam).
+    d. **Release engineering toward v0.1.0** — tauri bundle signed installers (3 OS),
+       auto-update channel decision, CHANGELOG 0.1.0 cut per the semver-0.x policy.
+32. **Kaggle cloud bench** (scaffolding committed: `scripts/kaggle/`, `scripts/kaggle_push.sh`,
+    token in gitignored `.secrets/kaggle_token`): move the owner-mandated intensive runs
+    off the sandbox — the 17-h overnight longhaul leg and expanded fuzz rounds run there
+    as notebook/kernel jobs; results land as artifacts + a session-log row.
+33. **Standing hygiene**: rotate the GitHub PAT (pasted into chat 6×, per §10) and the
+    Kaggle key at the next convenient break; keep `.secrets/` restore discipline on recycle.
 
 ## 5. Defect audit trail
 
@@ -426,6 +446,7 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-04 | **Issue #40 — the ACL granted the webview NOTHING (run #71 evidence).** #39's fix proven FIRST TRY on 7/8 jobs (core ×3 OS + ium-app ×3 OS + fmt — the with_handle wiring compiles everywhere); app-e2e then proved the click survives by WIRE TRUTH — recorder `tus_sessions: 1, tus_bytes: 25165824`, the full 24 MiB through the real shell via tus — and caught the next seam: the row froze at `probing pct=0` for the entire 30 s poll while the engine transferred (the job by journal truth went Running→Finishing→Done). Diagnosis: no `capabilities/` file existed; tauri v2's ACL allows APP commands by default (docs quote on the issue — that's why every invoke worked) but core-plugin commands are gated, and the `job_updated` stream is `plugin:event|listen` → silently denied (the listen() promise rejection is unhandled in App.tsx — silent by construction). Same gap broke the dialog-plugin file picker for real users. Fix: `ium-app/src-tauri/capabilities/default.json` = `core:default` + `dialog:default`, window `main` (validated JSON; the identifier set matches the docs' own example capability). CHANGELOG [Unreleased] Fixed entries for #39 + #40 | gates re-run on the committed tree; #40 closes when the e2e lane goes green | this commit |
 | 2026-11-04 | **Run #72 → #35 harness fix (row click).** #40's fix proven: leg A fully green through the real shell (recorder full 24 MiB; running → live progress → pause → resume → Done), then `element not interactable` clicking the row for the inspector — the jobs table is wider than the window (7 cols + 3 buttons), a full-width `<tr>` cannot be scrolled into view horizontally (geckodriver#1294 class); harness-only fix: click the row's first CELL (bubbles to the `<tr>` onClick — same user path). Evidence + mechanism on #35 | e2e compiles, fmt + clippy clean; closes when the lane goes green | this commit |
 | 2026-11-04 | **RED STREAK ENDED — run #75 ALL GREEN (8/8 jobs), the first since #61; #35 + #37 closed on the owner's raw-log evidence.** The owner pasted run #74's job log directly; it showed the deepest e2e failure mode yet: EVERY assert before it passed (row B found by file, `running`, cancel clicked, `Canceled` badge) and the test died at the last server-truth read — `recorder-b.json never appeared` (10 s poll). Root cause: a canceled PUT dies mid-body, the recorder's handler takes the read error, and the OLD recorder wrote its record file only after a completed request — a perfect "holds nothing" ending was indistinguishable from a missing server. Fix `dd046a7`: the record file is a server-truth surface and now exists from BOOT (all-zero record IS the truth "served nothing yet"). Verified locally before the single push: committed-tree gate GREEN (152/152 core, fmt, clippy `-D warnings`, vitest 9/9) + a wire-level smoke replaying the exact #74 scenario (boot-record exists + HEAD 404 pre-PUT + RST-mid-body leaves zeros + completed PUT still updates the record). One push → run 41726278945 GREEN; #35 and #37 closed with full ledger comments (every red #62–#74 mapped to its fix). Kaggle token restored to `.secrets/kaggle_token` (600, uncommitted) per the standing security note | run 41726278945 8/8 success; issues #35/#37 closed; row authored locally (unpushed by design — no CI run spent on docs) | `dd046a7` |
+| 2026-11-04 | **Housekeeping tranche after the green run — README to product standard, PR #38 resolved, roadmap truth.** (1) README.md rewritten from the stale Sprint-0 text ("45 tests", shell "parked") to a scannable product README: badges (ci/nightly/stress), highlights table, architecture diagram, invariants, quick start, transport/honesty table, test-lane matrix with the drills' pinned numbers, repo map, doc index, the loop as Contributing, security, status — every claim traced to the verified record (152 core tests recounted per-suite this session; 5 real server implementations; kill-9 zero-re-upload; soak ≈153 B/event). (2) PR #38 (`e2e-fix` → main, the async-commands variant of the #39 fix) CLOSED as superseded, not merged: main's `940ddc9` fixes the same abort at the root (`Supervisor::with_handle`, every spawn site, +2 regression tests) and run #75 proves the shell end-to-end; rationale comment posted on the PR, branch deleted. (3) docs/04 M6 checkboxes ticked + verdict paragraph (probes closed; #36/#39/#40 found-and-closed chain; next tranche = owner's call). (4) STATUS backlog §4 rewritten: #35 ✅, items 31–33 = the next-steps plan (Sprint-2 UX / WebDAV+Drive transports / OAuth+keyring / v0.1.0 packaging / Kaggle cloud bench for the 17-h longhaul + fuzz / token rotation). (5) Kaggle scaffolding + session evidence scripts committed (secret-scanned first: no token material in any tracked file). Sandbox recycled again mid-task (7th): `.secrets/` + `.toolchain/` wiped and restored per §0/§10; `.gate-target` cleared for disk headroom | gate on committed tree; push = one CI run on docs-only + untracked-script changes | this commit |
 
 ## 10. Security
 

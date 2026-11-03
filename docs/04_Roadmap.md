@@ -60,19 +60,25 @@ throttled slow connection) — see docs/05 "Real data only".
       `cargo doc` clean)
 - [x] #20 — versioning policy (semver), CHANGELOG.md discipline
 
-## M6 — Production readiness: the probe generation (filed 2026-11-03, milestone 5)
+## M6 — Production readiness: the probe generation — ✅ **COMPLETE** (2026-11-04: all 4 issues closed, CI run #75 8/8 green)
 The engine is feature-complete and reliability-hardened — but on TWO pinned servers, ONE
 impairment axis (bandwidth), minute-scale horizons, and fast CI links. Motivated by the
 boundary register (docs/08 §5): each probe class exercises seams for the FIRST time.
-- [ ] #32 — real-network impairment: packet loss, latency/jitter, mid-body RST
-      (proxy upgrade; eviction/retry seams at risk — lossy-but-alive must not be falsely evicted)
-- [ ] #33 — server diversity: a third S3 implementation (`rclone serve s3`) + a second TUS
+- [x] #32 — real-network impairment: packet loss, latency/jitter, mid-body RST
+      (proxy upgrade; eviction/retry seams at risk — lossy-but-alive must not be falsely evicted) — ✅ closed 2026-11-03: loss/RTT/RST models; local + cloud 41654248875 green; zero false evictions
+- [x] #33 — server diversity: a third S3 implementation (`rclone serve s3`) + a second TUS
       lane if pinnable; every wire-fact delta pinned or honestly recorded (optional
-      owner-cred lane for real AWS/B2 smoke)
-- [ ] #34 — long horizon & resource honesty: overnight B/s leg, journal growth + RSS
-      bounds, ENOSPC-while-journaling drill (what happens when TRUTH cannot be written)
-- [ ] #35 — the real shell driven end-to-end: tauri-driver e2e on the ubuntu lane
-      (create → progress → pause/resume → Done; cancel → no server object)
+      owner-cred lane for real AWS/B2 smoke) — ✅ closed 2026-11-03: rclone 1.75.2 23/23 + @tus/server 2.4.7 12/12, wire-fact ledgers; the first rclone run caught latent defect #36
+- [x] #34 — long horizon & resource honesty: overnight B/s leg, journal growth + RSS
+      bounds, ENOSPC-while-journaling drill (what happens when TRUTH cannot be written) — ✅ closed 2026-11-03: atomic state+event transitions, EFBIG drill (RLIMIT_FSIZE), soak bounds pinned, longhaul live green
+- [x] #35 — the real shell driven end-to-end: tauri-driver e2e on the ubuntu lane
+      (create → progress → pause/resume → Done; cancel → no server object) — ✅ closed 2026-11-04: both legs green on CI run #75 (tauri-driver → WebKitGTK under xvfb)
 
 DoD: every probe closed with wire evidence; the readiness verdict in STATUS.md upgraded
 per axis; any gap found files its own issue through the register discipline.
+
+**Verdict (2026-11-04):** every probe closed with wire/cloud evidence; the gaps the probes
+found (#36 Content-Length, #39 main-thread spawn abort, #40 missing ACL capabilities) were
+filed and closed through the register discipline; the red streak #62–#74 ended with run
+#75 all-green (8/8 jobs). Next tranche (transports / OAuth / Sprint-2 UX / v0.1.0
+packaging) is the owner's call.
