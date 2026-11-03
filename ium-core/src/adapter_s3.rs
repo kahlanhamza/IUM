@@ -806,8 +806,15 @@ impl TransferAdapter for S3MultipartAdapter {
         }
 
         // 0-byte job: the [(0,0)] lease is one honest PutObject round-trip.
+        // Content-Length: 0 is REQUIRED on the wire (issue #36): hyper sends
+        // neither Content-Length nor chunked-TE for an empty fixed-size body,
+        // and AWS S3 semantics — which rclone/gofakes3 enforces with 411
+        // MissingContentLength where SeaweedFS happened to be lenient — treat
+        // a PutObject without a length as invalid. Same mechanism UploadPart
+        // already uses below.
         if spec.source_size == 0 {
             let payload = PayloadHash::Sha256Hex(EMPTY_SHA.into());
+            let extra = [("content-length", "0")];
             let req = S3Request {
                 ctx: ErrorCtx::Chunk,
                 what: "PutObject",
@@ -815,7 +822,7 @@ impl TransferAdapter for S3MultipartAdapter {
                 target: &target,
                 query: &[],
                 payload: &payload,
-                extra: &[],
+                extra: &extra,
             };
             let resp = self.call(req, Body::from(Vec::new())).await?;
             let etag = etag_of(&resp)

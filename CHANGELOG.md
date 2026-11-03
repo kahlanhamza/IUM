@@ -81,8 +81,14 @@ prose. An entry without verifiable issue numbers does not belong here.
   call, then a bounded hold) makes the kill land deterministically at 25%:
   S4cancel cancels in 0.079 s with server HEAD 404; the same wedge gave
   S4pause a BOUNDED 10 s plateau (`pause_latency_s: 10.04`).
-
 ### Fixed
+- #36 — zero-byte PutObject sent no Content-Length: hyper puts neither
+  Content-Length nor chunked-TE on the wire for an empty fixed-size body,
+  and AWS S3 semantics (which rclone/gofakes3 enforces with 411
+  MissingContentLength where SeaweedFS happened to be lenient) treat a
+  PutObject without a length as invalid — found by #33's first rclone run
+  (22/23) and fixed the same way UploadPart already does it: an explicit
+  `content-length: 0` extra header. Both S3 lanes green after the fix.
 - #30 — the kill-9 TUS drill's wire ceiling was a calibrated race, now the
   zero-re-upload invariant is EXACT. Nightly run 41618615182 failed with
   `resume moved 21168128 for 20971520 missing — beyond the 64 KiB slack`: the
