@@ -43,3 +43,4 @@ tool-results/
 /tools/
 # vendor binaries are inputs/throwaways — string dumps are the evidence (ADR-009)
 rea-lab/**/*.exe
+tmp-verify/

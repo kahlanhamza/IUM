@@ -347,11 +347,90 @@ if [ "${#S5_FILES[@]}" -ge 2 ]; then
 fi
 
 # ===========================================================================
+say "S6: worse-case ladder — uniform B/s-class uplink (issue #28)"
+# ===========================================================================
+# The owner's measured reality (2026-11-03): the uplink is plain BYTES per
+# second, worse than any kbps-class model. Each leg chokes EVERY UploadPart
+# PUT (the whole link, not one peer) and runs the fleet-1 plan TIMEBOXED —
+# at 512 B/s a 30 MB film takes ~17 h, so the leg proves the ENGINE (resplit
+# fires once, floor respected, cancel honest, wire actually paced) not the
+# wire's patience. Set IUM_S6_RATES="32768,2048,512" to run the ladder;
+# empty/unset skips the leg (victim-mode bench only).
+IUM_S6_RATES="${IUM_S6_RATES:-}"
+if [ -n "$IUM_S6_RATES" ]; then
+  S6_SECONDS="${IUM_S6_SECONDS:-120}"
+  IFS=',' read -r -a S6_RATES <<< "$IUM_S6_RATES"
+  for R in "${S6_RATES[@]}"; do
+    R="${R//[[:space:]]/}"
+    [ -n "$R" ] || continue
+    say "S6[$R]: uniform uplink ${R} B/s, fleet 1, timebox ${S6_SECONDS}s, then cancel"
+    mkdir -p "$RUN/s6-$R"   # the bin opens <journal-dir>/journal.db
+    S6_PORT="$(free_port)"
+    $PY3 "$SCRIPT_DIR/throttle_proxy.py" "$S6_PORT" "$SRV_HOST" "$SRV_PORT" \
+      --victim-part all --victim-rate "$R" --victim-seconds 100000 \
+      > "$RUN/s6-proxy-$R.log" 2>&1 &
+    S6_PID=$!
+    for _ in $(seq 1 50); do
+      if $PY3 -c "import socket;s=socket.socket();s.settimeout(0.3);s.connect(('127.0.0.1',$S6_PORT));s.close()" 2>/dev/null; then break; fi
+      sleep 0.1
+    done
+    S6_EXIT=0
+    OUT_S6="$(run_bin s6worse --journal "$RUN/s6-$R" --file "$FF" \
+      --endpoint "http://127.0.0.1:$S6_PORT/$(basename "$BASE")/rw-s6-$R/$(basename "$FF")" \
+      --rate "$R" --seconds "$S6_SECONDS" 2>&1)" || S6_EXIT=1
+    # Grace: the canceled job's FINs must reach the proxy and its handlers
+    # must log their VICTIM-WIRE teardown lines before the process dies.
+    sleep 2
+    kill "$S6_PID" 2>/dev/null || true
+    wait "$S6_PID" 2>/dev/null || true
+    if [ "$S6_EXIT" != 0 ]; then die "S6[$R] bin failed: $OUT_S6"; fi
+    collect "$OUT_S6"
+    # Wire honesty (the only meter that cannot lie): the proxy's relayed-byte
+    # counter must show ~rate x timebox actually pumped — lower bound proves
+    # the link really was paced; upper bound proves the throttle never leaked.
+    # The counter comes from VICTIM-FINAL (SIGTERM dump) / VICTIM-TICK lines:
+    # a canceled engine's FIN queues behind ~1 MB of unread paced data, so
+    # teardown-based accounting would wait an hour at 512 B/s (issue #28).
+    $PY3 - "$R" "$S6_SECONDS" "$RUN/s6-proxy-$R.log" <<'EOF'
+import re, sys
+rate, tb, path = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
+final = tick = wire = 0
+for ln in open(path):
+    m = re.search(r"VICTIM-FINAL moved=(\d+)B", ln)
+    if m: final = int(m.group(1))
+    m = re.search(r"VICTIM-TICK moved=(\d+)B", ln)
+    if m: tick = max(tick, int(m.group(1)))
+    m = re.search(r"VICTIM-WIRE moved=(\d+)B", ln)
+    if m: wire += int(m.group(1))
+moved = max(final, tick, wire)
+lo = rate * tb / 4.0
+# upper bound budgets the honest kernel-buffer burst (~1 MB: the client may
+# push that into socket buffers before pacing backpressure clamps it) — an
+# UNTHROTTLED leg moves 22+ MB in a 60 s box, so this stays decisive.
+hi = rate * tb * 1.5 + rate * 60 + 1024 * 1024
+assert moved >= lo, f"S6[{rate}] wire: moved {moved} B < {lo:.0f} B lower bound "\
+                    f"(rate {rate} x timebox {tb}s) — the link was NOT paced"
+assert moved <= hi, f"S6[{rate}] wire: moved {moved} B > {hi:.0f} B upper bound — the throttle leaked"
+print(f"[realworld] S6[{rate}] wire honesty OK: {moved} B relayed at the paced rate")
+EOF
+    S6_KEY="$BASE/rw-s6-$R/$(basename "$FF")"
+    st="$(s3_status HEAD "$S6_KEY")"
+    [ "$st" = "404" ] || die "S6[$R]: canceled job's object exists (status $st) — a canceled upload must never complete"
+    echo "EVIDENCE {\"scenario\":\"s6worse-server-truth\",\"rate_Bps\":$R,\"head_status\":$st,\"object_never_completed\":true}" | tee -a "$EVID"
+    say "S6[$R] GREEN — resplit fired on a B/s-class link, floor respected, cancel honest"
+    wipe_bucket
+  done
+else
+  say "S6 skipped: IUM_S6_RATES not set (victim-mode bench only)"
+fi
+
+# ===========================================================================
 {
   echo
   echo "## raw child/resume logs"
   echo
   echo "- s2 attempts: $RUN/s2-*.journal.db (parent log per attempt)"
   echo "- throttle proxy: see $RUN/throttle-proxy.log"
+  if [ -n "${IUM_S6_RATES:-}" ]; then echo "- s6 ladder: $RUN/s6-proxy-*.log (VICTIM-WIRE lines are the wire meter)"; fi
 } >> "$EVID"
 say "ALL SCENARIOS GREEN — evidence: $EVID"

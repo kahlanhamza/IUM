@@ -23,8 +23,13 @@ whole link, not one bad peer). There is no latch and no expiry window: the
 link is slow for the scenario's whole life, and the scenario ends when the
 engine's own timebox cancels the job (tearing the paced bodies off the wire).
 Every throttled connection logs a `VICTIM-WIRE moved=<N>B in <S>s (<R> B/s)`
-line when its body phase ends — the harness's wire-honesty check sums these
-against rate x timebox.
+line when its body phase ends. PLUS the issue #28 wire meter, which must NOT
+depend on TCP teardown: a canceled engine's FIN queues BEHIND ~1 MB of unread
+paced data (FIN-WAIT-1 until the proxy drains it — ~1 hour at 512 B/s), so
+EOF/RST can never surface in a bounded test. Instead the proxy keeps a global
+relayed-bytes counter and prints `VICTIM-TICK moved=<N>B` every ~10 s while
+pacing, plus one `VICTIM-FINAL moved=<N>B` on SIGTERM — the harness sums
+those and never waits for the socket to die.
 
 Framing: the proxy forces `connection: close` on forwarded request heads, so
 each connection carries exactly one request/response pair. That keeps the
@@ -37,6 +42,8 @@ Usage: throttle_proxy.py LISTEN_PORT TARGET_HOST TARGET_PORT
 """
 import argparse
 import asyncio
+import os
+import signal
 import sys
 import time
 
@@ -79,6 +86,82 @@ class Relay:
                 headers[k.strip().lower()] = v.strip()
         return request_line, headers, rest
 
+    @staticmethod
+    async def _read_capped(src: asyncio.StreamReader, n: int, timeout: float):
+        """Read up to n bytes, giving up after `timeout` so the caller's loop
+        stays free to check the pacing schedule and the client's FIN. Returns
+        None on timeout (no information), b"" on real EOF, bytes otherwise.
+        """
+        try:
+            return await asyncio.wait_for(src.read(n), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+
+    async def _paced_relay(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter,
+                           until: int | None, rate: int | None, pre: bytes) -> int:
+        """Relay the request body client→server, paced to `rate` B/s when set.
+
+        Cyclic on purpose (issue #28 lesson): a long unbroken pacing sleep at
+        B/s-class rates hides the client's FIN for minutes — at 512 B/s a
+        single 64 KB buffer burst is ~2 minutes of schedule debt, and a naive
+        `sleep(debt)` would never notice the engine canceling the job. Every
+        cycle: read (capped at 250 ms), relay, then advance the schedule in
+        ≤250 ms steps — the schedule is target-based (`start + moved/rate`),
+        so the steps never change the rate, they only keep us responsive.
+        Returns the bytes actually moved; the caller logs them (VICTIM-WIRE).
+        """
+        moved = 0
+        start = time.monotonic()
+        last_tick = time.monotonic()
+        if pre:
+            n = min(len(pre), until) if until is not None else len(pre)
+            dst.write(pre[:n])
+            await dst.drain()
+            moved += n
+            if rate:
+                self.state["wire_moved"] += n
+        while until is None or moved < until:
+            if rate:
+                # Pay the FULL pacing debt BEFORE the next read — the schedule
+                # is target-based (`start + moved/rate`), so this IS the exact
+                # rate shape, and the un-read socket is exactly the intended
+                # impairment: the engine's writes block on TCP backpressure.
+                # The cost: with data sitting unread, `at_eof()` stays False
+                # (it demands an empty buffer), so client death is watched
+                # WITHOUT consuming — the transport stays registered between
+                # paced reads, so the kernel's RST when the client process
+                # exits lands in the reader as an exception (`exception()` is
+                # public API and pollable); a drained clean FIN shows in
+                # `at_eof()`. The issue #28 lesson: a blind `sleep(debt)` at
+                # 512 B/s is ~2 minutes per 64 KB burst and hides everything.
+                while True:
+                    behind = start + moved / rate - time.monotonic()
+                    if behind <= 0:
+                        break
+                    now = time.monotonic()
+                    if now - last_tick >= 10.0:
+                        last_tick = now
+                        print(f"[throttle-proxy] VICTIM-TICK moved={self.state['wire_moved']}B",
+                              flush=True)
+                    if src.exception() is not None or src.at_eof():
+                        return moved  # the client is gone — log what moved
+                    await asyncio.sleep(0.25)
+            n = CHUNK if until is None else min(CHUNK, until - moved)
+            try:
+                b = await asyncio.wait_for(src.read(n), timeout=0.25)
+            except asyncio.TimeoutError:
+                continue  # schedule is due but the wire is idle — re-check
+            except (ConnectionResetError, OSError):
+                return moved  # RST surfaced through the read itself
+            if b == b"":
+                return moved  # the client is gone (EOF at the transport)
+            dst.write(b)
+            await dst.drain()
+            moved += len(b)
+            if rate:
+                self.state["wire_moved"] += len(b)
+        return moved
+
     async def pump(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter,
                    count: int, rate: int | None, pre: bytes = b"") -> int:
         """Move exactly `count` body bytes; pace reads when a rate is set.
@@ -89,47 +172,11 @@ class Relay:
         the proxy then waits for bytes the client already sent, while the
         client waits for a response that can never complete.
         """
-        moved = 0
-        start = time.monotonic()
-        if pre:
-            n = min(len(pre), count)
-            dst.write(pre[:n])
-            await dst.drain()
-            moved += n
-        while moved < count:
-            n = min(CHUNK, count - moved)
-            b = await src.read(n)
-            if not b:
-                break
-            dst.write(b)
-            await dst.drain()
-            moved += len(b)
-            if rate:
-                target_t = start + moved / rate
-                behind = target_t - time.monotonic()
-                if behind > 0:
-                    await asyncio.sleep(behind)
-        return moved  # caller compares against `count` (False == vanished client)
+        return await self._paced_relay(src, dst, count, rate, pre)
 
     async def pump_until_eof(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter,
                              rate: int | None, pre: bytes = b"") -> int:
-        moved = len(pre)
-        start = time.monotonic()
-        if pre:
-            dst.write(pre)
-            await dst.drain()
-        while True:
-            b = await src.read(CHUNK)
-            if not b:
-                return moved
-            dst.write(b)
-            await dst.drain()
-            moved += len(b)
-            if rate:
-                target_t = start + moved / rate
-                behind = target_t - time.monotonic()
-                if behind > 0:
-                    await asyncio.sleep(behind)
+        return await self._paced_relay(src, dst, None, rate, pre)
 
     async def run(self) -> None:
         try:
@@ -258,7 +305,7 @@ class Relay:
 
 
 async def main_async(a: argparse.Namespace) -> None:
-    state = {"victim_taken": False, "victim_active_until": None}
+    state = {"victim_taken": False, "victim_active_until": None, "wire_moved": 0}
     target = (a.target_host, a.target_port)
 
     async def on_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -267,6 +314,16 @@ async def main_async(a: argparse.Namespace) -> None:
         await relay.run()
 
     server = await asyncio.start_server(on_conn, "127.0.0.1", a.listen_port)
+    # Issue #28 wire meter: the harness kills this proxy with SIGTERM the
+    # moment the scenario ends — a canceled engine's FIN would otherwise sit
+    # behind ~1 MB of unread paced data for the better part of an hour. Dump
+    # the global relayed-bytes counter FIRST, then die.
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, lambda: _dump_and_die(state))
+        except NotImplementedError:
+            pass  # windows
     model = (f"UNIFORM every UploadPart PUT @ {a.victim_rate} B/s" if a.victim_part == "all"
              else f"victim partNumber={a.victim_part} @ {a.victim_rate} B/s, "
                   f"{a.victim_seconds}s, once")
@@ -274,6 +331,11 @@ async def main_async(a: argparse.Namespace) -> None:
           flush=True)
     async with server:
         await server.serve_forever()
+
+
+def _dump_and_die(state: dict) -> None:
+    print(f"[throttle-proxy] VICTIM-FINAL moved={state['wire_moved']}B", flush=True)
+    os._exit(0)
 
 
 def main() -> None:

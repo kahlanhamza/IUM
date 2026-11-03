@@ -21,6 +21,16 @@
 //!   completed the object).
 //! * `s5` — concurrent fleet: three real films racing through ONE manager;
 //!   all Done; per-job and fleet throughput.
+//! * `s6worse` — the worse-case ladder leg (issue #28, owner reality 2026-11-03:
+//!   the uplink is B/s-class): the WHOLE uplink is uniformly slow through the
+//!   proxy (`--victim-part all`), fleet 1 so the plan is ONE large part the
+//!   5 MiB floor regime can actually split. TIMEBOXED — at 512 B/s a 30 MB
+//!   film takes ~17 hours, and the leg proves the ENGINE's adaptation, not
+//!   the wire's patience. At the box the job is canceled (a cancel under a
+//!   dying link must never complete the object). The resplit policy is armed
+//!   on EVERY connection — fast links included; it fires here because the
+//!   measured median says a part is > 90 s of wire time, the same arithmetic
+//!   that declines to churn a fast link.
 //!
 //! Env: IUM_S3_ENDPOINT / IUM_S3_ACCESS_KEY / IUM_S3_SECRET_KEY /
 //! IUM_S3_REGION (see `S3MultipartConfig::from_env`). Eviction policy is the
@@ -31,9 +41,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ium_core::adapter_s3::{S3MultipartAdapter, S3MultipartConfig};
-use ium_core::eviction::EvictionPolicy;
+use ium_core::chunk::{CHUNK_MAX, CHUNK_MIN};
+use ium_core::eviction::{EvictionPolicy, ResplitPolicy};
 use ium_core::state::JobState;
-use ium_core::{JobManager, JobSpec, SessionJournal, Supervisor};
+use ium_core::{ChunkState, JobManager, JobSpec, SessionJournal, Supervisor};
 
 fn arg_of(args: &[String], k: &str) -> Option<String> {
     args.iter()
@@ -156,11 +167,25 @@ async fn s3hostile(journal: &str, file: &str, endpoint: &str) -> Result<serde_js
                 .into(),
         );
     }
+    // Issue #28: surface resplits honestly. In VICTIM mode the fast peers
+    // outvote the impaired link in the fleet median, so this list is expected
+    // to be EMPTY here — the leg proves eviction, not resplit. Hiding the
+    // field would be the dishonest version of that fact.
+    let resplits: Vec<serde_json::Value> = snap
+        .events
+        .iter()
+        .filter(|(_, k, _)| k == "chunk_resplit")
+        .map(|(_, _, p)| {
+            serde_json::from_str::<serde_json::Value>(p)
+                .expect("chunk_resplit payload must be json")
+        })
+        .collect();
     Ok(serde_json::json!({
         "scenario": "s3hostile", "state": "Done", "size": size,
         "elapsed_s": elapsed.as_secs_f64(),
         "mean_throughput_Bps": size as f64 / elapsed.as_secs_f64(),
         "evictions": evictions,
+        "resplits": resplits,
     }))
 }
 
@@ -292,6 +317,132 @@ async fn s4cancel(journal: &str, file: &str, endpoint: &str) -> Result<serde_jso
     }))
 }
 
+/// Issue #28 — the worse-case ladder leg. The WHOLE uplink is B/s-class
+/// (uniform impairment through the proxy; the owner's measured reality, not
+/// one bad peer). Fleet 1 so the plan is ONE large part the floor regime can
+/// actually split (fleet 4 on the 30 MB film plans ~7.5 MiB parts that are
+/// unsplittable at the 5 MiB S3 floor — `plan()` refuses, correctly).
+///
+/// TIMEBOXED, deliberately not run-to-Done: at 512 B/s a 30 MB film takes
+/// ~17 hours, and this leg proves the ENGINE's adaptation on a dying-class
+/// link, not the wire's patience. At the timebox the job is canceled — a
+/// cancel under a dying link must never complete the object.
+///
+/// Assertions, all from journal truth (the resplit policy is armed on EVERY
+/// connection — it fires here because the measured median says a part is
+/// more than `slow_confirm` of wire time, the same arithmetic that declines
+/// to churn a fast link):
+///   1. exactly ONE `chunk_resplit` fired, with a REAL measured median and a
+///      self-consistent floor-respecting target:
+///      `target == clamp(median * target_secs, CHUNK_MIN, CHUNK_MAX)`;
+///   2. every piece still open (Pending/Leased) after the reshape is
+///      `>= CHUNK_MIN` — the S3 5 MiB non-final-part protocol minimum;
+///   3. the cancel is honored mid-slow-upload: state Canceled.
+///
+/// Wire truth (bytes actually pumped at the impaired rate) is the harness's
+/// job — the proxy's VICTIM-WIRE log is the only honest meter of the wire.
+async fn s6worse(
+    journal: &str,
+    file: &str,
+    endpoint: &str,
+    rate_bps: u64,
+    timebox: Duration,
+) -> Result<serde_json::Value, String> {
+    let m = fresh_manager(journal)?;
+    let sup = Supervisor::new(Arc::clone(&m));
+    let spec = spec_for(file, endpoint)?;
+    let rec = m.create_job(&spec, 1).map_err(|e| e.to_string())?; // ONE large part
+    let t0 = Instant::now();
+    sup.drive(&rec.id);
+    tokio::time::sleep(timebox).await;
+    let frontier_at_cancel = frontier_of(&m, &rec.id)?;
+    let canceled = sup.cancel(&rec.id).await.map_err(|e| e.to_string())?;
+    if canceled.state != JobState::Canceled {
+        return Err(format!(
+            "s6worse: state after cancel is {:?} (must be Canceled)",
+            canceled.state
+        ));
+    }
+    let snap = m.snapshot(&rec.id).map_err(|e| e.to_string())?;
+    let resplits: Vec<serde_json::Value> = snap
+        .events
+        .iter()
+        .filter(|(_, k, _)| k == "chunk_resplit")
+        .map(|(_, _, p)| {
+            serde_json::from_str::<serde_json::Value>(p)
+                .expect("chunk_resplit payload must be json")
+        })
+        .collect();
+    if resplits.is_empty() {
+        return Err(
+            "s6worse: no chunk_resplit in the journal — the resplit policy never \
+             fired on a B/s-class link (issue #28 RED)"
+                .into(),
+        );
+    }
+    if resplits.len() > 1 {
+        return Err(format!(
+            "s6worse: {} resplits in one timebox — hysteresis must hold the \
+             plan at one reshape in the floor regime",
+            resplits.len()
+        ));
+    }
+    let payload = &resplits[0];
+    let median_bps = payload["median_bps"]
+        .as_f64()
+        .ok_or("s6worse: resplit median missing")?;
+    if !(median_bps.is_finite() && median_bps > 0.0) {
+        return Err(format!(
+            "s6worse: resplit median is not a real measured rate: {median_bps}"
+        ));
+    }
+    // Self-consistency, not assumption: the target must be exactly what the
+    // recorded median implies under the production policy (its 30 s of wire
+    // time), floor/ceiling clamped. The median itself is the engine's own
+    // measurement — if the socket buffers inflate it, the target follows it,
+    // and the proxy's wire log is where the truth is checked, not here.
+    let pol = ResplitPolicy::default();
+    let want_target = ((median_bps * pol.target_secs) as u64).clamp(CHUNK_MIN, CHUNK_MAX);
+    let target = payload["target"]
+        .as_u64()
+        .ok_or("s6worse: target missing")?;
+    if target != want_target {
+        return Err(format!(
+            "s6worse: resplit target {target} != clamp(median {median_bps:.0} B/s × \
+             {:.0} s) = {want_target}",
+            pol.target_secs
+        ));
+    }
+    // The floor: every still-open piece must be >= CHUNK_MIN after the
+    // reshape — no infinite split below the S3 protocol minimum.
+    let open_piece_min = snap
+        .chunks
+        .iter()
+        .filter(|c| matches!(c.state, ChunkState::Pending | ChunkState::Leased))
+        .map(|c| c.end - c.begin)
+        .min();
+    if let Some(min_span) = open_piece_min {
+        if min_span < CHUNK_MIN {
+            return Err(format!(
+                "s6worse: an open piece spans {min_span} B — below the \
+                 5 MiB S3 protocol floor"
+            ));
+        }
+    }
+    Ok(serde_json::json!({
+        "scenario": "s6worse", "state": "Canceled",
+        "rate_Bps": rate_bps, "timebox_s": timebox.as_secs_f64(),
+        "size": spec.source_size,
+        "elapsed_s": t0.elapsed().as_secs_f64(),
+        "frontier_at_cancel": frontier_at_cancel,
+        "resplit_median_Bps": median_bps,
+        "resplit_target": target,
+        "resplit_chunks_before": payload["chunks_before"],
+        "resplit_chunks_after": payload["chunks_after"],
+        "open_piece_min": open_piece_min,
+    }))
+}
+
 async fn s5(
     journal: &str,
     files: &[String],
@@ -383,8 +534,29 @@ fn main() {
                 .expect("runtime")
                 .block_on(s5(&journal, &files, &base))
         }
+        "s6worse" => {
+            let file = arg_of(&args, "--file").expect("--file required");
+            let endpoint = arg_of(&args, "--endpoint").expect("--endpoint required");
+            let rate: u64 = arg_of(&args, "--rate")
+                .expect("--rate B/s required")
+                .parse()
+                .expect("--rate must be an integer bytes/s");
+            let secs: u64 = arg_of(&args, "--seconds")
+                .expect("--seconds required")
+                .parse()
+                .expect("--seconds must be an integer");
+            tokio::runtime::Runtime::new()
+                .expect("runtime")
+                .block_on(s6worse(
+                    &journal,
+                    &file,
+                    &endpoint,
+                    rate,
+                    Duration::from_secs(secs),
+                ))
+        }
         other => Err(format!(
-            "unknown scenario '{other}' (s1|s3hostile|s4pause|s4cancel|s5)"
+            "unknown scenario '{other}' (s1|s3hostile|s4pause|s4cancel|s5|s6worse)"
         )),
     };
     match result {
