@@ -453,11 +453,30 @@ async fn s6worse(
         })
         .collect();
     if resplits.is_empty() {
-        return Err(
+        // Self-diagnosing RED (issue #28): the cloud run 41568413124 failed
+        // this leg with no visibility — carry the journal's shape in the
+        // error so the next RED reads its own cause.
+        let kinds: std::collections::BTreeMap<&str, usize> =
+            snap.events
+                .iter()
+                .fold(std::collections::BTreeMap::new(), |mut m, (_, k, _)| {
+                    *m.entry(k.as_str()).or_insert(0) += 1;
+                    m
+                });
+        let shape: Vec<String> = snap
+            .chunks
+            .iter()
+            .map(|c| {
+                format!(
+                    "#{} {}..{} {:?} confirmed={}",
+                    c.idx, c.begin, c.end, c.state, c.bytes_confirmed
+                )
+            })
+            .collect();
+        return Err(format!(
             "s6worse: no chunk_resplit in the journal — the resplit policy never \
-             fired on a B/s-class link (issue #28 RED)"
-                .into(),
-        );
+             fired on a B/s-class link (issue #28 RED); events={kinds:?} chunks={shape:?}"
+        ));
     }
     if resplits.len() > 1 {
         return Err(format!(

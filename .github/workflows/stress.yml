@@ -82,5 +82,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: realworld-stress-evidence
-          path: rea-lab/realworld/evidence-*.md
+          path: |
+            rea-lab/realworld/evidence-*.md
+            rea-lab/realworld/run-*/
           if-no-files-found: error
