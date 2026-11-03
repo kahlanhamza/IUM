@@ -173,6 +173,78 @@ impl TransferAdapter for WedgeAdapter {
     }
 }
 
+/// Issue #28 diagnostics: the runner's S6[2048] legs refuse to fire the
+/// resplit even though every paper condition holds — this wrapper samples
+/// the adapter's OWN progress meter every 2 s to stderr, so a dispatched run
+/// shows the engine's actual progress curve (burst size, freeze point,
+/// per-attempt shape) inside the run log.
+struct TelemetryAdapter {
+    inner: Arc<dyn TransferAdapter>,
+}
+
+#[async_trait]
+impl TransferAdapter for TelemetryAdapter {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn capabilities(&self) -> Capability {
+        self.inner.capabilities()
+    }
+
+    async fn probe(&self, spec: &JobSpec) -> Result<ProbeReport, AdapterError> {
+        self.inner.probe(spec).await
+    }
+
+    async fn upload_chunk(
+        &self,
+        spec: &JobSpec,
+        lease: &Lease,
+        progress: &ProgressReporter,
+    ) -> Result<ChunkConfirm, AdapterError> {
+        let sampler = {
+            let progress = progress.clone();
+            let idx = lease.idx;
+            tokio::spawn(async move {
+                let t0 = std::time::Instant::now();
+                loop {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    eprintln!(
+                        "[s6worse][progress] idx={idx} t=+{:.1}s moved={}",
+                        t0.elapsed().as_secs_f64(),
+                        progress.moved()
+                    );
+                }
+            })
+        };
+        let out = self.inner.upload_chunk(spec, lease, progress).await;
+        sampler.abort();
+        out
+    }
+
+    async fn verify(&self, spec: &JobSpec) -> Result<VerifyReport, AdapterError> {
+        self.inner.verify(spec).await
+    }
+
+    async fn reattach(&self, endpoint: &str, token: &str) -> Result<(), AdapterError> {
+        self.inner.reattach(endpoint, token).await
+    }
+}
+
+/// A fresh manager whose real adapter reports its progress curve to stderr.
+fn telemetry_manager(journal_dir: &str) -> Result<Arc<JobManager>, String> {
+    let db = std::path::Path::new(journal_dir).join("journal.db");
+    let journal = SessionJournal::open(&db).map_err(|e| format!("journal open: {e}"))?;
+    let mut m = JobManager::with_journal(journal).map_err(|e| format!("manager: {e}"))?;
+    let real = S3MultipartAdapter::new(S3MultipartConfig::from_env().map_err(|e| e.to_string())?)
+        .map_err(|e| format!("adapter: {e}"))?;
+    m.register_adapter(Arc::new(TelemetryAdapter {
+        inner: Arc::new(real),
+    }));
+    m.set_eviction_policy(EvictionPolicy::default());
+    Ok(Arc::new(m))
+}
+
 /// A fresh manager whose real adapter is wrapped in the deterministic wedge.
 fn wedge_manager(
     journal_dir: &str,
@@ -463,7 +535,7 @@ async fn s6worse(
     rate_bps: u64,
     timebox: Duration,
 ) -> Result<serde_json::Value, String> {
-    let m = fresh_manager(journal)?;
+    let m = telemetry_manager(journal)?;
     let sup = Supervisor::new(Arc::clone(&m));
     let spec = spec_for(file, endpoint)?;
     let rec = m.create_job(&spec, 1).map_err(|e| e.to_string())?; // ONE large part
