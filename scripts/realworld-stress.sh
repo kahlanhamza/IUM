@@ -303,11 +303,29 @@ wipe_bucket
 say "S4: user actions (pause/resume then cancel)"
 # ===========================================================================
 S4_SHA="$(sha_of "$FF")"
-OUT_P="$(run_bin s4pause --journal "$RUN/s4pause" --file "$FF" --endpoint "$BASE/rw-s4/pause.mp4")" || die "S4 pause bin failed: $OUT_P"
+# The pause leg runs through a mild uniform throttle (2 MiB/s — issue #29,
+# second face): on a runner the loopback finishes the whole film between two
+# 25 ms polls and the 10% pause point never exists. At 2 MiB/s the point
+# lasts ~4 s — a REAL mid-flight pause on a realistic link, race-free. The
+# cancel leg stays on the deterministic in-process wedge (no throttle needed).
+S4_PAUSE_RATE=2097152
+S4_PORT="$(free_port)"
+$PY3 "$SCRIPT_DIR/throttle_proxy.py" "$S4_PORT" "$SRV_HOST" "$SRV_PORT" \
+  --victim-part all --victim-rate "$S4_PAUSE_RATE" --victim-seconds 100000 \
+  > "$RUN/s4-pause-proxy.log" 2>&1 &
+S4_PID=$!
+for _ in $(seq 1 50); do
+  if $PY3 -c "import socket;s=socket.socket();s.settimeout(0.3);s.connect(('127.0.0.1',$S4_PORT));s.close()" 2>/dev/null; then break; fi
+  sleep 0.1
+done
+OUT_P="$(run_bin s4pause --journal "$RUN/s4pause" --file "$FF" \
+  --endpoint "http://127.0.0.1:$S4_PORT/$(basename "$BASE")/rw-s4/pause.mp4")" || { kill "$S4_PID" 2>/dev/null || true; die "S4 pause bin failed: $OUT_P"; }
+kill "$S4_PID" 2>/dev/null || true
+wait "$S4_PID" 2>/dev/null || true
 collect "$OUT_P"
 s3_get_to "$BASE/rw-s4/pause.mp4" "$RUN/s4-received.mp4" >/dev/null
 [ "$(sha_of "$RUN/s4-received.mp4")" = "$S4_SHA" ] || die "S4: paused job's read-back sha256 mismatch"
-echo "EVIDENCE {\"scenario\":\"s4pause-readback\",\"sha256_ok\":true}" | tee -a "$EVID"
+echo "EVIDENCE {\"scenario\":\"s4pause-readback\",\"sha256_ok\":true,\"pause_leg_rate_Bps\":$S4_PAUSE_RATE}" | tee -a "$EVID"
 rm -f "$RUN/s4-received.mp4"
 wipe_bucket
 

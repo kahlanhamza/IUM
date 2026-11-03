@@ -109,7 +109,12 @@ fn fresh_manager(journal_dir: &str) -> Result<Arc<JobManager>, String> {
 /// stays HEAD 404.
 struct WedgeAdapter {
     inner: Arc<dyn TransferAdapter>,
+    /// Calls numbered `wedge_after .. wedge_until` await at entry; everything
+    /// else passes. `wedge_until = None` wedges every later call forever
+    /// (s4cancel — never resumes); `Some(fleet)` releases the post-resume
+    /// re-leased calls so a paused job can still finish (s4pause).
     wedge_after: u32,
+    wedge_until: Option<u32>,
     calls: AtomicU32,
 }
 
@@ -134,7 +139,8 @@ impl TransferAdapter for WedgeAdapter {
         progress: &ProgressReporter,
     ) -> Result<ChunkConfirm, AdapterError> {
         let n = self.calls.fetch_add(1, Ordering::Relaxed);
-        if n >= self.wedge_after {
+        let wedged = n >= self.wedge_after && self.wedge_until.map_or(true, |until| n < until);
+        if wedged {
             // Wedge at ENTRY: droppable forever, zero wire bytes. The drive
             // loop's select! abandons it the moment cancel_rx fires.
             return std::future::pending::<Result<ChunkConfirm, AdapterError>>().await;
@@ -152,7 +158,11 @@ impl TransferAdapter for WedgeAdapter {
 }
 
 /// A fresh manager whose real adapter is wrapped in the deterministic wedge.
-fn wedge_manager(journal_dir: &str, wedge_after: u32) -> Result<Arc<JobManager>, String> {
+fn wedge_manager(
+    journal_dir: &str,
+    wedge_after: u32,
+    wedge_until: Option<u32>,
+) -> Result<Arc<JobManager>, String> {
     let db = std::path::Path::new(journal_dir).join("journal.db");
     let journal = SessionJournal::open(&db).map_err(|e| format!("journal open: {e}"))?;
     let mut m = JobManager::with_journal(journal).map_err(|e| format!("manager: {e}"))?;
@@ -161,6 +171,7 @@ fn wedge_manager(journal_dir: &str, wedge_after: u32) -> Result<Arc<JobManager>,
     m.register_adapter(Arc::new(WedgeAdapter {
         inner: Arc::new(real),
         wedge_after,
+        wedge_until,
         calls: AtomicU32::new(0),
     }));
     m.set_eviction_policy(EvictionPolicy::default());
@@ -266,6 +277,13 @@ async fn s3hostile(journal: &str, file: &str, endpoint: &str) -> Result<serde_js
 }
 
 async fn s4pause(journal: &str, file: &str, endpoint: &str) -> Result<serde_json::Value, String> {
+    // Issue #29, second face: this poll raced fast links (cloud run
+    // 41569827742: the whole film completed between two 25 ms polls). The
+    // WEDGE cannot fix it — pause is COOPERATIVE (journaled at the next lease
+    // boundary) and a wedged call never returns, so Paused would never land.
+    // The harness therefore runs this leg through a mild uniform throttle
+    // (2 MiB/s): the 10% pause point then lasts ~4 s — a real mid-flight
+    // pause on a realistic link, no race, no engine change.
     let m = fresh_manager(journal)?;
     let sup = Supervisor::new(Arc::clone(&m));
     let spec = spec_for(file, endpoint)?;
@@ -351,7 +369,7 @@ async fn s4cancel(journal: &str, file: &str, endpoint: &str) -> Result<serde_jso
     // runner the whole 30 MB film previously completed between two polls and
     // the scenario never saw a cancelable moment. The journal is provably
     // stable at one confirmed part when the cancel lands.
-    let m = wedge_manager(journal, 1)?;
+    let m = wedge_manager(journal, 1, None)?;
     let sup = Supervisor::new(Arc::clone(&m));
     let spec = spec_for(file, endpoint)?;
     let rec = m.create_job(&spec, 4).map_err(|e| e.to_string())?;
