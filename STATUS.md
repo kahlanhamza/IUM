@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-03** · Phase: **M6 in progress — #32 + #33 CLOSED (server diversity: suite green against THREE S3 + TWO TUS implementations; the probe's first rclone run caught real defect #36, fixed same session). Open: #34 #35. #1–#33 + #36 ALL closed.**
+> Last updated: **2026-11-03** · Phase: **M6 in progress — #32 + #33 + #34 CLOSED (#34: ENOSPC honesty — mid-transfer disk-full parks the job Paused atomically, half-transition hole closed, resource bounds pinned under a 16k-event soak, longhaul leg proven live vs SeaweedFS with honest timebox-pause + fresh-journal replay). Open: #35. #1–#34 + #36 ALL closed.**
 
 ---
 
@@ -80,7 +80,12 @@ harness leaving the victim model armed on the rtt leg, engine innocent). ✅ #33
 rehearsal, rclone serve s3 1.75.2 — 23/23) and TWO TUS implementations (tusd 2.10.1,
 @tus/server 2.4.7 — 12/12 with one loud recorded delta); the probe's first rclone run
 caught #36, a latent real-AWS defect the canonical server masked, fixed same session).
-Open: #34 (long horizon + ENOSPC), #35 (real-shell WebDriver e2e). Owner's feature
+✅ #34 closed (2026-11-03 — the journal seam: atomic `set_job_state_event`, honest
+Paused park on mid-transfer ENOSPC, half-transition RED closed, real-OS EFBIG pin via
+RLIMIT_FSIZE, soak bounds pinned (16,391 events → 2.4 MB / WAL→0 / RSS +5.5 MiB),
+`--with-longhaul` leg live vs SeaweedFS with honest timebox-pause + fresh-journal
+replay byte-exact).
+Open: #35 (real-shell WebDriver e2e). Owner's feature
 tranche (WebDAV/Drive, OAuth, Sprint-2 UI) decides after M6.
 
 ## 4. Backlog / next (ordered — milestone [M3: Real transports](https://github.com/kahlanhamza/IUM/milestone/2))
@@ -180,9 +185,14 @@ tranche (WebDAV/Drive, OAuth, Sprint-2 UI) decides after M6.
     defect SeaweedFS masked, fixed same session; @tus/server 2.4.7 lane 12/12 with ONE
     loud recorded delta (tusd's GET-download is an extension, not core); wire-fact
     ledgers on both issues; ci.yml Linux diversity legs; docs/08 rows same-commit).
-29. **#34 — long-horizon & resource probe**: overnight B/s leg, journal/RSS growth bounds,
+29. ~~**#34 — long-horizon & resource probe**: overnight B/s leg, journal/RSS growth bounds,
     ENOSPC-while-journaling drill — what happens when TRUTH cannot be written (register
-    rows: journal ↔ everything).
+    rows: journal ↔ everything)~~ ✅ (2026-11-03 — atomic `set_job_state_event` (both-or-neither
+    transitions), honest park Paused + `journal_write_failed` on mid-transfer journal failure
+    (best-effort when the disk is still full — loud error, truthful row), real-OS EFBIG pin
+    via RLIMIT_FSIZE, soak bounds (16,391 events → 2.4 MB journal / WAL→0 / RSS +5.5 MiB),
+    `--with-longhaul` leg live vs SeaweedFS: telemetry + artifact + timebox-pause at a lease
+    boundary + fresh-journal replay to Done byte-exact; docs/08 rows same-commit).
 30. **#35 — real-shell e2e probe**: tauri-driver on the ubuntu lane drives the actual UI
     through create → progress → pause/resume → Done → cancel/no-object (register: the
     shell ↔ supervisor seam — never driven once).
@@ -317,6 +327,7 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-03 | **M6 filed — production-readiness probe generation** (milestone 5, issues #32–#35 via `scripts/file_m6.py`): the owner's "does our engine ready? I don't think so" answered honestly — the engine is hardened on TWO pinned servers, ONE impairment axis (bandwidth), minute-scale horizons, and a never-driven shell. The four probes come straight from docs/08 §5's prediction table (a new probe class = first-time seam exposure): #32 loss/latency/RST (eviction+retry seams), #33 server diversity (adapter↔wire seams), #34 long-horizon+ENOSPC (journal seam), #35 real-shell WebDriver e2e (shell↔supervisor seam, never driven once). docs/04 M6 section added; STATUS backlog rewritten; feature tranche decision (WebDAV/Drive, OAuth, Sprint-2 UI) deferred to the owner until after M6 | milestone 5 open 0/4; probes ready for the loop | `f8e0208` |
 | 2026-11-03 | **#32 CLOSED — real-network models through the full loop** (design note + RED on the issue → implement → local real-data GREEN → cloud GREEN): `throttle_proxy.py` gains `--loss PCT` (RTO-scale stalls U(0.2,2.0)s per relayed segment — the application-observable of packet loss; a userspace relay CANNOT drop in-stream bytes), `--latency-ms/--jitter-ms` (connect+response RTT, bandwidth untouched), `--reset-after-bytes N` (ONE-SHOT hard RST of both ends via SO_LINGER=0 when the first UploadPart PUT crosses N bytes), `--victim-part none`; all sleeps responsive (≤250 ms steps watching the client — the #28 lesson). `realworld_stress s7net --model loss\|rtt\|reset` asserts journal truth per model (rtt: ZERO evictions/resplits — an alive-but-latent link is never churned; reset: ONE counted `chunk_error {kind: Transient, action: Retry}` then Done); harness S7 legs carry wire truth (LOSS/RESET-WIRE lines) + server truth (read-back sha256); `stress.yml` `net_models` input; docs/08 rows updated same-commit. **The probe caught its first bug on its first local run** — the rtt leg's own assert refused to pass because the harness had left the victim model ARMED (`--victim-part 2` = 96 KiB/s default); the engine's eviction of that secretly-throttled part was textbook-correct — fixed with `--victim-part none` + help-text trap warning. Local: S1–S5 + all three S7 legs green (real 30 MB film `5b603ec1…`, SeaweedFS 4.51: loss = 9 stalls absorbed 0 evictions; rtt = 16 pauses 0 churn; reset = RST at 1,064,960 B exactly once + one counted retry). **Cloud run 41654248875 @ `6f514c7` ALL GREEN**: loss = 11 stalls/0 evictions @ 6.3 s; rtt = 16 pauses/0 churn @ 4.5 s; reset = RST at 1,097,728 B exactly once, retry completed byte-exact @ 0.54 s. Offline 146/146; committed-tree gate GREEN | issue #32 closed with wire evidence | `6f514c7`, run 41654248875 |
 | 2026-11-03 | **#33 closed — server diversity probe + #36 (adapter defect it caught)**: `s3-test.sh --server rclone` (pinned rclone 1.75.2 `serve s3`, SHA256SUMS supply-chain guard) — first-ever third-implementation run was RED 22/23: zero-byte PutObject went out with NEITHER Content-Length nor chunked-TE and gofakes3 enforces AWS-real 411 MissingContentLength where SeaweedFS was lenient (latent real-AWS bug) → #36 filed with the RED, fixed same session (explicit `content-length: 0`, UploadPart's existing mechanism) → rclone 23/23 + SeaweedFS 23/23. `tus-test.sh --server tus-node` (pinned @tus/server 2.4.7 + @tus/file-store 2.1.2, committed package-lock.json = integrity guard) — 12/12 with ONE loud recorded delta: tusd's GET-download is an extension, NOT tus core (read-back tests loud-skip via `IUM_TUS_SERVER`). Wire-fact ledgers on both issues (ListParts-works-despite-docs, `&#34;` numeric entities re-confirmed, 409/412/204-Location facts); ci.yml Linux diversity legs; docs/08 rows updated same-commit | rclone 23/23, tus-node 12/12, canonical lanes re-green, offline 146/146, committed-tree gate GREEN on `a35d881` |
+| 2026-11-03 | **#34 closed — long-horizon & resource honesty**: the journal seam probed and hardened. **RED ×2 at HEAD** (posted on the issue): (1) mid-transfer ENOSPC left the job dangling `Running` (loud to the caller, a lie of omission in the journal), (2) the HALF-TRANSITION — `transition()`'s two autocommit writes let a disk-full commit the state row and lose its event. Fix: `SessionJournal::set_job_state_event` (UPDATE + event in ONE transaction — both-or-neither) + `JobManager::park_on_journal_failure` (on `EngineError::Journal` escaping drive/finish: best-effort atomic park to `Paused` + `journal_write_failed`; when the disk is STILL full the park itself fails loudly, the row stays truthful, the original error always returned; `Finishing` intentionally stays Finishing — resume re-enters the verify gate, Complete idempotent per #24). Drill hooks: `SessionJournal::drill_fail_writes` (SQLite-test-suite-style injected SQLITE_FULL) + `tests/enospc_rlimit_drill.rs` (REAL EFBIG: RLIMIT_FSIZE + SIGXFSZ-ignored in its own process — pins loud + truthful + recoverable + byte-exact-after-free). Soak: `tests/soak_bounds.rs` drives the REAL manager through 16,391 confirm events (64 MiB in 4 KiB server-acked segments) — **measured 2,502,656 B journal after `checkpoint_wal(TRUNCATE)` (≈153 B/event, linear), WAL → 0, RSS delta 5,644 KiB** — bounds pinned at 32 MB / 4096 B / 256 MiB. Longhaul: `realworld_stress longhaul` + `scripts/longhaul.sh` + `s3-test.sh --with-longhaul FILE RATE SECS` — uniform paced lane, `[longhaul][persist]` telemetry (frontier / journal bytes / RSS), honest TIMEBOX-PAUSE (never cancel; lands at the next lease boundary — part-scale physics documented), FRESH-journal replay + resume to Done, direct read-back sha256; **live vs SeaweedFS 4.51: pause landed at 176 s, replay resumed byte-exact, artifact in `rea-lab/longhaul/`**; the first live run's own artifact caught the harness bug (endpoint bypassed the proxy — no UNIFORM lines) — fixed, re-run green. docs/08 rows same-commit. 30 MB @ 512 B/s ≈ 17 h overnight config documented on the issue (honest in-session timebox-cancel; the harness is what shipped) | offline 150/150 (fmt + clippy `-D warnings` + tests), ENOSPC drills GREEN (injected ×2 + real-OS ×1), soak within pinned bounds, longhaul GREEN live, #34 closed by commit |
 
 ## 10. Security
 

@@ -47,7 +47,7 @@
 //! PRODUCTION default everywhere (10 s window, 0.4× median floor, 2 strikes)
 //! — no test shrink: the real-world drill earns real-world timings.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -663,6 +663,178 @@ async fn s6worse(
     }))
 }
 
+/// Issue #34 — the long-horizon leg. The #28 ladder legs are MINUTES; the
+/// owner's link is HOURS (30 MB @ 512 B/s ≈ 17 h). This scenario runs the
+/// real S3 adapter through the uniform-throttle proxy for `--seconds`
+/// (the TIMEBOX) and then ends the leg HONESTLY:
+///
+/// * done before the timebox → `Done` (a short leg is still a leg);
+/// * timebox fires first → PAUSE, never cancel — the leg must stay
+///   RESUMABLE, which is exactly what an overnight run needs when the box
+///   must be reclaimed;
+///
+/// and in BOTH cases: fresh manager over the same journal (the fresh-process
+/// replay), resume to `Done`, verify-before-declare intact, byte-exactness
+/// proven by the harness's server read-back (the caller's job, as in #32).
+/// Persistence telemetry every 5 s: `[longhaul][persist]` lines with the
+/// frontier, the journal's on-disk bytes, and the process RSS high-water —
+/// the numbers an overnight artifact needs.
+async fn longhaul(
+    journal: &str,
+    file: &str,
+    endpoint: &str,
+    rate_bps: u64,
+    timebox: Duration,
+) -> Result<serde_json::Value, String> {
+    let m = telemetry_manager(journal)?;
+    let sup = Supervisor::new(Arc::clone(&m));
+    let spec = spec_for(file, endpoint)?;
+    let rec = m.create_job(&spec, 4).map_err(|e| e.to_string())?;
+    let t0 = Instant::now();
+
+    // Persistence telemetry: frontier, journal bytes, RSS high-water.
+    let journal_dir = journal.to_string();
+    let rss_hwm = Arc::new(AtomicU64::new(0));
+    let persist = {
+        let id = rec.id.clone();
+        let m_tel = Arc::clone(&m);
+        let rss_hwm = Arc::clone(&rss_hwm);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let frontier = frontier_of(&m_tel, &id).unwrap_or(0);
+                let jb = journal_bytes(&journal_dir);
+                let rss = rss_kb();
+                rss_hwm.fetch_max(rss, Ordering::Relaxed);
+                eprintln!(
+                    "[longhaul][persist] t=+{:.1}s frontier={frontier} journal_bytes={jb} rss_kb={rss}",
+                    t0.elapsed().as_secs_f64()
+                );
+            }
+        })
+    };
+
+    sup.drive(&rec.id);
+    tokio::time::sleep(timebox).await;
+
+    // Honest timebox: pause (resumable), never cancel. If the job already
+    // finished inside the timebox, the leg is a `Done` leg.
+    let mid_state = m.snapshot(&rec.id).map_err(|e| e.to_string())?.job.state;
+    let (frontier_at_pause, paused_s) = if matches!(
+        mid_state,
+        JobState::Done | JobState::Failed | JobState::Canceled
+    ) {
+        (frontier_of(&m, &rec.id)?, t0.elapsed().as_secs_f64())
+    } else {
+        let frontier_at_pause = frontier_of(&m, &rec.id)?;
+        sup.pause(&rec.id).map_err(|e| e.to_string())?;
+        // Pause is COOPERATIVE (supervisor.rs): it lands at the next LEASE
+        // boundary — on a paced link one 5 MiB-floor part IS minutes of wire,
+        // so the bound must be part-scale, not poll-scale. The overnight
+        // operator sizes it via IUM_LONGHAUL_PAUSE_SECS (default 300 s);
+        // the persist lines show the frontier frozen at part granularity —
+        // S3 parts are atomic mid-flight (bytes_confirmed is server-acked
+        // truth, ADR-002).
+        let pause_bound = Duration::from_secs(
+            std::env::var("IUM_LONGHAUL_PAUSE_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(300),
+        );
+        let pt0 = Instant::now();
+        loop {
+            let st = m.snapshot(&rec.id).map_err(|e| e.to_string())?.job.state;
+            if st == JobState::Paused {
+                break;
+            }
+            if pt0.elapsed() > pause_bound {
+                return Err(format!(
+                    "longhaul: pause never landed in the journal (state {st:?} after {:.0} s \
+                     — a lease boundary is the landing spot; size IUM_LONGHAUL_PAUSE_SECS \
+                     past one part's wire time at this rate)",
+                    pt0.elapsed().as_secs_f64()
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        (frontier_at_pause, pt0.elapsed().as_secs_f64())
+    };
+    let mid_state_final = m.snapshot(&rec.id).map_err(|e| e.to_string())?.job.state;
+    let journal_bytes_at_pause = journal_bytes(journal);
+
+    // Fresh-process replay: a NEW manager over the SAME journal (the
+    // overnight run's "next session"), resume, wait terminal. The resume
+    // runs on the SAME paced lane (the honest next-session shape), so the
+    // deadline is sized by the operator for the box:
+    // IUM_LONGHAUL_RESUME_SECS (default 900).
+    let m2 = telemetry_manager(journal)?;
+    let sup2 = Supervisor::new(Arc::clone(&m2));
+    sup2.drive(&rec.id);
+    let resumed_deadline = Duration::from_secs(
+        std::env::var("IUM_LONGHAUL_RESUME_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(900),
+    );
+    let final_state = wait_terminal(&m2, &sup2, &rec.id, resumed_deadline).await?;
+    if final_state != JobState::Done {
+        return Err(format!(
+            "longhaul: resumed leg ended {final_state:?} (must be Done — \
+             journal replayable and state truthful afterwards)"
+        ));
+    }
+    // Journal truth after the whole arc: the state event trail must be
+    // intact (no half-transitions), and verify-before-declare held (Done is
+    // only journaled through the adapter's verify).
+    let snap = m2.snapshot(&rec.id).map_err(|e| e.to_string())?;
+    let state_events = snap.events.iter().filter(|(_, k, _)| k == "state").count();
+    if state_events == 0 {
+        return Err("longhaul: no state events in the journal after replay".into());
+    }
+    if !snap.events.iter().any(|(_, k, _)| k == "verified") {
+        return Err(
+            "longhaul: Done without a `verified` event — verify-before-declare bypassed".into(),
+        );
+    }
+    persist.abort();
+    Ok(serde_json::json!({
+        "scenario": "longhaul", "state": "Done",
+        "rate_Bps": rate_bps, "timebox_s": timebox.as_secs_f64(),
+        "size": spec.source_size,
+        "elapsed_s": t0.elapsed().as_secs_f64(),
+        "frontier_at_pause": frontier_at_pause,
+        "pause_landed_s": paused_s,
+        "mid_state": mid_state_final.as_str(),
+        "journal_bytes_at_pause": journal_bytes_at_pause,
+        "rss_hwm_kb": rss_hwm.load(Ordering::Relaxed),
+        "state_events": state_events,
+        "replayed_and_resumed": true,
+    }))
+}
+
+fn rss_kb() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmRSS:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|v| v.parse::<u64>().ok())
+        })
+        .unwrap_or(0)
+}
+
+fn journal_bytes(dir: &str) -> u64 {
+    ["journal.db", "journal.db-wal", "journal.db-shm"]
+        .iter()
+        .map(|f| {
+            std::fs::metadata(std::path::Path::new(dir).join(f))
+                .map(|m| m.len())
+                .unwrap_or(0)
+        })
+        .sum()
+}
+
 /// Issue #32 — the real-network models. The proxy (scripts/throttle_proxy.py)
 /// now reproduces the APPLICATION-OBSERVABLE of each impairment a userspace
 /// relay can produce: loss = RTO-scale stalls with continuation, latency =
@@ -914,8 +1086,29 @@ fn main() {
                 .expect("runtime")
                 .block_on(s7net(&journal, &file, &endpoint, &model))
         }
+        "longhaul" => {
+            let file = arg_of(&args, "--file").expect("--file required");
+            let endpoint = arg_of(&args, "--endpoint").expect("--endpoint required");
+            let rate: u64 = arg_of(&args, "--rate")
+                .expect("--rate B/s required")
+                .parse()
+                .expect("--rate must be an integer bytes/s");
+            let secs: u64 = arg_of(&args, "--seconds")
+                .expect("--seconds required")
+                .parse()
+                .expect("--seconds must be an integer");
+            tokio::runtime::Runtime::new()
+                .expect("runtime")
+                .block_on(longhaul(
+                    &journal,
+                    &file,
+                    &endpoint,
+                    rate,
+                    Duration::from_secs(secs),
+                ))
+        }
         other => Err(format!(
-            "unknown scenario '{other}' (s1|s3hostile|s4pause|s4cancel|s5|s6worse|s7net)"
+            "unknown scenario '{other}' (s1|s3hostile|s4pause|s4cancel|s5|s6worse|s7net|longhaul)"
         )),
     };
     match result {

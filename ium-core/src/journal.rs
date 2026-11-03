@@ -14,6 +14,7 @@
 
 use rusqlite::{params, Connection};
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::chunk::ChunkState;
 use crate::state::JobState;
@@ -158,6 +159,12 @@ pub struct NewJob<'a> {
 /// off it. This is the ONLY state the engine trusts (ADR-002).
 pub struct SessionJournal {
     conn: Connection,
+    /// Drill hook (issue #34): pending injected write failures. `drill_gate`
+    /// turns the next `fail` write calls (after `skip` honest ones) into
+    /// SQLITE_FULL-shaped errors — the deterministic, root-free stand-in for
+    /// a full disk, the same technique SQLite's own test suite uses.
+    drill_skip: AtomicU32,
+    drill_fail: AtomicU32,
 }
 
 fn now_ms() -> i64 {
@@ -177,6 +184,37 @@ impl SessionJournal {
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
         )?;
         Self::migrate(conn)
+    }
+
+    /// Drill hook (issue #34, test infrastructure — production code never
+    /// calls it): after `skip` honest write calls, inject `fail` failures
+    /// shaped EXACTLY like a disk-full I/O error (rusqlite
+    /// `SystemIoFailure` — the SQLITE_IOERR/SQLITE_FULL family a real ENOSPC
+    /// produces, verified against a real `RLIMIT_FSIZE`-truncated process in
+    /// `tests/enospc_drill.rs`). Makes disk-full deterministic without root,
+    /// the same fault-injection technique SQLite's own test suite uses.
+    pub fn drill_fail_writes(&self, skip: u32, fail: u32) {
+        self.drill_skip.store(skip, Ordering::SeqCst);
+        self.drill_fail.store(fail, Ordering::SeqCst);
+    }
+
+    /// The drill gate: consult the injected-failure counters at the top of
+    /// every write path. Zero cost when disarmed (one relaxed-ish load).
+    fn drill_gate(&self) -> Result<(), JournalError> {
+        if self.drill_fail.load(Ordering::SeqCst) == 0 {
+            return Ok(());
+        }
+        let skip = self.drill_skip.load(Ordering::SeqCst);
+        if skip > 0 {
+            self.drill_skip.store(skip - 1, Ordering::SeqCst);
+            return Ok(());
+        }
+        let fail = self.drill_fail.load(Ordering::SeqCst);
+        self.drill_fail.store(fail - 1, Ordering::SeqCst);
+        Err(JournalError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL),
+            Some("drill: injected ENOSPC (issue #34)".into()),
+        )))
     }
 
     /// Open an in-memory journal (tests, drills). Same schema and migration
@@ -206,7 +244,11 @@ impl SessionJournal {
             tracing::info!(schema_version = target, "journal migration applied");
         }
         tracing::debug!(schema_version = version, "journal opened");
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            drill_skip: AtomicU32::new(0),
+            drill_fail: AtomicU32::new(0),
+        })
     }
 
     /// The meta table's schema version (diagnostics; migrations themselves
@@ -228,6 +270,7 @@ impl SessionJournal {
         if job.chunks.is_empty() {
             return Err(JournalError::EmptyPlan(job.id.to_string()));
         }
+        self.drill_gate()?;
         let ts = now_ms();
         let tx = self.conn.unchecked_transaction()?;
         let exists: i64 = tx.query_row(
@@ -262,6 +305,7 @@ impl SessionJournal {
     /// Fails loudly if the job row vanished (journal corruption / bad id;
     /// defect #2's rows-affected rule).
     pub fn set_job_state(&self, id: &str, state: JobState) -> Result<(), JournalError> {
+        self.drill_gate()?;
         let n = self.conn.execute(
             "UPDATE jobs SET state=?2, updated_at=?3 WHERE id=?1",
             params![id, state.as_str(), now_ms()],
@@ -270,6 +314,41 @@ impl SessionJournal {
             return Err(JournalError::UnknownJob(id.to_string()));
         }
         tracing::debug!(job = id, state = state.as_str(), "state journaled");
+        Ok(())
+    }
+
+    /// Journal a state transition AND its trail event ATOMICALLY (issue #34):
+    /// one transaction commits the state row and the `state` event, or
+    /// neither. The two-autocommit shape this replaces had a hole a disk-full
+    /// could walk through — commit the row, lose the event — leaving a state
+    /// with no trail (the half-transition RED in `tests/enospc_drill.rs`).
+    /// Fails loudly if the job row vanished (rows-affected rule, defect #2).
+    pub fn set_job_state_event(
+        &self,
+        id: &str,
+        state: JobState,
+        event_kind: &str,
+        event_payload: &serde_json::Value,
+    ) -> Result<(), JournalError> {
+        self.drill_gate()?;
+        let tx = self.conn.unchecked_transaction()?;
+        let n = tx.execute(
+            "UPDATE jobs SET state=?2, updated_at=?3 WHERE id=?1",
+            params![id, state.as_str(), now_ms()],
+        )?;
+        if n == 0 {
+            return Err(JournalError::UnknownJob(id.to_string()));
+        }
+        tx.execute(
+            "INSERT INTO events (job_id, ts, kind, payload) VALUES (?1, ?2, ?3, ?4)",
+            params![id, now_ms(), event_kind, event_payload.to_string()],
+        )?;
+        tx.commit()?;
+        tracing::debug!(
+            job = id,
+            state = state.as_str(),
+            "state + event journaled atomically"
+        );
         Ok(())
     }
 
@@ -284,6 +363,7 @@ impl SessionJournal {
         if chunks.is_empty() {
             return Err(JournalError::EmptyPlan(job_id.to_string()));
         }
+        self.drill_gate()?;
         let job_exists: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM jobs WHERE id=?1",
             params![job_id],
@@ -313,6 +393,7 @@ impl SessionJournal {
         bytes_confirmed: u64,
         adapter_token: Option<&str>,
     ) -> Result<(), JournalError> {
+        self.drill_gate()?;
         let n = self.conn.execute(
             "UPDATE chunks SET state=?3, bytes_confirmed=?4, adapter_token=?5 WHERE job_id=?1 AND idx=?2",
             params![job_id, idx as i64, chunk_state_str(state), bytes_confirmed as i64, adapter_token],
@@ -332,6 +413,7 @@ impl SessionJournal {
         kind: &str,
         payload: &serde_json::Value,
     ) -> Result<i64, JournalError> {
+        self.drill_gate()?;
         self.conn.execute(
             "INSERT INTO events (job_id, ts, kind, payload) VALUES (?1, ?2, ?3, ?4)",
             params![job_id, now_ms(), kind, payload.to_string()],
@@ -397,6 +479,7 @@ impl SessionJournal {
     /// Flush WAL on graceful shutdown (spec §6): checkpoint into the main
     /// database file. WAL + NORMAL already survives process crash.
     pub fn checkpoint_wal(&self) -> Result<(), JournalError> {
+        self.drill_gate()?;
         self.conn
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())

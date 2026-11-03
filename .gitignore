@@ -44,3 +44,6 @@ tool-results/
 # vendor binaries are inputs/throwaways — string dumps are the evidence (ADR-009)
 rea-lab/**/*.exe
 tmp-verify/
+
+# --- long-horizon lab (#34): same rule as realworld (ADR-009) ---
+rea-lab/longhaul/

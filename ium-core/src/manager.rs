@@ -380,6 +380,9 @@ impl JobManager {
     /// Validate a transition against the state the JOURNAL currently holds,
     /// then journal it (design rule #2: journal-first). Idempotent no-op when
     /// the journal already sits at `to` (crash between write and action).
+    /// Issue #34: the state row and its trail event commit in ONE
+    /// transaction (`set_job_state_event`) — a disk-full can no longer walk
+    /// between them and leave a state with no event.
     async fn transition(&self, job_id: &str, to: JobState) -> Result<JobState> {
         let from = {
             let j = self.j();
@@ -395,11 +398,9 @@ impl JobManager {
             current
         };
         self.j()
-            .set_job_state(job_id, to)
-            .map_err(EngineError::from)?;
-        self.j()
-            .append_event(
+            .set_job_state_event(
                 job_id,
+                to,
                 "state",
                 &serde_json::json!({ "from": from.as_str(), "to": to.as_str() }),
             )
@@ -411,6 +412,61 @@ impl JobManager {
             "transition"
         );
         Ok(to)
+    }
+
+    /// Issue #34: the honest park. When a journal WRITE fails mid-drive
+    /// (ENOSPC is the canonical case — the disk that holds the truth is
+    /// full), the fleet error must still leave the journal in a state a user
+    /// can act on. Best-effort: atomically journal `Paused` +
+    /// `journal_write_failed` (legal only from `Running`; from `Finishing`
+    /// the gate is re-entered by resume, from probe states a fresh probe is
+    /// harmless). If even the park cannot land (space still full — the
+    /// rlimit drill's shape), the failure is logged loudly and the ORIGINAL
+    /// error returned: the row keeps its last truthful state, loudness moves
+    /// to the error channel. The original error is ALWAYS returned — the
+    /// park is bookkeeping, never a substitute for the caller's knowledge.
+    fn park_on_journal_failure(&self, job_id: &str, err: EngineError) -> EngineError {
+        if !matches!(err, EngineError::Journal(_)) {
+            return err;
+        }
+        let current = match self.require_job(job_id) {
+            Ok(r) => r.state,
+            Err(_) => return err, // even the read is failing; error channel carries it
+        };
+        if current != JobState::Running {
+            // Finishing → resume re-enters the verify gate (Complete
+            // idempotency, #24); Created/Probing → resume re-probes. Both
+            // truthful already; no park arrow is legal or needed.
+            return err;
+        }
+        let detail = serde_json::json!({
+            "error": err.to_string(),
+            "detail": "journal write failed mid-transfer; parked Paused honestly (resume after freeing space)",
+        });
+        match self.j().set_job_state_event(
+            job_id,
+            JobState::Paused,
+            "journal_write_failed",
+            &detail,
+        ) {
+            Ok(()) => {
+                tracing::error!(
+                    job = job_id,
+                    "journal write failed mid-transfer; job parked Paused \
+                     (resume after freeing space): {err}"
+                );
+            }
+            Err(park_err) => {
+                tracing::error!(
+                    job = job_id,
+                    "journal write failed mid-transfer AND the honest park \
+                     could not be journaled ({park_err}); state stays \
+                     truthful-Running, recovery via resume after freeing \
+                     space: {err}"
+                );
+            }
+        }
+        err
     }
 
     /// Drive a job to completion. Resume-safe: rebuilds the chunk pool from
@@ -523,10 +579,18 @@ impl JobManager {
         // the job was mid-flight, so continue exactly there.
 
         if record.state == JobState::Running {
-            record.state = self.drive_running(job_id, &spec, adapter.clone()).await?;
+            // Issue #34: a journal write that fails under the fleet (ENOSPC)
+            // parks the job honestly before the error surfaces.
+            record.state = match self.drive_running(job_id, &spec, adapter.clone()).await {
+                Ok(s) => s,
+                Err(e) => return Err(self.park_on_journal_failure(job_id, e)),
+            };
         }
         if record.state == JobState::Finishing {
-            record.state = self.finish(job_id, &spec, &adapter).await?;
+            record.state = match self.finish(job_id, &spec, &adapter).await {
+                Ok(s) => s,
+                Err(e) => return Err(self.park_on_journal_failure(job_id, e)),
+            };
         }
         self.require_job(job_id)
     }

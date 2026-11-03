@@ -32,6 +32,8 @@ BUCKET="ium-test"
 WITH_DRILL=0
 WITH_REAL=0
 WITH_REALWORLD=0
+WITH_LONGHAUL=0
+LONGHAUL_ARGS=()
 REALWORLD_FILES=()
 say() { echo "[s3-test] $*"; }
 die() { echo "[s3-test] FAIL: $*" >&2; exit 1; }
@@ -55,6 +57,12 @@ while [ $# -gt 0 ]; do
     # through crash-resume, hostile network, pause/cancel, concurrent fleet.
     --with-realworld)
       WITH_REALWORLD=1; shift; REALWORLD_FILES=("$@"); break ;;
+    # --with-longhaul FILE [RATE_Bps [TIMEBOX_SECS]] — the long-horizon leg
+    # (issue #34) INSTEAD of the standard suites: one real asset through the
+    # uniform-throttle proxy (default 512 B/s), persistence telemetry,
+    # honest timebox (pause, never cancel), fresh-journal replay to Done.
+    --with-longhaul)
+      WITH_LONGHAUL=1; shift; LONGHAUL_ARGS=("$@"); break ;;
     *) die "unknown flag: $1" ;;
   esac
   shift
@@ -230,6 +238,16 @@ if [ "$WITH_REALWORLD" = 1 ]; then
   say "running real-world stress drill (issue #22) with ${#REALWORLD_FILES[@]} real asset(s)"
   bash "$SCRIPT_DIR/realworld-stress.sh" "${REALWORLD_FILES[@]}"
   say "GREEN: real-world stress drill passed against SeaweedFS ${VERSION} on ${os}/${arch}"
+  exit 0
+fi
+
+if [ "$WITH_LONGHAUL" = 1 ]; then
+  [ "$SERVER" = "seaweedfs" ] || die "--with-longhaul is SeaweedFS-canonical only (#33/#34)"
+  [ "${#LONGHAUL_ARGS[@]}" -ge 1 ] || die "--with-longhaul needs a file path"
+  [ -f "${LONGHAUL_ARGS[0]}" ] || die "longhaul asset not found: ${LONGHAUL_ARGS[0]}"
+  say "running long-horizon leg (issue #34): ${LONGHAUL_ARGS[*]}"
+  bash "$SCRIPT_DIR/longhaul.sh" "${LONGHAUL_ARGS[@]}"
+  say "GREEN: longhaul leg passed against SeaweedFS ${VERSION} on ${os}/${arch}"
   exit 0
 fi
 
