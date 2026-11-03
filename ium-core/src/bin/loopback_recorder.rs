@@ -20,8 +20,28 @@
 //! ```
 //!
 //! `--record-file` is rewritten after every request with
-//! `{"put_count": n, "received_bytes": n}` — the e2e reads it to assert on
-//! what the server really holds without needing a second protocol.
+//! `{"put_count": n, "received_bytes": n, "tus_sessions": n,
+//! "tus_bytes": n, "tus_last": "<id>|null"}` — the e2e reads it to assert
+//! on what the server really holds without needing a second protocol.
+//!
+//! TUS lane (issue #37 CI debt: the shell e2e's live-progress leg needs a
+//! transport whose `bytes_confirmed` advances DURING the transfer — the
+//! one-shot PUT family confirms only at completion, so the UI percent can
+//! honestly never move mid-flight). The lane speaks the exact subset the
+//! `TusAdapter` rehearses against tusd (wire facts in `adapter_tus.rs`):
+//! * `POST /files` + `Upload-Length` + `Tus-Resumable: 1.0.0` → `201` +
+//!   `Location: /files/<id>` (relative — the adapter resolves both forms);
+//! * `HEAD /files/<id>` → `200` + `Upload-Offset` + `Upload-Length`
+//!   (`404` unknown — the adapter's SessionLost shape);
+//! * `PATCH /files/<id>` + `Upload-Offset` +
+//!   `Content-Type: application/offset+octet-stream` → `204` + the NEW
+//!   offset (the server-acked truth); wrong offset → `409` after a fast
+//!   body drain (tusd-like: the client sees the status, not a reset); a
+//!   wrong/missing `Tus-Resumable` → `412` (tusd's precondition gate).
+//!
+//! PATCH body reads are throttled like PUT body reads — the e2e controls
+//! the clock, so per-PATCH server acks land a few seconds apart and the
+//! UI's percent visibly climbs chunk by chunk.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -36,6 +56,22 @@ struct RecorderState {
     received: Vec<u8>,
     /// PUTs that crossed the wire with a fully-read body.
     put_count: u64,
+    /// TUS sessions keyed by id (`/files/<id>`), each lock separate so a
+    /// HEAD during a long throttled PATCH never blocks on it.
+    tus: std::collections::HashMap<String, Arc<std::sync::Mutex<TusSession>>>,
+    /// Monotonic session id source.
+    tus_next: u64,
+    /// Id of the most recently created session (the record file surfaces
+    /// it so the e2e can HEAD the real session URL without guessing).
+    tus_last: Option<String>,
+}
+
+/// One TUS upload resource: the declared length and the bytes the server
+/// actually holds (durable only up to this process, exactly like tusd's
+/// file store on a tmpfs — the e2e's lifetime is the process's).
+struct TusSession {
+    length: u64,
+    buf: Vec<u8>,
 }
 
 struct Args {
@@ -89,10 +125,24 @@ fn die(msg: &str) -> ! {
 /// surface. Best-effort: a failed write is loud on stderr, never fatal.
 fn write_record(path: &Option<PathBuf>, state: &RecorderState) {
     let Some(path) = path else { return };
+    let tus_bytes: usize = state
+        .tus
+        .values()
+        .map(|s| s.lock().unwrap().buf.len())
+        .sum();
+    let tus_last = state
+        .tus_last
+        .as_deref()
+        .map(|id| format!("\"{id}\""))
+        .unwrap_or_else(|| "null".into());
     let json = format!(
-        "{{\"put_count\": {}, \"received_bytes\": {}}}\n",
+        "{{\"put_count\": {}, \"received_bytes\": {}, \"tus_sessions\": {}, \
+         \"tus_bytes\": {}, \"tus_last\": {}}}\n",
         state.put_count,
-        state.received.len()
+        state.received.len(),
+        state.tus.len(),
+        tus_bytes,
+        tus_last
     );
     if let Err(e) = std::fs::write(path, json) {
         eprintln!("[loopback-recorder] record write failed: {e}");
@@ -188,59 +238,278 @@ async fn handle_conn(
                 headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
             }
         }
-        let method = request_line
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_string();
+        let mut parts = request_line.split_whitespace();
+        let method = parts.next().unwrap_or("").to_string();
+        let target = parts.next().unwrap_or("/").split('?').next().unwrap_or("/");
+        // Everything under the /files namespace is the TUS lane — including
+        // malformed session paths like `/filesdoes-not-exist` (the adapter's
+        // bogus-session drill concatenates without a slash): a conforming
+        // server answers those 404 from the TUS lane, never 405 from PUT/HEAD.
+        let is_tus = target.starts_with("/files");
 
-        // ---- body ----------------------------------------------------------
-        // A connection that dies mid-body (the cancel leg: the engine drops
-        // the PUT when the user cancels) surfaces as a read error here —
-        // nothing is committed, exactly like a real object store that only
-        // accepts a fully-delivered object.
-        let body = if headers
-            .iter()
-            .any(|(k, v)| k == "transfer-encoding" && v.contains("chunked"))
-        {
-            read_chunked_throttled(&mut reader, throttle_bps).await?
-        } else if let Some((_, cl)) = headers.iter().find(|(k, _)| k == "content-length") {
-            let len: u64 = cl.parse().unwrap_or(0);
-            read_body_throttled(&mut reader, len, throttle_bps).await?
+        // ---- TUS lane: handlers own their body reads (a PATCH's offset
+        // decides whether the body is consumed at all, mirroring tusd). ----
+        let response = if is_tus {
+            handle_tus(
+                &method,
+                target,
+                &headers,
+                &mut reader,
+                &state,
+                throttle_bps,
+                &record_file,
+            )
+            .await?
         } else {
-            Vec::new()
-        };
-
-        // ---- respond -------------------------------------------------------
-        let response = match method.as_str() {
-            "PUT" => {
-                {
-                    let mut st = state.lock().unwrap();
-                    st.received.extend_from_slice(&body);
-                    st.put_count += 1;
+            // ---- legacy PUT/HEAD lane: body then dispatch -------------------
+            // A connection that dies mid-body (the cancel leg: the engine drops
+            // the PUT when the user cancels) surfaces as a read error here —
+            // nothing is committed, exactly like a real object store that only
+            // accepts a fully-delivered object.
+            let body = if headers
+                .iter()
+                .any(|(k, v)| k == "transfer-encoding" && v.contains("chunked"))
+            {
+                read_chunked_throttled(&mut reader, throttle_bps).await?
+            } else if let Some((_, cl)) = headers.iter().find(|(k, _)| k == "content-length") {
+                let len: u64 = cl.parse().unwrap_or(0);
+                read_body_throttled(&mut reader, len, throttle_bps).await?
+            } else {
+                Vec::new()
+            };
+            match method.as_str() {
+                "PUT" => {
+                    {
+                        let mut st = state.lock().unwrap();
+                        st.received.extend_from_slice(&body);
+                        st.put_count += 1;
+                    }
+                    write_record(&record_file, &state.lock().unwrap());
+                    eprintln!(
+                        "[loopback-recorder] PUT committed {} bytes (total {})",
+                        body.len(),
+                        state.lock().unwrap().received.len()
+                    );
+                    "HTTP/1.1 200 OK\r\netag: \"ium-e2e\"\r\ncontent-length: 0\r\n\r\n".to_string()
                 }
-                write_record(&record_file, &state.lock().unwrap());
-                eprintln!(
-                    "[loopback-recorder] PUT committed {} bytes (total {})",
-                    body.len(),
-                    state.lock().unwrap().received.len()
-                );
-                "HTTP/1.1 200 OK\r\netag: \"ium-e2e\"\r\ncontent-length: 0\r\n\r\n".to_string()
-            }
-            "HEAD" => {
-                let held = state.lock().unwrap().received.len();
-                eprintln!("[loopback-recorder] HEAD held={held}");
-                if held == 0 {
-                    // The honest "no object" — the cancel leg pins it.
-                    "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n".to_string()
-                } else {
-                    format!("HTTP/1.1 200 OK\r\ncontent-length: {held}\r\n\r\n")
+                "HEAD" => {
+                    let held = state.lock().unwrap().received.len();
+                    eprintln!("[loopback-recorder] HEAD held={held}");
+                    if held == 0 {
+                        // The honest "no object" — the cancel leg pins it.
+                        "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n".to_string()
+                    } else {
+                        format!("HTTP/1.1 200 OK\r\ncontent-length: {held}\r\n\r\n")
+                    }
                 }
+                _ => "HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\n\r\n".to_string(),
             }
-            _ => "HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\n\r\n".to_string(),
         };
         reader.get_mut().write_all(response.as_bytes()).await?;
         reader.get_mut().flush().await?;
+    }
+}
+
+/// The TUS lane's version gate (tusd answers 412 when the client's
+/// `Tus-Resumable` is missing or unsupported — the adapter always sends
+/// `1.0.0`, so a 412 here means a client bug, which the e2e wants loud).
+fn tus_version_ok(headers: &[(String, String)]) -> bool {
+    headers
+        .iter()
+        .any(|(k, v)| k == "tus-resumable" && v.trim() == "1.0.0")
+}
+
+fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.trim())
+}
+
+/// Drain a PATCH body fast (no throttle): a rejected PATCH's flush is
+/// waste by definition — tusd drains so the client sees the status line
+/// instead of a connection reset (the #33/#37 wire fact in `adapter_tus`).
+async fn drain_body(
+    reader: &mut BufReader<tokio::net::TcpStream>,
+    headers: &[(String, String)],
+) -> std::io::Result<()> {
+    if let Some((_, cl)) = headers.iter().find(|(k, _)| k == "content-length") {
+        let len: u64 = cl.parse().unwrap_or(0);
+        let mut remaining = len;
+        let mut sink = [0u8; 64 * 1024];
+        while remaining > 0 {
+            let step = remaining.min(sink.len() as u64) as usize;
+            reader.read_exact(&mut sink[..step]).await?;
+            remaining -= step as u64;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_tus(
+    method: &str,
+    target: &str,
+    headers: &[(String, String)],
+    reader: &mut BufReader<tokio::net::TcpStream>,
+    state: &Arc<Mutex<RecorderState>>,
+    throttle_bps: Option<u64>,
+    record_file: &Option<PathBuf>,
+) -> std::io::Result<String> {
+    if !tus_version_ok(headers) {
+        return Ok(
+            "HTTP/1.1 412 Precondition Failed\r\ntus-resumable: 1.0.0\r\ncontent-length: 0\r\n\r\n"
+                .to_string(),
+        );
+    }
+    // Session id: `/files/<id>`; creation is exactly `/files` (a trailing
+    // slash or a glued path like `/filesdoes-not-exist` is an unknown
+    // session, and PATCH/HEAD on it must 404 — SessionLost's wire shape).
+    let id = if target == "/files" {
+        None
+    } else {
+        let rest = target.strip_prefix("/files").unwrap_or(target);
+        let rest = rest.strip_prefix('/').unwrap_or(rest);
+        if rest.is_empty() {
+            None
+        } else {
+            Some(rest)
+        }
+    };
+    match (method, id) {
+        // ---- creation: POST /files + Upload-Length → 201 + Location -------
+        ("POST", None) => {
+            let Some(len_raw) = header(headers, "upload-length") else {
+                return Ok("HTTP/1.1 400 Bad Request\r\ntus-resumable: 1.0.0\r\ncontent-length: 0\r\n\r\n".to_string());
+            };
+            let Ok(length) = len_raw.parse::<u64>() else {
+                return Ok("HTTP/1.1 400 Bad Request\r\ntus-resumable: 1.0.0\r\ncontent-length: 0\r\n\r\n".to_string());
+            };
+            drain_body(reader, headers).await?;
+            let sid = {
+                let mut st = state.lock().unwrap();
+                st.tus_next += 1;
+                let sid = format!("e2e{:08x}", st.tus_next);
+                st.tus.insert(
+                    sid.clone(),
+                    Arc::new(Mutex::new(TusSession {
+                        length,
+                        buf: Vec::with_capacity(length.min(64 * 1024 * 1024) as usize),
+                    })),
+                );
+                st.tus_last = Some(sid.clone());
+                sid
+            };
+            write_record(record_file, &state.lock().unwrap());
+            eprintln!("[loopback-recorder] TUS creation /files/{sid} length={length}");
+            // Relative Location on purpose: the adapter must resolve it
+            // (RFC 3986 §5.2 merge) — tusd sends absolute, the spec allows
+            // both, and the e2e then covers the relative face.
+            Ok(format!(
+                "HTTP/1.1 201 Created\r\ntus-resumable: 1.0.0\r\nlocation: /files/{sid}\r\ncontent-length: 0\r\n\r\n"
+            ))
+        }
+        // ---- session truth: HEAD /files/<id> → offset + length ------------
+        ("HEAD", Some(sid)) => {
+            let resp = match state.lock().unwrap().tus.get(sid) {
+                None => "HTTP/1.1 404 Not Found\r\ntus-resumable: 1.0.0\r\ncache-control: no-store\r\ncontent-length: 0\r\n\r\n".to_string(),
+                Some(s) => {
+                    let s = s.lock().unwrap();
+                    format!(
+                        "HTTP/1.1 200 OK\r\ntus-resumable: 1.0.0\r\nupload-offset: {}\r\nupload-length: {}\r\ncache-control: no-store\r\ncontent-length: 0\r\n\r\n",
+                        s.buf.len(),
+                        s.length
+                    )
+                }
+            };
+            eprintln!("[loopback-recorder] TUS HEAD /files/{sid}");
+            Ok(resp)
+        }
+        // ---- transfer: PATCH /files/<id> → 204 + the acked new offset -----
+        ("PATCH", Some(sid)) => {
+            let session = {
+                let st = state.lock().unwrap();
+                st.tus.get(sid).cloned()
+            };
+            let Some(session) = session else {
+                // Unknown session: drain (tusd-like) then 404.
+                drain_body(reader, headers).await?;
+                return Ok("HTTP/1.1 404 Not Found\r\ntus-resumable: 1.0.0\r\ncontent-length: 0\r\n\r\n".to_string());
+            };
+            let Some(off_raw) = header(headers, "upload-offset") else {
+                drain_body(reader, headers).await?;
+                return Ok("HTTP/1.1 400 Bad Request\r\ntus-resumable: 1.0.0\r\ncontent-length: 0\r\n\r\n".to_string());
+            };
+            let Ok(attempted) = off_raw.parse::<u64>() else {
+                drain_body(reader, headers).await?;
+                return Ok("HTTP/1.1 400 Bad Request\r\ntus-resumable: 1.0.0\r\ncontent-length: 0\r\n\r\n".to_string());
+            };
+            let content_type_ok = header(headers, "content-type")
+                .map(|v| v.starts_with("application/offset+octet-stream"))
+                .unwrap_or(false);
+            if !content_type_ok {
+                drain_body(reader, headers).await?;
+                return Ok("HTTP/1.1 415 Unsupported Media Type\r\ntus-resumable: 1.0.0\r\ncontent-length: 0\r\n\r\n".to_string());
+            }
+            let span: u64 = header(headers, "content-length")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            // Offset gate BEFORE consuming the body — the protocol's 409.
+            let current = session.lock().unwrap().buf.len() as u64;
+            if attempted != current {
+                drain_body(reader, headers).await?;
+                eprintln!(
+                    "[loopback-recorder] TUS PATCH /files/{sid} 409: attempted {attempted}, server at {current}"
+                );
+                return Ok(
+                    "HTTP/1.1 409 Conflict\r\ntus-resumable: 1.0.0\r\ncontent-length: 0\r\n\r\n"
+                        .to_string(),
+                );
+            }
+            // Throttled consume, then commit: the bytes are "on the server"
+            // only when fully read, like tusd's file store on a full read.
+            let mut body = Vec::with_capacity(span as usize);
+            if let Some(bps) = throttle_bps {
+                let mut remaining = span;
+                let mut chunk = [0u8; 64 * 1024];
+                while remaining > 0 {
+                    let step = remaining.min(chunk.len() as u64) as usize;
+                    reader.read_exact(&mut chunk[..step]).await?;
+                    body.extend_from_slice(&chunk[..step]);
+                    remaining -= step as u64;
+                    let secs = (step as f64) / (bps as f64);
+                    tokio::time::sleep(Duration::from_secs_f64(secs)).await;
+                }
+            } else {
+                let mut remaining = span;
+                let mut chunk = [0u8; 64 * 1024];
+                while remaining > 0 {
+                    let step = remaining.min(chunk.len() as u64) as usize;
+                    reader.read_exact(&mut chunk[..step]).await?;
+                    body.extend_from_slice(&chunk[..step]);
+                    remaining -= step as u64;
+                }
+            }
+            let new_offset = {
+                let mut s = session.lock().unwrap();
+                s.buf.extend_from_slice(&body);
+                s.buf.len() as u64
+            };
+            write_record(record_file, &state.lock().unwrap());
+            eprintln!(
+                "[loopback-recorder] TUS PATCH /files/{sid} +{} → offset {new_offset}",
+                body.len()
+            );
+            Ok(format!(
+                "HTTP/1.1 204 No Content\r\ntus-resumable: 1.0.0\r\nupload-offset: {new_offset}\r\ncontent-length: 0\r\n\r\n"
+            ))
+        }
+        // ---- discovery (harmless completeness; the adapter never sends it)
+        ("OPTIONS", _) => Ok(
+            "HTTP/1.1 204 No Content\r\ntus-resumable: 1.0.0\r\ntus-version: 1.0.0\r\ntus-extension: creation\r\ncontent-length: 0\r\n\r\n"
+                .to_string(),
+        ),
+        _ => Ok("HTTP/1.1 405 Method Not Allowed\r\ntus-resumable: 1.0.0\r\ncontent-length: 0\r\n\r\n".to_string()),
     }
 }
 

@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-03** · Phase: **M6 in progress — #32 + #33 + #34 CLOSED (#34: ENOSPC honesty — mid-transfer disk-full parks the job Paused atomically, half-transition hole closed, resource bounds pinned under a 16k-event soak, longhaul leg proven live vs SeaweedFS with honest timebox-pause + fresh-journal replay). CI debt cleared: #37 closed (windows rlimit-drill cfg hole + @tus/server reset-vs-404 flake, both faces). Open: #35. #1–#34 + #36 + #37 ALL closed.**
+> Last updated: **2026-11-04** · Phase: **M6 in progress — #32 + #33 + #34 CLOSED. #37 REOPENED by the owner (runs #62–#69 red while new pushes kept landing): full audit posted on the issue — #62 cancel-phantom, #63/#64 two tus flake faces (both dead: stress 36/36 across recorder + @tus/server + tusd), #65–#69 app-e2e DETERMINISTIC red (design flaw: one-shot plans ONE chunk confirmed only at PUT completion → the honest UI percent cannot move mid-flight → the two-sample assert was unsatisfiable by construction). Fix: e2e leg A now drives the tus adapter (per-PATCH server acks = honest moving percent) against the recorder's new TUS lane; progress assert is a deadline poll. Open: #35 + #37 (closes when this push's CI is green). #1–#34 + #36 closed.**
 
 ---
 
@@ -88,14 +88,25 @@ replay byte-exact).
 Open: #35 (real-shell WebDriver e2e). Owner's feature
 tranche (WebDAV/Drive, OAuth, Sprint-2 UI) decides after M6.
 
-CI debt (#37, closed 2026-11-03): two red lanes on main after #33/#34 — windows
-clippy (`enospc_rlimit_drill.rs` used Unix-only libc outside `#[cfg(unix)]`) and
-the @tus/server diversity lane (bogus-session PATCH reset instead of 404; a
-second local face: the realign exact-waste assert 8 KiB short from a racy
-instant snapshot). Fixes: file-level `#![cfg(unix)]`; PATCH transport failures
-now HEAD-probe the session (server's answer decides SessionLost vs Transient);
-waste classified by settled arithmetic after the realign; `ProgressReporter`
-counters SeqCst.
+CI debt (#37, REOPENED 2026-11-04 by the owner — runs #62–#69 all failed while new
+pushes kept landing): the 2026-11-03 closure was premature. Audit (posted on the
+issue): #62 macos = concurrency-cancel phantom; #63 = windows rlimit compile (fixed
+in-tree) + bogus-session flake (fixed by the three-way probe); #64 = realign flake
+(fixed by settled arithmetic); **#65–#69 = app-e2e failed 5× IDENTICALLY** — not
+flaky but a design flaw: leg A ran the registry default `http_oneshot`, which plans
+ONE chunk and journals `bytes_confirmed` only at PUT completion, so the UI's honest
+Σ-confirmed percent cannot move mid-transfer (12 s of 0% then 100% under the
+throttle) and `p2 > p1` was unsatisfiable by construction. Fix: loopback-recorder
+gains a real TUS lane (`POST /files` creation → relative `Location`, throttled
+`PATCH` → `204` + server-acked `Upload-Offset`, `HEAD` truth, 409/412/404 shapes —
+12/12 of the adapter's own wire suite passes against it); e2e leg A selects `tus`
+(W3C execute-sync, native value setter + real change event — WebKitGTK's select
+popup is unreachable under xvfb), sets 6 connections (5 chunks ≥ 5 MiB floor), and
+the live-progress assert polls with a 45 s deadline instead of two blind samples;
+leg B stays one-shot for the honest cancel-nothing semantics. Flake faces verified
+dead: `scripts/stress_tus_flakes.sh` = 36/36 green (12× × recorder + @tus/server
+2.4.7 + tusd 2.10.1). Offline suite 150/150, fmt + clippy `-D warnings` clean.
+#37 closes when this push's CI run is green; #35's lane rides the same commit.
 
 ## 4. Backlog / next (ordered — milestone [M3: Real transports](https://github.com/kahlanhamza/IUM/milestone/2))
 
@@ -339,6 +350,7 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-03 | **#34 closed — long-horizon & resource honesty**: the journal seam probed and hardened. **RED ×2 at HEAD** (posted on the issue): (1) mid-transfer ENOSPC left the job dangling `Running` (loud to the caller, a lie of omission in the journal), (2) the HALF-TRANSITION — `transition()`'s two autocommit writes let a disk-full commit the state row and lose its event. Fix: `SessionJournal::set_job_state_event` (UPDATE + event in ONE transaction — both-or-neither) + `JobManager::park_on_journal_failure` (on `EngineError::Journal` escaping drive/finish: best-effort atomic park to `Paused` + `journal_write_failed`; when the disk is STILL full the park itself fails loudly, the row stays truthful, the original error always returned; `Finishing` intentionally stays Finishing — resume re-enters the verify gate, Complete idempotent per #24). Drill hooks: `SessionJournal::drill_fail_writes` (SQLite-test-suite-style injected SQLITE_FULL) + `tests/enospc_rlimit_drill.rs` (REAL EFBIG: RLIMIT_FSIZE + SIGXFSZ-ignored in its own process — pins loud + truthful + recoverable + byte-exact-after-free). Soak: `tests/soak_bounds.rs` drives the REAL manager through 16,391 confirm events (64 MiB in 4 KiB server-acked segments) — **measured 2,502,656 B journal after `checkpoint_wal(TRUNCATE)` (≈153 B/event, linear), WAL → 0, RSS delta 5,644 KiB** — bounds pinned at 32 MB / 4096 B / 256 MiB. Longhaul: `realworld_stress longhaul` + `scripts/longhaul.sh` + `s3-test.sh --with-longhaul FILE RATE SECS` — uniform paced lane, `[longhaul][persist]` telemetry (frontier / journal bytes / RSS), honest TIMEBOX-PAUSE (never cancel; lands at the next lease boundary — part-scale physics documented), FRESH-journal replay + resume to Done, direct read-back sha256; **live vs SeaweedFS 4.51: pause landed at 176 s, replay resumed byte-exact, artifact in `rea-lab/longhaul/`**; the first live run's own artifact caught the harness bug (endpoint bypassed the proxy — no UNIFORM lines) — fixed, re-run green. docs/08 rows same-commit. 30 MB @ 512 B/s ≈ 17 h overnight config documented on the issue (honest in-session timebox-cancel; the harness is what shipped) | offline 150/150 (fmt + clippy `-D warnings` + tests), ENOSPC drills GREEN (injected ×2 + real-OS ×1), soak within pinned bounds, longhaul GREEN live, #34 closed by commit |
 | 2026-11-03 | **#37 closed — CI debt on main cleared (owner: "take a look at CI, failed ones you didn't solve, and Queued ones too")**: audit of all 82 runs → runs #62/#63 red after #33/#34 (#62's macos job = concurrency-cancel artifact, 0 queued/in-progress remained). Two real failures: (A) windows clippy E0422/E0425 — `enospc_rlimit_drill.rs` used Unix-only `libc::rlimit/setrlimit/RLIMIT_FSIZE` outside any cfg gate (test fn was gated, the adapter struct wasn't) → file-level `#![cfg(unix)]` (the drill is Unix BY CONSTRUCTION; windows compiles an empty target). (B) @tus/server diversity lane `tus_bogus_session_maps_to_session_lost` (run #63; #62 same code GREEN → flake): @tus/server early-rejects the PATCH (writes 404, closes WITHOUT consuming the body) so the client streaming 6 MiB sees a reset, not the status → adapter now HEAD-probes after ANY PATCH transport failure and lets the SERVER's answer decide (`404/410` → SessionLost, success/HEAD-failure → Transient — retries stay counted; dead-server negative path re-proven Transient). **Second face found while proving the fix locally (1-in-3 lane RED)**: realign exact-waste assert 8 KiB short (`moved−wasted = 2097152+8192`) — the rejected attempt's last chunk landed in `moved()` AFTER the instant snapshot (counted on hyper's connection task, caller read it same-instant) → waste now classified by SETTLED ARITHMETIC after the realign (`pushed − tail`, tail = acked re-PATCH span — exact whenever the count landed) + `ProgressReporter` counters SeqCst for cross-task coherence. Evidence: `scripts/issue37_red_evidence.md` (issue body), `scripts/issue37_green_evidence.md`; docs/08 #37 wire-fact row same-commit | lanes: tusd 4×12/12, tus-node 6×12/12 (was 1-in-3 RED), SeaweedFS 23/23, rclone 23/23, offline suite 0 failed, fmt+clippy clean | `8950cd8` |
 | 2026-11-03 | **#37 follow-up — THIRD face of the reset race, probe made three-way**: run 41682579860 green on windows + bogus-session, but the same early-reject then ate the realign test's **409** (`stale-offset PATCH → reset; HEAD probe said "session exists" → Transient; realign never ran`) → the POST-transport-failure probe now classifies by SERVER TRUTH: HEAD 404/410 → SessionLost; HEAD 200 with offset ≠ attempted → `PatchFailure::Conflict` (the 409 the client never saw → realign dance, flush reckoned waste by the settled arithmetic); else → Transient (retries counted). Rehearsal fourth wire fact: `path: "/files/"` makes @tus/server 2.4.7 emit DOUBLE-SLASH Locations `/files//<id>` on every creation (docs/08 row). Local: tus-node 8×12/12 consecutive, tusd green, offline green | issue #37 reopened + re-closed by the follow-up commit | follow-up commit this push |
+| 2026-11-04 | **#37 reopened by the owner and this time faced in full — "first deal with failed CI from #62 to #68, stop skipping it"**: sandbox recycle had wiped `.secrets/` again (token restored from the session record, 6th paste logged in §10); git had DIVERGED (local `e6dbe55` = origin `f73d62e` + the unpushed Kaggle scaffolding — reset to origin, Kaggle scripts staged aside uncommitted). **Full audit of runs #62–#69 posted on the issue** (no more pushing while red): #62 macos = concurrency-cancel phantom; #63 = windows rlimit compile (already fixed in-tree) + bogus-session flake (already fixed by the three-way probe); #64 = realign flake (already fixed by settled arithmetic — core green on all 3 OSes × 5 consecutive runs #65–#69); **#65–#69 = app-e2e failed 5× IDENTICALLY at `e2e_shell.rs:434` `live progress must move: first=0% second=0%`** — root-caused as a DESIGN FLAW, not flakiness: leg A never touched the adapter `<select>` → registry default `http_oneshot` → ONE chunk planned → `bytes_confirmed` journals only at PUT completion → the UI's honest Σ-confirmed percent is 0% for the whole ~12 s throttled transfer then 100% → the two-sample assert was unsatisfiable BY CONSTRUCTION (no throttle tuning can fix it). **Fix (product-true, no assertion weakened): leg A drives the tus adapter.** `loopback_recorder` gains a real TUS lane (POST /files creation → relative Location; throttled PATCH → 204 + server-acked Upload-Offset; HEAD truth; 409-after-drain / 412 / 404-under-/files* shapes; record JSON v2 `tus_sessions/tus_bytes/tus_last`) — proven by running the adapter's OWN 12-test wire suite against it: 12/12 (then the whole suite vs @tus/server and tusd too). e2e leg A: `set_select` via W3C execute-sync (WebKitGTK select popup is a native menu unreachable under xvfb; native value setter + real change event — every other interaction stays real input), connections=6 → 5 chunks ≥ 5 MiB floor, live-progress assert = deadline poll (movement within 45 s) instead of two blind samples, server truth = record `tus_bytes` + HEAD session URL `upload-offset == size`; leg B explicitly re-selects `http_oneshot` (cancel-nothing semantics stay one-shot's). **Flake faces stress-buried: `scripts/stress_tus_flakes.sh` 36/36 (12× recorder + 12× @tus/server 2.4.7 + 12× tusd 2.10.1, 0 failures)**. Offline 150/150, fmt + clippy `-D warnings` clean. Full app-e2e stays CI-proven (webkit2gtk-dev/tauri-driver need root, absent in sandbox) | audit comment + evidence on #37; closes when this push's run is green | this commit |
 
 ## 10. Security
 
@@ -351,4 +363,11 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
   `mkdir -p .secrets && chmod 700 .secrets && echo 'NEW_TOKEN' > .secrets/gh_token && chmod 600 .secrets/gh_token`
   (never commit this file; scopes needed: repo contents read/write, issues read/write,
   metadata read).
+- **2026-11-04: the recycle wiped `.secrets/` a third time** — token restored from the
+  session record (6th restore, same value, still gitignored `chmod 600`; rotation still
+  advised). The owner's **Kaggle API token is now stored as `.secrets/kaggle_token`**
+  (same gitignore + 600 discipline, never committed, never printed) for the
+  free-cloud intensive runs (`scripts/kaggle_push.sh` reads it; `scripts/kaggle/`
+  holds the kernel program). Same rule as the PAT: rotate at kaggle.com/settings if
+  it ever leaks into chat history beyond the session record.
 - `.secrets/` and `.toolchain/` are gitignored; `core.fileMode false` is set (sandbox mode churn).

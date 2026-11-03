@@ -3,17 +3,26 @@
 //! pause/resume → Done badge → inspector (inspect_chunks through real IPC)
 //! → cancel leaves NO server object.
 //!
+//! Leg A runs the **tus adapter** (issue #37 CI debt): per-PATCH server
+//! acks make `bytes_confirmed` advance DURING the transfer, so the UI's
+//! percent genuinely climbs — with the one-shot family it honestly cannot
+//! (one chunk, confirmed only at PUT completion; runs #65–#69 failed on
+//! exactly that contradiction). Leg B stays one-shot: the cancel leg pins
+//! the honest "nothing committed" semantics of that family.
+//!
 //! Env contract (set by `scripts/app-e2e.sh`, the same env-gated idiom as
 //! the S3/TUS wire suites — without it every test skips LOUDLY):
 //! * `IUM_E2E_DRIVER`   — tauri-driver base URL (e.g. http://127.0.0.1:4444)
 //! * `IUM_E2E_APP`      — path to the built IUM app binary (tauri-driver
 //!   hands it to WebKitWebDriver, which spawns it)
-//! * `IUM_E2E_FILE_A` / `IUM_E2E_FILE_B` — source files (A: lifecycle leg,
-//!   B: cancel leg)
-//! * `IUM_E2E_ENDPOINT_A` / `IUM_E2E_ENDPOINT_B` — recorder PUT URLs
+//! * `IUM_E2E_FILE_A` / `IUM_E2E_FILE_B` — source files (A: lifecycle leg
+//!   via tus; B: cancel leg via one-shot PUT)
+//! * `IUM_E2E_ENDPOINT_A` / `IUM_E2E_ENDPOINT_B` — A: the recorder's tus
+//!   creation URL (`.../files`); B: the recorder's PUT URL (`.../upload`)
 //! * `IUM_E2E_RECORD_A` / `IUM_E2E_RECORD_B` — recorder record JSON paths
-//!   (`{"put_count": n, "received_bytes": n}`, rewritten after every
-//!   request by `loopback-recorder`)
+//!   (`{"put_count": n, "received_bytes": n, "tus_sessions": n,
+//!   "tus_bytes": n, "tus_last": "<id>"}`, rewritten after every request
+//!   by `loopback-recorder`)
 //!
 //! The WebDriver client is hand-rolled W3C JSON-over-HTTP (the engine
 //! hand-rolls sigv4 for the same reason: the protocol is small, the deps
@@ -226,6 +235,32 @@ impl Wd {
             .as_str()
             .map(str::to_string))
     }
+
+    /// W3C execute-sync — used ONLY to pick an `<option>` out of the
+    /// adapter `<select>`: WebKitGTK renders that popup as a native menu
+    /// no WebDriver click can reach under xvfb. The script fires the same
+    /// React `change` event a user's pick would (native value setter, not
+    /// a bare `.value =` — React's value tracker would swallow it); every
+    /// other interaction in this suite is real input plumbing.
+    async fn set_select(&self, id: &str, value: &str) -> Result<(), String> {
+        let script = "const el = document.getElementById(arguments[0]);\
+            if (!el) { throw new Error('no #' + arguments[0]); }\
+            const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;\
+            setter.call(el, arguments[1]);\
+            el.dispatchEvent(new Event('change', {bubbles: true}));\
+            return el.value;";
+        let got = self
+            .call(
+                reqwest::Method::POST,
+                "/execute/sync",
+                json!({"script": script, "args": [id, value]}),
+            )
+            .await?;
+        if got.as_str() != Some(value) {
+            return Err(format!("select #{id} did not take `{value}`: {got}"));
+        }
+        Ok(())
+    }
 }
 
 /// The W3C element key (draft spec identifier WebKit uses).
@@ -317,15 +352,24 @@ async fn wait_state(
     }
 }
 
-async fn read_record(path: &str) -> Result<(u64, u64), String> {
+/// The recorder's record file — the e2e's server-truth surface (JSON v2:
+/// the tus lane's sessions ride alongside the PUT lane's counters).
+struct RecordFile {
+    received_bytes: u64,
+    tus_bytes: u64,
+    tus_last: Option<String>,
+}
+
+async fn read_record(path: &str) -> Result<RecordFile, String> {
     for _ in 0..40 {
         if let Ok(s) = std::fs::read_to_string(path) {
             let v: Value = serde_json::from_str(&s)
                 .map_err(|e| format!("record {path} unparsable: {e} (content: {s})"))?;
-            return Ok((
-                v["put_count"].as_u64().unwrap_or(0),
-                v["received_bytes"].as_u64().unwrap_or(0),
-            ));
+            return Ok(RecordFile {
+                received_bytes: v["received_bytes"].as_u64().unwrap_or(0),
+                tus_bytes: v["tus_bytes"].as_u64().unwrap_or(0),
+                tus_last: v["tus_last"].as_str().map(str::to_string),
+            });
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -336,6 +380,27 @@ async fn head_status(url: &str) -> Result<u16, String> {
     let http = reqwest::Client::new();
     let resp = http.head(url).send().await.map_err(|e| e.to_string())?;
     Ok(resp.status().as_u16())
+}
+
+/// HEAD a tus session URL the way the protocol demands (`Tus-Resumable`) —
+/// the recorder answers 412 without it. Returns the server-acked offset:
+/// for the done leg this is the whole object's size, read from the SERVER.
+async fn head_tus_offset(url: &str) -> Result<u64, String> {
+    let http = reqwest::Client::new();
+    let resp = http
+        .head(url)
+        .header("Tus-Resumable", "1.0.0")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HEAD {url} -> {}", resp.status()));
+    }
+    resp.headers()
+        .get("upload-offset")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .ok_or_else(|| format!("HEAD {url}: no upload-offset header"))
 }
 
 // ---------------------------------------------------------------------------
@@ -404,12 +469,30 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         .expect("submit button");
 
     // ---- leg A: create → live progress → pause → resume → Done -------------
+    // The tus adapter is selected EXPLICITLY: the live-progress leg needs a
+    // transport whose bytes_confirmed advances during the transfer (runs
+    // #65–#69: one-shot plans one chunk and confirms only at PUT completion,
+    // so the honest UI percent cannot move and the old two-sample assert was
+    // unsatisfiable by construction). Connections go to 6 so the 24 MiB
+    // file plans ≥5 chunks (CHUNK_MIN 5 MiB floor respected) — percent
+    // steps land every few seconds under the recorder's throttle.
+    wd.set_select("upload-adapter", "tus")
+        .await
+        .expect("select the tus adapter");
     wd.send_keys(&path_input, &env.file_a)
         .await
         .expect("type path A");
     wd.send_keys(&endpoint_input, &env.endpoint_a)
         .await
         .expect("type endpoint A");
+    let conns_input = wd
+        .wait_for_element("#upload-connections", Duration::from_secs(10))
+        .await
+        .expect("connections input");
+    wd.clear(&conns_input).await.expect("clear connections");
+    wd.send_keys(&conns_input, "6")
+        .await
+        .expect("set 6 connections");
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let disabled = wd.attr(&submit, "disabled").await.expect("submit attr");
@@ -426,12 +509,23 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         .await
         .expect("job A running");
 
-    // LIVE progress: two samples while running — the second strictly greater
-    // (the throttled recorder makes the 400 ms job_updated ticks visible).
-    let p1 = row_percent(&wd, row_a).await.expect("progress sample 1");
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    let p2 = row_percent(&wd, row_a).await.expect("progress sample 2");
-    assert!(p2 > p1, "live progress must move: first={p1}% second={p2}%");
+    // LIVE progress: the percent must CLIMB while the job is still running
+    // — polled with a deadline, not two blind samples: under the throttle a
+    // chunk boundary lands every few seconds and a 2-core CI runner can
+    // delay the first boundary past any fixed pair (the #65–#69 lesson).
+    let p0 = row_percent(&wd, row_a).await.expect("progress sample 0");
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        let p = row_percent(&wd, row_a).await.expect("progress poll");
+        if p > p0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "live progress never moved: stuck at {p0}% for 45s"
+        );
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
 
     // PAUSE early in a throttled run (mid-transfer, never in the verify gate).
     let pause_btn = wd
@@ -527,18 +621,35 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         .expect("inspector close button");
     wd.click(&close_btn).await.expect("close inspector");
 
-    // Server truth: the recorder holds the whole object.
-    let (puts_a, bytes_a) = read_record(&env.record_a).await.expect("record A");
-    assert!(puts_a >= 1, "recorder saw at least one PUT");
+    // Server truth: the recorder's tus session holds every byte, and HEAD
+    // on the REAL session URL (the record file surfaces its id) acks the
+    // full offset — done per the SERVER, not the badge.
+    let rec_a = read_record(&env.record_a).await.expect("record A");
+    let source_a = std::fs::metadata(&env.file_a).unwrap().len();
     assert_eq!(
-        bytes_a,
-        std::fs::metadata(&env.file_a).unwrap().len(),
-        "recorder received the full object"
+        rec_a.tus_bytes, source_a,
+        "recorder's tus session holds every source byte"
     );
-    let head = head_status(&env.endpoint_a).await.expect("HEAD endpoint A");
-    assert_eq!(head, 200, "done job → object present");
+    let session_url = format!(
+        "{}/{}",
+        env.endpoint_a.trim_end_matches('/'),
+        rec_a.tus_last.expect("recorder created a tus session")
+    );
+    let offset = head_tus_offset(&session_url)
+        .await
+        .expect("HEAD tus session");
+    assert_eq!(
+        offset, source_a,
+        "HEAD upload-offset == source size on the recorder's session"
+    );
 
     // ---- leg B: cancel mid-transfer → Canceled badge → NO server object ----
+    // Back to the one-shot adapter explicitly: leg A left the select on tus,
+    // and the cancel leg pins the one-shot family's honest "nothing
+    // committed" ending.
+    wd.set_select("upload-adapter", "http_oneshot")
+        .await
+        .expect("select the one-shot adapter back");
     let path_input = wd
         .wait_for_element("#upload-path", Duration::from_secs(10))
         .await
@@ -590,9 +701,9 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         .expect("job B canceled");
 
     tokio::time::sleep(Duration::from_millis(500)).await; // let the recorder settle
-    let (_, bytes_b) = read_record(&env.record_b).await.expect("record B");
+    let rec_b = read_record(&env.record_b).await.expect("record B");
     assert_eq!(
-        bytes_b, 0,
+        rec_b.received_bytes, 0,
         "a canceled upload never completed the object — recorder holds nothing"
     );
     let head = head_status(&env.endpoint_b).await.expect("HEAD endpoint B");

@@ -58,6 +58,11 @@ FILE_A="$WORK/e2e-a.bin"
 FILE_B="$WORK/e2e-b.bin"
 
 # --- 3. the loopback recorders (throttled: the e2e controls the clock) -----
+# Recorder A serves the tus lane (`/files`: POST creation, PATCH transfer,
+# HEAD truth) for the live-progress leg — per-PATCH server acks are what
+# make the UI's percent honestly move mid-transfer. Recorder B serves the
+# one-shot PUT lane (`/upload`) for the cancel leg: nothing committed when
+# the body never finishes is that family's honest ending.
 REC_A="$WORK/recorder-a.json"
 REC_B="$WORK/recorder-b.json"
 PORT_A=$(( (RANDOM % 2000) + 23000 ))
@@ -88,7 +93,7 @@ export IUM_E2E_DRIVER="http://127.0.0.1:4444"
 export IUM_E2E_APP="$APP_BIN"
 export IUM_E2E_FILE_A="$FILE_A"
 export IUM_E2E_FILE_B="$FILE_B"
-export IUM_E2E_ENDPOINT_A="http://127.0.0.1:$PORT_A/upload"
+export IUM_E2E_ENDPOINT_A="http://127.0.0.1:$PORT_A/files"
 export IUM_E2E_ENDPOINT_B="http://127.0.0.1:$PORT_B/upload"
 export IUM_E2E_RECORD_A="$REC_A"
 export IUM_E2E_RECORD_B="$REC_B"
@@ -102,4 +107,4 @@ say "--- driver log tail:"; tail -25 "$WORK/driver.log" || true
 if [ $RC -ne 0 ]; then
   die "e2e FAILED (rc=$RC) — workdir $WORK kept for forensics"
 fi
-say "GREEN: the shell was driven — create/progress/pause/resume/done/inspect + cancel-no-object"
+say "GREEN: the shell was driven — tus create/progress/pause/resume/done/inspect + one-shot cancel-no-object"
