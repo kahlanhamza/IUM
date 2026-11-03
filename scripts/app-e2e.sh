@@ -69,6 +69,9 @@ grep -q listening "$WORK/rec-a.log" || die "recorder A failed to boot: $(cat "$W
 grep -q listening "$WORK/rec-b.log" || die "recorder B failed to boot: $(cat "$WORK/rec-b.log")"
 
 # --- 4. tauri-driver under xvfb (WebKitWebDriver spawns the app) -----------
+# WebKitGTK's DMABUF renderer is the known crash/wedge source on virtual
+# displays (no GPU under xvfb) — standard Tauri CI practice: disable it.
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
 say "starting tauri-driver (WebDriver 4444, native 4445) under xvfb"
 xvfb-run -a --server-args="-screen 0 1440x900x24" \
   tauri-driver --port 4444 --native-port 4445 > "$WORK/driver.log" 2>&1 &
@@ -77,7 +80,7 @@ for i in $(seq 1 40); do
   curl -s -o /dev/null "http://127.0.0.1:4444/status" && break
   sleep 0.5
 done
-curl -s "http://127.0.0.1:4444/status" | grep -q ready || die "tauri-driver not ready: $(tail -5 "$WORK/driver.log")"
+curl -s "http://127.0.0.1:4444/status" | grep -q ready || die "tauri-driver not ready: $(tail -25 "$WORK/driver.log")"
 
 # --- 5. the env-gated WebDriver suite --------------------------------------
 say "running ium-e2e (driver 4444, recorders $PORT_A/$PORT_B)"
@@ -95,7 +98,7 @@ RC=$?
 set -e
 
 say "--- recorder A: $(cat "$REC_A" 2>/dev/null || echo 'no record')  B: $(cat "$REC_B" 2>/dev/null || echo 'no record')"
-say "--- driver log tail:"; tail -5 "$WORK/driver.log" || true
+say "--- driver log tail:"; tail -25 "$WORK/driver.log" || true
 if [ $RC -ne 0 ]; then
   die "e2e FAILED (rc=$RC) — workdir $WORK kept for forensics"
 fi

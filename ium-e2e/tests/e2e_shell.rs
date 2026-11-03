@@ -67,8 +67,12 @@ struct Wd {
 
 impl Wd {
     async fn connect(base: &str, app: &str) -> Result<Wd, String> {
+        // NO blanket default timeout: session creation cold-boots the whole
+        // app under WebKitWebDriver (first launch on a CI runner is tens of
+        // seconds) — a short client timeout aborts the POST mid-handshake,
+        // which the server logs as IncompleteMessage and the client sees as
+        // "driver not accepting yet". Patient per-request timeout instead.
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
             .build()
             .map_err(|e| e.to_string())?;
         // tauri-driver's session contract (read from its source, not guessed):
@@ -79,11 +83,12 @@ impl Wd {
                 "alwaysMatch": { "tauri:options": { "application": app } }
             }
         });
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_secs(240);
         let mut last = String::new();
         while Instant::now() < deadline {
             let resp = http
                 .post(format!("{base}/session"))
+                .timeout(Duration::from_secs(180))
                 .json(&payload)
                 .send()
                 .await;
@@ -108,7 +113,7 @@ impl Wd {
                     );
                 }
                 Err(e) => {
-                    last = format!("driver not accepting yet: {e}");
+                    last = format!("driver not accepting yet: {}", err_chain(&e));
                 }
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -225,6 +230,18 @@ impl Wd {
 
 /// The W3C element key (draft spec identifier WebKit uses).
 const VALUE_ELEMENT_KEY: &str = "element-6066-11e4-a52e-4f735466cecf";
+
+/// reqwest's Display hides the root cause (a timeout reads as "error
+/// sending request"); walk the source chain so forensics land in the log.
+fn err_chain(e: &dyn std::error::Error) -> String {
+    let mut chain = e.to_string();
+    let mut src = e.source();
+    while let Some(s) = src {
+        chain.push_str(&format!(" <- {s}"));
+        src = s.source();
+    }
+    chain
+}
 
 // ---------------------------------------------------------------------------
 // assertions over the UI's journal truth
