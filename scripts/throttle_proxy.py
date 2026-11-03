@@ -16,6 +16,16 @@ completes). Every later connection — including the eviction retry's fresh
 connection — runs at full speed: the network healed, the engine is expected
 to have abandoned the stuck lane and re-driven the span elsewhere.
 
+UNIFORM mode (issue #28, `--victim-part all`): EVERY UploadPart PUT
+connection is throttled to VICTIM_RATE bytes/s for its whole body — the
+"the entire uplink is slow" model, the owner's B/s-class daily reality (the
+whole link, not one bad peer). There is no latch and no expiry window: the
+link is slow for the scenario's whole life, and the scenario ends when the
+engine's own timebox cancels the job (tearing the paced bodies off the wire).
+Every throttled connection logs a `VICTIM-WIRE moved=<N>B in <S>s (<R> B/s)`
+line when its body phase ends — the harness's wire-honesty check sums these
+against rate x timebox.
+
 Framing: the proxy forces `connection: close` on forwarded request heads, so
 each connection carries exactly one request/response pair. That keeps the
 parsing honest (one request head, one content-length body, one response head,
@@ -38,12 +48,13 @@ class Relay:
     """One client connection: exactly one request/response pair."""
 
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-                 target: tuple[str, int], victim_part: int, victim_rate: int,
+                 target: tuple[str, int], victim_part: str, victim_rate: int,
                  victim_seconds: int, state: dict):
         self.r = reader
         self.w = writer
         self.target = target
         self.victim_part = victim_part
+        self.uniform = victim_part == "all"  # issue #28: the WHOLE uplink is slow
         self.victim_rate = victim_rate
         self.victim_seconds = victim_seconds
         self.state = state  # shared: {"victim_active_until": float|None, "victim_taken": bool}
@@ -69,7 +80,7 @@ class Relay:
         return request_line, headers, rest
 
     async def pump(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter,
-                   count: int, rate: int | None, pre: bytes = b"") -> bool:
+                   count: int, rate: int | None, pre: bytes = b"") -> int:
         """Move exactly `count` body bytes; pace reads when a rate is set.
 
         `pre` carries body bytes ALREADY consumed from the wire (they arrived
@@ -98,10 +109,10 @@ class Relay:
                 behind = target_t - time.monotonic()
                 if behind > 0:
                     await asyncio.sleep(behind)
-        return moved == count  # False = client vanished before the full body
+        return moved  # caller compares against `count` (False == vanished client)
 
     async def pump_until_eof(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter,
-                             rate: int | None, pre: bytes = b"") -> None:
+                             rate: int | None, pre: bytes = b"") -> int:
         moved = len(pre)
         start = time.monotonic()
         if pre:
@@ -110,7 +121,7 @@ class Relay:
         while True:
             b = await src.read(CHUNK)
             if not b:
-                return
+                return moved
             dst.write(b)
             await dst.drain()
             moved += len(b)
@@ -135,9 +146,17 @@ class Relay:
         te = "chunked" in headers.get("transfer-encoding", "").lower()
         print(f"[throttle-proxy] req {request_line}", flush=True)
 
-        # --- victim selection: first connection EVER carrying the victim part
+        # --- victim selection -------------------------------------------------
+        # uniform mode: every UploadPart PUT is a slow-link body, no latch, no
+        # expiry — the scenario ends when the engine cancels (issue #28).
+        # victim mode: the FIRST connection EVER carrying the victim part.
         rate: int | None = None
-        if (f"partNumber={self.victim_part}" in path and method == "PUT"
+        is_part_put = "partNumber=" in path and method == "PUT"
+        if self.uniform and is_part_put:
+            rate = self.victim_rate
+            print(f"[throttle-proxy] UNIFORM: {request_line} -> {self.victim_rate} B/s "
+                  f"(binds to this connection's body)", flush=True)
+        elif (not self.uniform) and (f"partNumber={self.victim_part}" in path and method == "PUT"
                 and not self.state["victim_taken"]):
             self.state["victim_taken"] = True
             self.state["victim_active_until"] = time.monotonic() + self.victim_seconds
@@ -172,24 +191,34 @@ class Relay:
         # --- forward the body (paced iff victim) ---------------------------
         # `rest` is the body's first slice, read together with the head in one
         # TCP read. It MUST go upstream first and count in the pacing budget.
+        t_body0 = time.monotonic()
+        req_moved = 0
         if te:
-            await self.pump_until_eof(self.r, uwriter, rate, pre=rest)  # best effort
+            req_moved = await self.pump_until_eof(self.r, uwriter, rate, pre=rest)  # best effort
         elif length:
-            body_complete = await self.pump(self.r, uwriter, length, rate, pre=rest)
-            if not body_complete:
+            req_moved = await self.pump(self.r, uwriter, length, rate, pre=rest)
+            if req_moved != length:
                 # The client abandoned this connection mid-body — this is the
-                # engine's eviction tearing the impaired attempt off the wire.
-                # The server can never finish this request; relay nothing.
-                # Close BOTH ends now so the upstream sees a real disconnect
-                # instead of a proxy that quietly waits forever.
+                # engine's eviction/resplit/cancel tearing the impaired attempt
+                # off the wire. The server can never finish this request; relay
+                # nothing. Close BOTH ends now so the upstream sees a real
+                # disconnect instead of a proxy that quietly waits forever.
                 print(f"[throttle-proxy] client abandoned {request_line.split(' ')[0]} "
-                      f"{path} mid-body (partial of {length} B) — tearing the link down", flush=True)
+                      f"{path} mid-body (moved {req_moved} of {length} B) — tearing the link down", flush=True)
+                if rate:
+                    el = time.monotonic() - t_body0
+                    print(f"[throttle-proxy] VICTIM-WIRE moved={req_moved}B in {el:.1f}s "
+                          f"({req_moved / el:.0f} B/s) {method} {path}", flush=True)
                 for wr in (uwriter, self.w):
                     try:
                         wr.close()
                     except OSError:
                         pass
                 return
+        if rate:
+            el = time.monotonic() - t_body0
+            print(f"[throttle-proxy] VICTIM-WIRE moved={req_moved}B in {el:.1f}s "
+                  f"({req_moved / el:.0f} B/s) {method} {path}", flush=True)
 
         # --- relay the response head + body back, then close both ends
         try:
@@ -238,8 +267,11 @@ async def main_async(a: argparse.Namespace) -> None:
         await relay.run()
 
     server = await asyncio.start_server(on_conn, "127.0.0.1", a.listen_port)
-    print(f"[throttle-proxy] listening 127.0.0.1:{a.listen_port} -> {target[0]}:{target[1]} "
-          f"(victim partNumber={a.victim_part} @ {a.victim_rate} B/s, {a.victim_seconds}s, once)", flush=True)
+    model = (f"UNIFORM every UploadPart PUT @ {a.victim_rate} B/s" if a.victim_part == "all"
+             else f"victim partNumber={a.victim_part} @ {a.victim_rate} B/s, "
+                  f"{a.victim_seconds}s, once")
+    print(f"[throttle-proxy] listening 127.0.0.1:{a.listen_port} -> {target[0]}:{target[1]} ({model})",
+          flush=True)
     async with server:
         await server.serve_forever()
 
@@ -249,7 +281,9 @@ def main() -> None:
     ap.add_argument("listen_port", type=int)
     ap.add_argument("target_host")
     ap.add_argument("target_port", type=int)
-    ap.add_argument("--victim-part", type=int, default=2)
+    ap.add_argument("--victim-part", type=str, default="2",
+                    help="partNumber to impair once, or 'all' for the uniform "
+                         "whole-uplink model (issue #28)")
     ap.add_argument("--victim-rate", type=int, default=96 * 1024)
     ap.add_argument("--victim-seconds", type=int, default=45)
     a = ap.parse_args()
