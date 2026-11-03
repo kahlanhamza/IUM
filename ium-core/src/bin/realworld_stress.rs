@@ -507,7 +507,11 @@ async fn s6worse(
     let median_bps = payload["median_bps"]
         .as_f64()
         .ok_or("s6worse: resplit median missing")?;
-    if !(median_bps.is_finite() && median_bps > 0.0) {
+    // median >= 0: > 0 is the measured-rate path; exactly 0 is the FROZEN
+    // rule (cloud RED 41571828134: the adapter's writes never completed into
+    // the runner's tiny buffers — nothing was measurable, and the floor is
+    // the only honest target).
+    if !(median_bps.is_finite() && median_bps >= 0.0) {
         return Err(format!(
             "s6worse: resplit median is not a real measured rate: {median_bps}"
         ));

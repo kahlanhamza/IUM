@@ -113,13 +113,18 @@ class Relay:
         moved = 0
         start = time.monotonic()
         last_tick = time.monotonic()
-        if pre:
-            n = min(len(pre), until) if until is not None else len(pre)
-            dst.write(pre[:n])
+        # `pre` is dripped through the schedule like everything else (kept in
+        # the stash): relaying the whole head-glued burst at t=0 puts ~64 KB
+        # upstream in one blast and then ~32 s of SILENCE at B/s rates — the
+        # volume server's idle timeout (default 30 s, cloud RED 41571828134)
+        # kills the request mid-body on connection 1 exactly as it kills
+        # bursty reads later. Smooth ≤1 s flow from byte zero.
+        stash = bytearray(pre)
+        if pre and rate is None:
+            dst.write(pre)
             await dst.drain()
-            moved += n
-            if rate:
-                self.state["wire_moved"] += n
+            moved += len(pre)
+            stash.clear()
         while until is None or moved < until:
             if rate:
                 # Pay the FULL pacing debt BEFORE the next read — the schedule
@@ -146,15 +151,27 @@ class Relay:
                     if src.exception() is not None or src.at_eof():
                         return moved  # the client is gone — log what moved
                     await asyncio.sleep(0.25)
-            n = CHUNK if until is None else min(CHUNK, until - moved)
-            try:
-                b = await asyncio.wait_for(src.read(n), timeout=0.25)
-            except asyncio.TimeoutError:
-                continue  # schedule is due but the wire is idle — re-check
-            except (ConnectionResetError, OSError):
-                return moved  # RST surfaced through the read itself
-            if b == b"":
-                return moved  # the client is gone (EOF at the transport)
+            # due: relay ~1 s of wire time (`rate` bytes) — a 64 KB burst at
+            # B/s rates means ~32 s of SILENCE on the upstream connection and
+            # the volume server's idle timeout (default 30 s — cloud RED
+            # 41571828134) kills the request mid-body. Smooth ≤1 s flow keeps
+            # the server alive AND the engine's progress meter advancing, so
+            # the resplit windows measure the real link.
+            cap = max(rate, 1) if rate else CHUNK
+            n = min(CHUNK, cap)
+            if until is not None:
+                n = min(n, until - moved)
+            if stash:
+                b, stash = bytes(stash[:n]), stash[n:]
+            else:
+                try:
+                    b = await asyncio.wait_for(src.read(n), timeout=0.25)
+                except asyncio.TimeoutError:
+                    continue  # schedule is due but the wire is idle — re-check
+                except (ConnectionResetError, OSError):
+                    return moved  # RST surfaced through the read itself
+                if b == b"":
+                    return moved  # the client is gone (EOF at the transport)
             dst.write(b)
             await dst.drain()
             moved += len(b)

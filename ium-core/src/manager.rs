@@ -139,6 +139,16 @@ struct DriveShared {
     /// Issue #27 single-flight gate: only one worker per round may execute
     /// a resplit; every other proposer re-checks on its next window.
     resplit_in_flight: Arc<AtomicBool>,
+    /// Issue #28 frozen-link rule: when the job's FIRST lease began — the
+    /// starvation clock. A fleet median of 0 (every sample zero: the
+    /// adapter's writes never complete into buffers this small) is
+    /// unmeasurable for `plan()`, but a job starving past `slow_confirm`
+    /// with an oversized part still outstanding is data: the part is too
+    /// coarse. Per-lease elapsed cannot serve here (a hostile server kills
+    /// every attempt at its own 30 s read deadline — cloud RED
+    /// 41571828134 — resetting the clock each retry); the JOB is the unit
+    /// that starves.
+    first_lease_started: Arc<Mutex<Option<Instant>>>,
 }
 
 impl JobManager {
@@ -679,6 +689,7 @@ impl JobManager {
                 abort_rx: abort_rx.clone(),
                 failed: failed.clone(),
                 paused_seen: paused_seen.clone(),
+                first_lease_started: Arc::new(Mutex::new(None)),
                 paused_rx: paused_rx.clone(),
                 cancel_rx: cancel_rx.clone(),
                 resplit_rx: resplit_rx.clone(),
@@ -798,6 +809,17 @@ impl JobManager {
             // -- upload, with per-window progress sampling ------------------
             let progress = ProgressReporter::new();
             let lease_started = Instant::now();
+            {
+                // Issue #28: the starvation clock starts at the FIRST lease
+                // of the job (set-once; later leases do not reset it).
+                let mut first = shared
+                    .first_lease_started
+                    .lock()
+                    .expect("first lease poisoned");
+                if first.is_none() {
+                    *first = Some(lease_started);
+                }
+            }
             let mut watch = ThroughputWatch::new(&self.eviction, Instant::now());
             let mut last_bps: Option<f64> = None;
             let mut last_median: Option<f64> = None;
@@ -860,12 +882,18 @@ impl JobManager {
                         }
                         // Issue #27 (pattern #9): reshape the plan when the
                         // measured fleet rate says the outstanding parts are
-                        // too coarse. Single-flight; the winner's own lease
-                        // is retired with everyone else's.
-                        if let Some(median_bps) = last_median {
-                            if self.execute_resplit(shared, job_id, median_bps) {
-                                break Step::ResplitUnderneath;
-                            }
+                        // too coarse — and, since #28, when the fleet median
+                        // is UNMEASURABLE (0) and the job has starved past
+                        // slow_confirm: the frozen-link rule. Single-flight;
+                        // the winner's own lease is retired with everyone
+                        // else's.
+                        let job_elapsed = shared
+                            .first_lease_started
+                            .lock()
+                            .expect("first lease poisoned")
+                            .map(|t| t.elapsed());
+                        if self.execute_resplit(shared, job_id, last_median, job_elapsed) {
+                            break Step::ResplitUnderneath;
                         }
                     }
                 }
@@ -1150,12 +1178,33 @@ impl JobManager {
     /// with its real inputs, and restart the retry budgets (the plan they
     /// keyed on no longer exists). Returns `true` when a resplit executed —
     /// the caller's own lease is retired and it must re-lease.
-    fn execute_resplit(&self, shared: &DriveShared, job_id: &str, median_bps: f64) -> bool {
+    fn execute_resplit(
+        &self,
+        shared: &DriveShared,
+        job_id: &str,
+        median_bps: Option<f64>,
+        job_elapsed: Option<Duration>,
+    ) -> bool {
         let candidate = {
             let pool = shared.pool.lock().expect("pool mutex poisoned");
             let current = pool.outstanding_target();
-            self.resplit
-                .plan(Some(median_bps), current, crate::chunk::CHUNK_MIN)
+            match median_bps {
+                Some(m) if m > 0.0 => self.resplit.plan(Some(m), current, crate::chunk::CHUNK_MIN),
+                _ => {
+                    // Issue #28 frozen-link rule: an unmeasurable fleet median
+                    // (every sample zero — the adapter's writes never complete
+                    // into buffers this small) gives plan() nothing to act on;
+                    // a job starving past slow_confirm with an oversized part
+                    // still outstanding IS the signal. The floor is the only
+                    // honest target when no rate can be measured.
+                    let starved = job_elapsed.is_some_and(|e| e >= self.resplit.slow_confirm);
+                    if starved {
+                        self.resplit.plan_frozen(current, crate::chunk::CHUNK_MIN)
+                    } else {
+                        None
+                    }
+                }
+            }
         };
         let Some(new_target) = candidate else {
             return false;
@@ -1188,7 +1237,7 @@ impl JobManager {
                     "chunk_resplit",
                     &serde_json::json!({
                         "target": new_target,
-                        "median_bps": median_bps,
+                        "median_bps": median_bps.unwrap_or(0.0),
                         "chunks_before": chunks_before,
                         "chunks_after": chunks_after,
                     }),

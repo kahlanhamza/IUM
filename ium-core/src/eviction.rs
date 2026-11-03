@@ -221,6 +221,31 @@ impl ResplitPolicy {
         let raw = (median_bps * self.target_secs) as u64;
         raw.clamp(chunk_min, crate::chunk::CHUNK_MAX)
     }
+
+    /// The frozen-link rule (issue #28, cloud RED 41571828134): when the
+    /// fleet median is UNMEASURABLE — every sample zero, the adapter's first
+    /// write wedged inside socket buffers smaller than one report — `plan()`
+    /// correctly refuses (median 0 is no data). But a job that has starved
+    /// past `slow_confirm` with the same oversized part still outstanding and
+    /// not one measured byte IS data: the part is definitionally too coarse
+    /// for this link. Propose the protocol floor, subject to the same
+    /// would-actually-split gates as `plan` (hysteresis holds in the floor
+    /// regime — a piece at/below 2× the floor never splits, so the rule
+    /// cannot loop).
+    pub fn plan_frozen(&self, current_target: u64, chunk_min: u64) -> Option<u64> {
+        if current_target == 0 {
+            return None;
+        }
+        let implied = chunk_min; // no measurable rate — assume the worst legal shape
+        let splittable = current_target > 2 * implied;
+        let moves_enough =
+            (current_target - implied) as f64 / current_target as f64 >= self.min_change_ratio;
+        if splittable && moves_enough {
+            Some(implied)
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -233,6 +258,32 @@ mod tests {
             floor_ratio: 0.4,
             strikes_to_evict: 2,
         }
+    }
+
+    #[test]
+    fn plan_frozen_floors_an_oversized_part_and_holds_hysteresis() {
+        let p = ResplitPolicy::default();
+        let floor = 5 * 1024 * 1024;
+        // a 22 MiB part under a frozen link → the 5 MiB protocol floor
+        assert_eq!(p.plan_frozen(22 * 1024 * 1024, floor), Some(floor));
+        // at the floor regime nothing may split (hysteresis — no loops)
+        assert_eq!(p.plan_frozen(floor, floor), None);
+        assert_eq!(
+            p.plan_frozen(9 * 1024 * 1024, floor),
+            None,
+            "< 2× floor cannot split"
+        );
+        assert_eq!(
+            p.plan_frozen(2 * floor, floor),
+            None,
+            "exactly 2× floor is the gate boundary"
+        );
+        assert_eq!(
+            p.plan_frozen(2 * floor + 1, floor),
+            Some(floor),
+            "past the boundary it splits (pieces 5 MiB + remainder ≥ 5 MiB — same algebra as plan)"
+        );
+        assert_eq!(p.plan_frozen(0, floor), None);
     }
 
     #[test]
