@@ -173,7 +173,7 @@ impl TransferAdapter for WedgeAdapter {
     }
 }
 
-/// Issue #28 diagnostics: the runner's S6[2048] legs refuse to fire the
+/// Issue #28 diagnostics: the runner's `S6[2048]` legs refuse to fire the
 /// resplit even though every paper condition holds — this wrapper samples
 /// the adapter's OWN progress meter every 2 s to stderr, so a dispatched run
 /// shows the engine's actual progress curve (burst size, freeze point,
