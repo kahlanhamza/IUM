@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-03** · Phase: **M6 in progress — #32 CLOSED (real-network models: loss/RTT/one-shot-RST proven locally AND in the free cloud, run 41654248875). Open: #33 #34 #35. #1–#32 ALL closed.**
+> Last updated: **2026-11-03** · Phase: **M6 in progress — #32 + #33 CLOSED (server diversity: suite green against THREE S3 + TWO TUS implementations; the probe's first rclone run caught real defect #36, fixed same session). Open: #34 #35. #1–#33 + #36 ALL closed.**
 
 ---
 
@@ -75,8 +75,12 @@ discipline). M5 milestone complete per docs/04 — every box checked.
 ✅ #32 closed (2026-11-03, local + cloud run 41654248875: loss stalls absorbed with zero
 false evictions; 250 ms RTT never churned; a real mid-body RST lands as ONE counted
 `chunk_error {kind: Transient, action: Retry}` — and the probe's own assert caught the
-harness leaving the victim model armed on the rtt leg, engine innocent). Open: #33 (server
-diversity), #34 (long horizon + ENOSPC), #35 (real-shell WebDriver e2e). Owner's feature
+harness leaving the victim model armed on the rtt leg, engine innocent). ✅ #33 closed
+(2026-11-03, suite green against THREE S3 implementations (SeaweedFS 4.51, Garage
+rehearsal, rclone serve s3 1.75.2 — 23/23) and TWO TUS implementations (tusd 2.10.1,
+@tus/server 2.4.7 — 12/12 with one loud recorded delta); the probe's first rclone run
+caught #36, a latent real-AWS defect the canonical server masked, fixed same session).
+Open: #34 (long horizon + ENOSPC), #35 (real-shell WebDriver e2e). Owner's feature
 tranche (WebDAV/Drive, OAuth, Sprint-2 UI) decides after M6.
 
 ## 4. Backlog / next (ordered — milestone [M3: Real transports](https://github.com/kahlanhamza/IUM/milestone/2))
@@ -169,9 +173,13 @@ tranche (WebDAV/Drive, OAuth, Sprint-2 UI) decides after M6.
     + `stress.yml` `net_models`; local AND cloud run 41654248875 green; the probe's first
     run caught the harness's own contamination — victim model armed on the rtt leg —
     `--victim-part none` documents the trap; register rows updated same-commit).
-28. **#33 — server diversity probe**: third S3 implementation (`rclone serve s3`, pinned,
+28. ~~**#33 — server diversity probe**: third S3 implementation (`rclone serve s3`, pinned,
     free in CI) + second TUS lane if pinnable; every wire-fact delta pinned or honestly
-    recorded (register rows: adapter ↔ server wire ×2).
+    recorded (register rows: adapter ↔ server wire ×2)~~ ✅ (2026-11-03, rclone 1.75.2
+    lane 23/23 — first run was the RED that caught #36, a latent real-AWS Content-Length
+    defect SeaweedFS masked, fixed same session; @tus/server 2.4.7 lane 12/12 with ONE
+    loud recorded delta (tusd's GET-download is an extension, not core); wire-fact
+    ledgers on both issues; ci.yml Linux diversity legs; docs/08 rows same-commit).
 29. **#34 — long-horizon & resource probe**: overnight B/s leg, journal/RSS growth bounds,
     ENOSPC-while-journaling drill — what happens when TRUTH cannot be written (register
     rows: journal ↔ everything).
@@ -308,12 +316,15 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-03 | **Boundary register institutionalized (#31)** — the owner's "we must understand the relationship between entities and know what gonna break" answered as a checkable repo artifact, not chat prose: `docs/08` (forensic verdict over #23–#30 incl. the #30 A/B exoneration — zero regressions from fixes, all latent edge defects; entity map re-derived from a fresh `use crate::` grep at `812188f`; seam table mapping EVERY defect to date to its edge with today's pinning test; the 3-field design-note rule; the probe-class prediction table that motivated M6); docs/05 step 2 + Rules of engagement amended; feature/bug templates carry the register field (yaml.safe_load-validated). Docs + templates only, zero engine code | committed-tree gate green on `9b8e49b`; #31 closed by commit | `9b8e49b` |
 | 2026-11-03 | **M6 filed — production-readiness probe generation** (milestone 5, issues #32–#35 via `scripts/file_m6.py`): the owner's "does our engine ready? I don't think so" answered honestly — the engine is hardened on TWO pinned servers, ONE impairment axis (bandwidth), minute-scale horizons, and a never-driven shell. The four probes come straight from docs/08 §5's prediction table (a new probe class = first-time seam exposure): #32 loss/latency/RST (eviction+retry seams), #33 server diversity (adapter↔wire seams), #34 long-horizon+ENOSPC (journal seam), #35 real-shell WebDriver e2e (shell↔supervisor seam, never driven once). docs/04 M6 section added; STATUS backlog rewritten; feature tranche decision (WebDAV/Drive, OAuth, Sprint-2 UI) deferred to the owner until after M6 | milestone 5 open 0/4; probes ready for the loop | `f8e0208` |
 | 2026-11-03 | **#32 CLOSED — real-network models through the full loop** (design note + RED on the issue → implement → local real-data GREEN → cloud GREEN): `throttle_proxy.py` gains `--loss PCT` (RTO-scale stalls U(0.2,2.0)s per relayed segment — the application-observable of packet loss; a userspace relay CANNOT drop in-stream bytes), `--latency-ms/--jitter-ms` (connect+response RTT, bandwidth untouched), `--reset-after-bytes N` (ONE-SHOT hard RST of both ends via SO_LINGER=0 when the first UploadPart PUT crosses N bytes), `--victim-part none`; all sleeps responsive (≤250 ms steps watching the client — the #28 lesson). `realworld_stress s7net --model loss\|rtt\|reset` asserts journal truth per model (rtt: ZERO evictions/resplits — an alive-but-latent link is never churned; reset: ONE counted `chunk_error {kind: Transient, action: Retry}` then Done); harness S7 legs carry wire truth (LOSS/RESET-WIRE lines) + server truth (read-back sha256); `stress.yml` `net_models` input; docs/08 rows updated same-commit. **The probe caught its first bug on its first local run** — the rtt leg's own assert refused to pass because the harness had left the victim model ARMED (`--victim-part 2` = 96 KiB/s default); the engine's eviction of that secretly-throttled part was textbook-correct — fixed with `--victim-part none` + help-text trap warning. Local: S1–S5 + all three S7 legs green (real 30 MB film `5b603ec1…`, SeaweedFS 4.51: loss = 9 stalls absorbed 0 evictions; rtt = 16 pauses 0 churn; reset = RST at 1,064,960 B exactly once + one counted retry). **Cloud run 41654248875 @ `6f514c7` ALL GREEN**: loss = 11 stalls/0 evictions @ 6.3 s; rtt = 16 pauses/0 churn @ 4.5 s; reset = RST at 1,097,728 B exactly once, retry completed byte-exact @ 0.54 s. Offline 146/146; committed-tree gate GREEN | issue #32 closed with wire evidence | `6f514c7`, run 41654248875 |
+| 2026-11-03 | **#33 closed — server diversity probe + #36 (adapter defect it caught)**: `s3-test.sh --server rclone` (pinned rclone 1.75.2 `serve s3`, SHA256SUMS supply-chain guard) — first-ever third-implementation run was RED 22/23: zero-byte PutObject went out with NEITHER Content-Length nor chunked-TE and gofakes3 enforces AWS-real 411 MissingContentLength where SeaweedFS was lenient (latent real-AWS bug) → #36 filed with the RED, fixed same session (explicit `content-length: 0`, UploadPart's existing mechanism) → rclone 23/23 + SeaweedFS 23/23. `tus-test.sh --server tus-node` (pinned @tus/server 2.4.7 + @tus/file-store 2.1.2, committed package-lock.json = integrity guard) — 12/12 with ONE loud recorded delta: tusd's GET-download is an extension, NOT tus core (read-back tests loud-skip via `IUM_TUS_SERVER`). Wire-fact ledgers on both issues (ListParts-works-despite-docs, `&#34;` numeric entities re-confirmed, 409/412/204-Location facts); ci.yml Linux diversity legs; docs/08 rows updated same-commit | rclone 23/23, tus-node 12/12, canonical lanes re-green, offline 146/146, committed-tree gate GREEN on `a35d881` |
 
 ## 10. Security
 
 - Token state: fine-grained PAT restored into `.secrets/gh_token` on 2026-11-02 (gitignored,
-  chmod 600); re-pasted a FOURTH time and re-stored 2026-11-03. **The owner has now pasted
-  it into chat four times — rotate it at
+  chmod 600); re-pasted a FOURTH time and re-stored 2026-11-03; **pasted a FIFTH time and
+  re-stored 2026-11-03 (sandbox recycle wiped `.secrets/` again — the file must be
+  restored after every recycle). The owner has now pasted it into chat five times — rotate
+  it at
   <https://github.com/settings/personal-access-tokens> when convenient.** After rotating:
   `mkdir -p .secrets && chmod 700 .secrets && echo 'NEW_TOKEN' > .secrets/gh_token && chmod 600 .secrets/gh_token`
   (never commit this file; scopes needed: repo contents read/write, issues read/write,
