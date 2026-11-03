@@ -98,6 +98,27 @@ prose. An entry without verifiable issue numbers does not belong here.
   drills and the real-data drill stay canonical on SeaweedFS/tusd.
 
 ### Fixed
+- #39 — the shell aborted on its first-ever Upload click: `create_job` and
+  `resume_signal` are SYNC tauri commands (tauri v2 runs them on the GTK
+  main thread, per docs) and `Supervisor::drive` spawned with a raw
+  `tokio::spawn`, which panics without a runtime context; the unwind
+  crossed the webview IPC FFI boundary and aborted the whole process
+  ("Session terminated without a reply", CI runs #65–#70). The supervisor
+  now captures a `tokio::runtime::Handle` at construction
+  (`Supervisor::with_handle` for context-less hosts) and spawns through it
+  from any thread; the tauri setup passes the async-runtime handle. Pinned
+  by `tests/supervisor.rs::drive_is_callable_off_the_runtime_thread` and
+  `with_handle_constructs_off_runtime_and_drives_off_runtime` (RED panic
+  captured at supervisor.rs:77 pre-fix).
+- #40 — the webview had NO capabilities file, so the ACL granted it
+  nothing: app commands are allowed by default (tauri docs) but the
+  `job_updated` event stream (`plugin:event|listen`) is permission-gated —
+  the UI silently never received a snapshot and froze on its creation-time
+  row while the engine uploaded (e2e run #71: row stuck at `probing pct=0`
+  while the recorder recorded the full 24 MiB). `capabilities/default.json`
+  now grants `core:default` (includes `core:event:default`) and
+  `dialog:default` (the file picker — the paste-a-path seam had been
+  dodging it).
 - #36 — zero-byte PutObject sent no Content-Length: hyper puts neither
   Content-Length nor chunked-TE on the wire for an empty fixed-size body,
   and AWS S3 semantics (which rclone/gofakes3 enforces with 411
