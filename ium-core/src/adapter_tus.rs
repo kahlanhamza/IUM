@@ -20,15 +20,15 @@
 //!   journaled);
 //! * `404` = unknown session → `SessionLost` (→ Reattach);
 //! * wire-fact delta (#33/#37): @tus/server answers an early-rejected PATCH
-//!   (unknown file, header rejections) by writing the error status and
+//!   (unknown file, offset conflict) by writing the error status and
 //!   closing the connection WITHOUT consuming the request body — a client
 //!   still streaming a large body may therefore observe a connection reset
-//!   (`error sending request`) instead of the status. tusd drains and
-//!   answers 404 normally. The adapter thus never declares from the reset
-//!   alone: after a PATCH transport failure it HEADs the session — the
-//!   server's answer, not the socket's mood, decides (`head()`);
-//!   `404/410` there → `SessionLost`, anything else → `Transient` (retries
-//!   stay counted).
+//!   (`error sending request`) instead of the 404/409. tusd drains and
+//!   answers normally. The adapter thus never declares from the reset
+//!   alone: after a PATCH transport failure it HEADs the session and lets
+//!   the SERVER's answer classify — `404/410` → `SessionLost` (→ Reattach),
+//!   offset moved past the attempt → the `Conflict` realign dance (the 409
+//!   it never saw), otherwise → `Transient` (retries stay counted).
 //! * verify is a **read-only** HEAD (`offset == length == source_size`) —
 //!   TUS needs no commit gate (contrast ADR-010's S3 finalize-if-needed);
 //! * tusd v2.10.1 offers no `checksum` extension — not used (verify is
@@ -212,19 +212,33 @@ impl TusAdapter {
             Err(e) => {
                 // Transport failure is ambiguous by itself: a real network
                 // blip (→ Transient, retry) and @tus/server's early-reject
-                // socket close (#33/#37 — the 404 never reaches the client
-                // while the body is still streaming) look identical to
-                // hyper. Ask the server before declaring: a HEAD that comes
-                // back 404/410 is the session's real state (→ SessionLost);
-                // a HEAD that succeeds or also fails means the wire is the
-                // problem — keep the original Transient so retries are
-                // counted. Verify-before-declare, for error paths too.
-                return Err(PatchFailure::Adapter(match self.head(location).await {
-                    Err(AdapterError::SessionLost(_)) => AdapterError::SessionLost(format!(
-                        "PATCH transport-failed and HEAD confirms the session is gone: {e}"
-                    )),
-                    _ => AdapterError::Transient(format!("PATCH failed: {e}")),
-                }));
+                // socket close (#33/#37 — the 404/409 never reaches the
+                // client while the body is still streaming) look identical
+                // to hyper. Ask the server before declaring — its answer,
+                // not the socket's mood, classifies (verify-before-declare,
+                // for error paths too):
+                //
+                // * HEAD 404/410 → SessionLost (→ Reattach): the session
+                //   is REALLY gone;
+                // * HEAD 200 with an offset ≠ the attempted one → the
+                //   PATCH was rejected or partially consumed without
+                //   acking to us — the 409 we never saw. `Conflict` sends
+                //   the caller into the realign dance from the server's
+                //   offset (this call's flush is reckoned as waste there);
+                // * anything else (server at exactly our attempted offset
+                //   — the PATCH took nothing — or HEAD failing too) →
+                //   Transient: a genuine wire problem, retries counted.
+                return Err(match self.head(location).await {
+                    Err(AdapterError::SessionLost(_)) => {
+                        PatchFailure::Adapter(AdapterError::SessionLost(format!(
+                            "PATCH transport-failed and HEAD confirms the session is gone: {e}"
+                        )))
+                    }
+                    Ok((_, server_offset)) if server_offset != offset => PatchFailure::Conflict,
+                    _ => {
+                        PatchFailure::Adapter(AdapterError::Transient(format!("PATCH failed: {e}")))
+                    }
+                });
             }
         };
         match resp.status().as_u16() {
