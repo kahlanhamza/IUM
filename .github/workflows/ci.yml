@@ -141,7 +141,7 @@ jobs:
         run: cargo install tauri-driver --locked
       - name: Build shell + loopback recorder
         run: |
-          cargo build -p ium-app --bin ium-app
+          cargo build -p ium-app --bin ium-app --features ium-app/custom-protocol
           cargo build -p ium-core --bin loopback_recorder
       - name: Drive the shell once (create/progress/pause/resume/done/inspect/cancel)
         run: bash scripts/app-e2e.sh --skip-build

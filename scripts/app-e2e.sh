@@ -29,7 +29,7 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
   say "building frontend (npm ci + tsc strict + vite build)"
   (cd "$ROOT/ium-app" && { [ -d node_modules ] || npm ci --no-audit --no-fund --loglevel=error; } && npm run build)
   say "building shell + recorder (cargo)"
-  (cd "$ROOT" && cargo build -p ium-app --bin ium-app)
+  (cd "$ROOT" && cargo build -p ium-app --bin ium-app --features ium-app/custom-protocol)
   (cd "$ROOT" && cargo build -p ium-core --bin loopback_recorder)
 fi
 

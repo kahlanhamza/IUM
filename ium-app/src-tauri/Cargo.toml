@@ -10,6 +10,14 @@ authors = ["IUM community"]
 name = "ium_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Production/standalone builds serve the EMBEDDED dist over the custom
+# protocol; without it the binary loads `devUrl` (http://localhost:5173)
+# and a shell run without a dev server renders "Connection refused"
+# (caught by the #35 e2e boot dump — the shell was clippy'd and tested,
+# but never RUN, before the WebDriver probe).
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
