@@ -165,8 +165,19 @@ re-ordered to [B, A] and `tr:last-child` — written in the one-row world, never
 executed until now — pointed at job A. Fix: `row_for_file()` addresses rows BY
 CONTENT (first cell holds the basename), legs A and B both; zero positional
 selectors remain. Side note: #73's `core (macos-latest)` = cancelled with a
-missing log blob — runner died mid-job, infra noise (green on #71/#72 same
-sources).
+missing log blob — runner died mid-job,  Run
+#74 (@ `97eea69`): the content-addressed rows worked — leg B ran, Cancel clicked,
+`Canceled` badge PASSED — and died at the last server-truth read: `record file
+recorder-b.json never appeared`. Mechanism: the cancel fires the moment `running`
+shows (the one-shot family's confirmed bytes cannot move mid-flight), which can
+beat the PUT's first byte; the recorder saw ZERO requests and only wrote its
+record on the first request — a perfect "holds nothing" ending mistaken for a
+missing server. Fix (tooling, honest by construction): the loopback recorder
+writes its record AT BOOT (all-zero record = "served nothing yet"; smoke-tested
+locally: boot record, HEAD 404 pre-PUT, PUT updates it); `read_record` stays
+strict. Chain: #70 abort (#39) → #71 frozen row (#40) → #72 row click → #73
+wrong row → #74 record-at-boot — after this every step of both legs has
+executed at least once.
 
 ## 4. Backlog / next (ordered — milestone [M3: Real transports](https://github.com/kahlanhamza/IUM/milestone/2))
 

@@ -526,6 +526,16 @@ fn main() {
         args.throttle_bps, args.record_file
     );
 
+    // The record file is a SERVER-TRUTH surface: it must exist from boot,
+    // not from the first request. Run #74's cancel leg proved why — a user
+    // cancel can land BEFORE the PUT's first byte (the one-shot family's
+    // confirmed-bytes cannot move mid-flight, so the e2e cancels the moment
+    // `running` shows), the recorder honestly saw zero requests, and the
+    // e2e's `read_record` then reported "record file never appeared" — a
+    // perfect ending mistaken for a missing server. An all-zero record at
+    // boot IS the truth "this recorder has served nothing yet".
+    write_record(&args.record_file, &state.lock().unwrap());
+
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
