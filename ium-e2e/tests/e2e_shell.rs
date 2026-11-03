@@ -556,11 +556,21 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
     // INSPECTOR = inspect_chunks through real IPC: click the row, read the
     // journal truth the drawer renders verbatim (columns: #, Span, State,
     // Confirmed, Token).
-    let row_el = wd
-        .wait_for_element(row_a, Duration::from_secs(10))
+    //
+    // Click a CELL of the row, not the <tr>: the jobs table is wider than
+    // the window (seven columns, three action buttons), and a full-width
+    // row cannot be scrolled into view horizontally — the click atom then
+    // answers "element not interactable" (run #72; geckodriver#1294 is the
+    // same mechanism). A user clicks a cell anyway: the onClick lives on
+    // the <tr> and every cell bubbles to it — the same user path, no seam.
+    let row_cell = wd
+        .wait_for_element(
+            "table tbody tr:first-child td:first-child",
+            Duration::from_secs(10),
+        )
         .await
-        .expect("row A");
-    wd.click(&row_el)
+        .expect("row A cell");
+    wd.click(&row_cell)
         .await
         .expect("click row A opens inspector");
     wd.wait_for_element("aside", Duration::from_secs(10))
