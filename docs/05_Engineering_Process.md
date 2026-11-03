@@ -12,7 +12,10 @@
    templates (`.github/ISSUE_TEMPLATE/`).
 2. **Design note for non-trivial work.** Anything touching the journal schema, the state
    machine, the chunk pool, or the adapter contract gets a short design note in the issue
-   (or `docs/` if it deserves an ADR) *before* code.
+   (or `docs/` if it deserves an ADR) *before* code. Since #31 the note names three things
+   (docs/08_Boundary_Register.md §4): **entities touched**, **edges at risk**, and the
+   **pinning test per edge** — an existing test cited by name, or a new one in the same
+   issue. An unpinned edge is not a promise; it is a new test.
 3. **Failing test first.** For every bug: reproduce it as a test that fails on current HEAD.
    For every feature: the acceptance criteria become tests. Paste the failing output into the
    issue. A fix without a failing test does not ship.
@@ -86,3 +89,7 @@ instead of inventing):
   decompilation, no copying of vendor code or assets.
 - **Postmortem in 3 lines.** Any bug found outside of tests gets 3 lines in the issue: what
   slipped, why the gates did not catch it earlier, which gate/test now would.
+- **Boundary register** (#31, docs/08): entities never break — edges do, under timing or
+  semantics owned by the other side. Any commit that changes an edge updates the affected
+  docs/08 §3 row in the same commit. Forensic baseline: zero of #23–#30 were caused by a
+  prior fix; every one was a latent edge defect exposed by a new probe class.

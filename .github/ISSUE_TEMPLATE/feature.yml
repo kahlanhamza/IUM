@@ -21,6 +21,16 @@ body:
     attributes:
       label: Out of scope
       description: Explicitly excluded, so scope does not creep.
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Boundary register (docs/08 §4 — mandatory since #31)
+      description: >
+        Entities touched (docs/08 §2 map), edges at risk (docs/08 §3 rows), and the pinning
+        test per at-risk edge — an existing test cited by name, or a new one in this issue.
+        "Will add later" is not a pinning test.
+    validations:
+      required: true
   - type: checkboxes
     id: process
     attributes:
@@ -29,3 +39,4 @@ body:
         - label: Design note written (if this touches journal schema, state machine, chunk pool, or adapter contract)
         - label: Acceptance criteria encoded as tests before implementation
         - label: CHANGELOG.md updated (any issue that changes public behavior — docs/05 versioning policy)
+        - label: Boundary register updated in the same commit if an edge changes (docs/08 §6)

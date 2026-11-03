@@ -44,6 +44,14 @@ body:
     attributes:
       label: Violated invariant / spec section
       description: e.g. "journal is truth (ADR-002)", "verify-before-declare (ADR-004)", "spec §4.2".
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Boundary register — which edge did this live at? (docs/08 §3)
+      description: >
+        Entities never break — edges do. Name the seam (e.g. "adapter_tus ↔ server wire",
+        "manager ↔ eviction") and the pinning test that now covers it. Optional at report
+        time, mandatory in the fix's design note.
   - type: checkboxes
     id: process
     attributes:
@@ -51,3 +59,4 @@ body:
       options:
         - label: CHANGELOG.md updated (any issue that changes public behavior — docs/05 versioning policy)
         - label: Acceptance criteria encoded as tests before the fix lands
+        - label: Boundary register updated in the same commit if an edge changes (docs/08 §6)
