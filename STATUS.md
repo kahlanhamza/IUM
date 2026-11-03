@@ -151,7 +151,22 @@ full-width `<tr>` cannot be scrolled into view horizontally and the click atom
 refuses it (geckodriver#1294 = same class). Fix is harness-only: click the row's
 first CELL (onClick is on the `<tr>`, every cell bubbles — same user path). Chain
 so far: #70 abort at click (#39) → #71 frozen row (#40) → #72 row click (#35
+ Chain
+so far: #70 abort at click (#39) → #71 frozen row (#40) → #72 row click (#35
 harness fix).
+
+Run #73 (@ `ebe2c3e`) VERDICT: the cell click WORKED — the inspector opened and
+leg A is fully green including the chunk-table asserts — and leg B died at the
+running-wait: `last state=done pct=100`. Recorder B: `put_count: 1,
+received_bytes: 16777216` — the PUT ran honestly at its 1 MiB/s throttle
+(16 MiB ≈ 16 s, inside the 30 s window). The test watched THE WRONG ROW:
+`list_jobs` renders NEWEST-FIRST, so the moment job B was created the table
+re-ordered to [B, A] and `tr:last-child` — written in the one-row world, never
+executed until now — pointed at job A. Fix: `row_for_file()` addresses rows BY
+CONTENT (first cell holds the basename), legs A and B both; zero positional
+selectors remain. Side note: #73's `core (macos-latest)` = cancelled with a
+missing log blob — runner died mid-job, infra noise (green on #71/#72 same
+sources).
 
 ## 4. Backlog / next (ordered — milestone [M3: Real transports](https://github.com/kahlanhamza/IUM/milestone/2))
 

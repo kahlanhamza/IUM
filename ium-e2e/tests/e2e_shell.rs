@@ -322,6 +322,31 @@ async fn row_percent(wd: &Wd, row_css: &str) -> Result<u64, String> {
     Ok(pct)
 }
 
+/// Resolve a job row BY CONTENT: the first cell holds the source's basename
+/// (`JobsTable::fileName`). Positional selectors lie the moment two rows
+/// exist — the jobs list renders NEWEST-FIRST (the manager's `list_jobs`
+/// order), so run #73's `tr:last-child` was job A's row (done, 100%) while
+/// job B ran in row 1; the cancel leg watched the wrong job for 30 s.
+async fn row_for_file(wd: &Wd, file_name: &str) -> Result<String, String> {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        for i in 1..=16 {
+            let cell_css = format!("table tbody tr:nth-child({i}) td:first-child");
+            let Ok(cell) = wd.wait_for_element(&cell_css, Duration::from_secs(1)).await else {
+                break; // no row i — end of the table
+            };
+            let t = wd.text(&cell).await.unwrap_or_default();
+            if t.contains(file_name) {
+                return Ok(format!("table tbody tr:nth-child({i})"));
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("no row whose file cell contains '{file_name}'"));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 /// Wait until the row's state chip equals `want` AND, when `pct_below` is
 /// set, the rendered percent is strictly below it (lets the test act EARLY
 /// in a throttled run — pause/cancel must land mid-transfer, not in the
@@ -504,8 +529,9 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
     }
     wd.click(&submit).await.expect("click Upload");
 
-    let row_a = "table tbody tr:first-child";
-    wait_state(&wd, row_a, "running", Duration::from_secs(30), None)
+    // The row is matched by FILE (newest-first list — see row_for_file).
+    let row_a = row_for_file(&wd, "e2e-a.bin").await.expect("row A by file");
+    wait_state(&wd, &row_a, "running", Duration::from_secs(30), None)
         .await
         .expect("job A running");
 
@@ -513,10 +539,10 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
     // — polled with a deadline, not two blind samples: under the throttle a
     // chunk boundary lands every few seconds and a 2-core CI runner can
     // delay the first boundary past any fixed pair (the #65–#69 lesson).
-    let p0 = row_percent(&wd, row_a).await.expect("progress sample 0");
+    let p0 = row_percent(&wd, &row_a).await.expect("progress sample 0");
     let deadline = Instant::now() + Duration::from_secs(45);
     loop {
-        let p = row_percent(&wd, row_a).await.expect("progress poll");
+        let p = row_percent(&wd, &row_a).await.expect("progress poll");
         if p > p0 {
             break;
         }
@@ -536,7 +562,7 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         .await
         .expect("pause button");
     wd.click(&pause_btn).await.expect("click Pause");
-    wait_state(&wd, row_a, "paused", Duration::from_secs(60), None)
+    wait_state(&wd, &row_a, "paused", Duration::from_secs(60), None)
         .await
         .expect("job A paused");
 
@@ -549,7 +575,7 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         .await
         .expect("resume button");
     wd.click(&resume_btn).await.expect("click Resume");
-    wait_state(&wd, row_a, "done", Duration::from_secs(120), None)
+    wait_state(&wd, &row_a, "done", Duration::from_secs(120), None)
         .await
         .expect("job A done");
 
@@ -564,10 +590,7 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
     // same mechanism). A user clicks a cell anyway: the onClick lives on
     // the <tr> and every cell bubbles to it — the same user path, no seam.
     let row_cell = wd
-        .wait_for_element(
-            "table tbody tr:first-child td:first-child",
-            Duration::from_secs(10),
-        )
+        .wait_for_element(&format!("{row_a} td:first-child"), Duration::from_secs(10))
         .await
         .expect("row A cell");
     wd.click(&row_cell)
@@ -691,8 +714,11 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
     }
     wd.click(&submit).await.expect("click Upload B");
 
-    let row_b = "table tbody tr:last-child";
-    wait_state(&wd, row_b, "running", Duration::from_secs(30), None)
+    // By FILE again: after B's creation the list re-orders to [B, A] —
+    // run #73 watched job A's row here (`last state=done pct=100`) while
+    // the throttled one-shot PUT ran to completion in row 1.
+    let row_b = row_for_file(&wd, "e2e-b.bin").await.expect("row B by file");
+    wait_state(&wd, &row_b, "running", Duration::from_secs(30), None)
         .await
         .expect("job B running");
 
@@ -706,7 +732,7 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         .await
         .expect("cancel button");
     wd.click(&cancel_btn).await.expect("click Cancel");
-    wait_state(&wd, row_b, "canceled", Duration::from_secs(30), None)
+    wait_state(&wd, &row_b, "canceled", Duration::from_secs(30), None)
         .await
         .expect("job B canceled");
 
