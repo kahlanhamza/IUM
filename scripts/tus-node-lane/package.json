@@ -1,0 +1,10 @@
+{
+  "name": "ium-tus-node-lane",
+  "private": true,
+  "description": "Second TUS lane (issue #33): pinned @tus/server + @tus/file-store. The lockfile is the supply-chain guard (registry integrity hashes), the same guarantee shape as the binary lanes' sha256 sidecars.",
+  "type": "module",
+  "dependencies": {
+    "@tus/file-store": "2.1.2",
+    "@tus/server": "2.4.7"
+  }
+}

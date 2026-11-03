@@ -59,6 +59,19 @@ jobs:
       - name: TUS wire tests (tusd 2.10.1)
         shell: bash
         run: bash scripts/tus-test.sh --with-real
+      # Issue #33 (server diversity): the suite ALSO passes against a third
+      # S3 implementation (rclone serve s3, pinned, free) and a second TUS
+      # implementation (@tus/server, npm-pinned). Ubuntu-only: the diversity
+      # probe is about the WIRE, not the OS matrix; the canonical servers
+      # above already cover all three OSes.
+      - name: S3 wire tests — diversity lane (rclone serve s3 1.75.2)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/s3-test.sh --server rclone
+      - name: TUS wire tests — diversity lane (@tus/server 2.4.7)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/tus-test.sh --server tus-node
 
   # Issue #14 (ADR-006 amendment): the shell compiles under the same gates
   # as the engine — natively on every OS we ship on. The frontend lane

@@ -265,6 +265,17 @@ async fn tus_real_video_through_the_engine() {
             return;
         }
     };
+    // Issue #33: the drill's integrity proof is a GET read-back — tusd's own
+    // extension, NOT tus 1.0.0 core; the tus-node lane (@tus/server) answers
+    // GET with 404 (captured live). Loud skip there; the tusd lane carries
+    // this drill canonically.
+    if std::env::var("IUM_TUS_SERVER").as_deref() == Ok("tus-node") {
+        eprintln!(
+            "skipped (loud, #33): real-video read-back needs tusd's GET-download extension; \
+             @tus/server answers GET with 404"
+        );
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let Some(fx) = real_video(dir.path()) else {
         return;

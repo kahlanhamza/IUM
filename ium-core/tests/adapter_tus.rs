@@ -84,6 +84,30 @@ fn live() -> Option<(TusAdapter, String)> {
     Some((TusAdapter::new(), endpoint))
 }
 
+/// Which pinned TUS server this lane runs against: "tusd" (canonical, the
+/// harness default) or "tus-node" (issue #33, @tus/server). The ONLY known
+/// wire-fact delta between the two: tusd's GET-download is its own extension
+/// — tus 1.0.0 core has no download, and @tus/server answers GET on the
+/// upload resource with 404 (captured live, #33). Tests that need the
+/// read-back skip LOUDLY on the tus-node lane; everything else runs on both.
+fn lane_server() -> String {
+    std::env::var("IUM_TUS_SERVER").unwrap_or_else(|_| "tusd".into())
+}
+
+/// Loud per-test skip for read-back assertions on lanes without the
+/// GET-download extension (#33 — the delta is the evidence, never silent).
+fn requires_get_download() -> bool {
+    if lane_server() == "tusd" {
+        return true;
+    }
+    eprintln!(
+        "skipped (loud, #33): read-back needs tusd's GET-download extension; \
+         {} lane = @tus/server (tus 1.0.0 core answers GET with 404)",
+        lane_server()
+    );
+    false
+}
+
 fn spec(endpoint: &str, path: &std::path::Path, size: u64) -> JobSpec {
     JobSpec {
         source_path: path.to_string_lossy().into_owned(),
@@ -156,6 +180,9 @@ async fn tus_full_lifecycle_two_parts_and_readback() {
     let Some((adapter, endpoint)) = live() else {
         return;
     };
+    if !requires_get_download() {
+        return;
+    }
     let size: u64 = 12 * MIB; // 5 MiB + 7 MiB
     let dir = tempfile::tempdir().unwrap();
     let path = write_source(&dir, "life.bin", size);

@@ -1,20 +1,33 @@
 #!/usr/bin/env bash
-# s3-test.sh — the 3-OS S3 test harness (issue #9).
+# s3-test.sh — the 3-OS S3 test harness (issue #9; server diversity lane #33).
 #
-# Downloads the PINNED SeaweedFS binary for this runner (one product, every
-# OS: linux/darwin/windows — Garage v2.1.0 publishes Linux-only binaries, the
-# MinIO premise is dead, see docs/07 §6 amendment), boots it on a random free
-# port triple with throwaway CI creds, creates the bucket, exports IUM_S3_*,
-# runs the env-gated S3 suite (and, with --with-drill, the kill-9 drill),
-# then aborts leftover multipart uploads and kills the server.
+# Downloads the PINNED S3 server binary for this runner and boots it with
+# throwaway CI creds, creates the bucket, exports IUM_S3_*, runs the
+# env-gated S3 suite (and, with --with-drill, the kill-9 drill), then aborts
+# leftover multipart uploads and kills the server.
 #
-# Usage: scripts/s3-test.sh [--with-drill] [--with-real]
-# Requires: bash, curl, tar, md5sum, python3|python, cargo (already set up).
+# Servers (--server NAME, default seaweedfs):
+#   seaweedfs  SeaweedFS 4.51 — one product, every OS (linux/darwin/windows;
+#              Garage v2.1.0 publishes Linux-only, the MinIO premise is dead,
+#              see docs/07 §6 amendment). Canonical: carries the kill-9 drill.
+#   rclone     rclone 1.75.2 `serve s3` (issue #33 — third S3 implementation,
+#              built on rclone's gofakes3 fork). Suite-only: the kill-9 drill
+#              semantics were built against SeaweedFS and stay canonical there.
+#
+# Supply-chain guards (recorded harness facts, #33): SeaweedFS ships per-asset
+# .md5 sidecars; rclone ships NO per-asset checksums — the guard is the
+# per-release SHA256SUMS file, grepped for the asset line.
+#
+# Usage: scripts/s3-test.sh [--server seaweedfs|rclone] [--with-drill] [--with-real]
+# Requires: bash, curl, tar/unzip, sha256sum, python3|python, cargo (already set up).
 
 set -euo pipefail
 
 VERSION="4.51"
 BASE_URL="https://github.com/seaweedfs/seaweedfs/releases/download/${VERSION}"
+SERVER="seaweedfs"
+RCLONE_VERSION="1.75.2"
+RCLONE_BASE_URL="https://downloads.rclone.org/v${RCLONE_VERSION}"
 BUCKET="ium-test"
 WITH_DRILL=0
 WITH_REAL=0
@@ -24,6 +37,14 @@ say() { echo "[s3-test] $*"; }
 die() { echo "[s3-test] FAIL: $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
   case "$1" in
+    # --server NAME: which pinned S3 implementation to run against (#33).
+    --server)
+      [ $# -ge 2 ] || die "--server needs a value (seaweedfs|rclone)"
+      case "$2" in
+        seaweedfs|rclone) SERVER="$2" ;;
+        *) die "unknown server: $2 (seaweedfs|rclone)" ;;
+      esac
+      shift ;;
     --with-drill) WITH_DRILL=1 ;;
     # --with-real: also run the real-data drill (tests/real_data.rs, issue
     # #17) — a REAL ffmpeg-generated video through the engine; skipped loud
@@ -39,6 +60,10 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+if [ "$WITH_DRILL" = 1 ] && [ "$SERVER" != "seaweedfs" ]; then
+  die "--with-drill is SeaweedFS-canonical only (kill-9 drill semantics built vs SeaweedFS; see #33)"
+fi
+
 PY=python3
 command -v python3 >/dev/null 2>&1 || PY=python
 command -v "$PY" >/dev/null 2>&1 || die "no python for s3curl.py"
@@ -48,13 +73,25 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 # --- 1. per-OS asset ------------------------------------------------------
 os="$(uname -s)"
 arch="$(uname -m)"
-case "$os" in
-  Linux)  case "$arch" in x86_64) ASSET="linux_amd64.tar.gz";; aarch64|arm64) ASSET="linux_arm64.tar.gz";; *) die "unsupported linux arch: $arch";; esac ;;
-  Darwin) case "$arch" in arm64) ASSET="darwin_arm64.tar.gz";; x86_64) ASSET="darwin_amd64.tar.gz";; *) die "unsupported mac arch: $arch";; esac ;;
-  MINGW*|MSYS*|CYGWIN*) ASSET="windows_amd64.zip" ;;
-  *) die "unsupported OS: $os" ;;
-esac
-say "pinned server: SeaweedFS ${VERSION} (${ASSET})"
+if [ "$SERVER" = "rclone" ]; then
+  # rclone names macOS "osx" (not darwin); windows asset is a zip; linux amd64
+  # zip (the .deb/.rpm are for humans, the zip is what other harnesses script).
+  case "$os" in
+    Linux)  case "$arch" in x86_64) ASSET="rclone-v${RCLONE_VERSION}-linux-amd64.zip";; aarch64|arm64) ASSET="rclone-v${RCLONE_VERSION}-linux-arm64.zip";; *) die "unsupported linux arch: $arch";; esac ;;
+    Darwin) case "$arch" in arm64) ASSET="rclone-v${RCLONE_VERSION}-osx-arm64.zip";; x86_64) ASSET="rclone-v${RCLONE_VERSION}-osx-amd64.zip";; *) die "unsupported mac arch: $arch";; esac ;;
+    MINGW*|MSYS*|CYGWIN*) ASSET="rclone-v${RCLONE_VERSION}-windows-amd64.zip" ;;
+    *) die "unsupported OS: $os" ;;
+  esac
+  say "pinned server: rclone ${RCLONE_VERSION} serve s3 (${ASSET})"
+else
+  case "$os" in
+    Linux)  case "$arch" in x86_64) ASSET="linux_amd64.tar.gz";; aarch64|arm64) ASSET="linux_arm64.tar.gz";; *) die "unsupported linux arch: $arch";; esac ;;
+    Darwin) case "$arch" in arm64) ASSET="darwin_arm64.tar.gz";; x86_64) ASSET="darwin_amd64.tar.gz";; *) die "unsupported mac arch: $arch";; esac ;;
+    MINGW*|MSYS*|CYGWIN*) ASSET="windows_amd64.zip" ;;
+    *) die "unsupported OS: $os" ;;
+  esac
+  say "pinned server: SeaweedFS ${VERSION} (${ASSET})"
+fi
 
 WORK="$(mktemp -d)"
 cleanup() {
@@ -77,28 +114,51 @@ cleanup() {
 }
 trap cleanup EXIT
 
-curl -sSL --retry 3 -o "$WORK/$ASSET" "$BASE_URL/$ASSET" \
-  || die "download $BASE_URL/$ASSET"
-curl -sSL --retry 3 -o "$WORK/$ASSET.md5" "$BASE_URL/$ASSET.md5" \
-  || die "download md5 sidecar"
-actual_md5="$(md5sum "$WORK/$ASSET" | cut -d' ' -f1)"
-expected_md5="$(tr -d '[:space:]' < "$WORK/$ASSET.md5")"
-[ -n "$expected_md5" ] && [ "$actual_md5" = "$expected_md5" ] \
-  || die "md5 mismatch for $ASSET (expected $expected_md5, got $actual_md5) — supply-chain guard"
-say "downloaded + md5 verified"
+if [ "$SERVER" = "rclone" ]; then
+  curl -sSL --retry 3 -o "$WORK/$ASSET" "$RCLONE_BASE_URL/$ASSET" \
+    || die "download $RCLONE_BASE_URL/$ASSET"
+  curl -sSL --retry 3 -o "$WORK/SHA256SUMS" "$RCLONE_BASE_URL/SHA256SUMS" \
+    || die "download SHA256SUMS"
+  expected_sha256="$(awk -v a="$ASSET" '$2==a {print $1}' "$WORK/SHA256SUMS" | tr -d '[:space:]')"
+  actual_sha256="$(sha256sum "$WORK/$ASSET" | cut -d' ' -f1)"
+  [ -n "$expected_sha256" ] && [ "$actual_sha256" = "$expected_sha256" ] \
+    || die "sha256 mismatch for $ASSET (expected ${expected_sha256:-none}, got $actual_sha256) — supply-chain guard"
+  say "downloaded + sha256 verified (via SHA256SUMS)"
+else
+  curl -sSL --retry 3 -o "$WORK/$ASSET" "$BASE_URL/$ASSET" \
+    || die "download $BASE_URL/$ASSET"
+  curl -sSL --retry 3 -o "$WORK/$ASSET.md5" "$BASE_URL/$ASSET.md5" \
+    || die "download md5 sidecar"
+  actual_md5="$(md5sum "$WORK/$ASSET" | cut -d' ' -f1)"
+  expected_md5="$(tr -d '[:space:]' < "$WORK/$ASSET.md5")"
+  [ -n "$expected_md5" ] && [ "$actual_md5" = "$expected_md5" ] \
+    || die "md5 mismatch for $ASSET (expected $expected_md5, got $actual_md5) — supply-chain guard"
+  say "downloaded + md5 verified"
+fi
 
 case "$ASSET" in
   *.tar.gz) tar -xzf "$WORK/$ASSET" -C "$WORK" weed || tar -xzf "$WORK/$ASSET" -C "$WORK" ;;
   *.zip)    "$PY" -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$WORK/$ASSET" "$WORK" ;;
 esac
-WEED="$WORK/weed"
-[ -x "$WEED" ] || WEED="$WORK/weed.exe"
-[ -x "$WEED" ] || die "binary not found after extract (no weed / weed.exe)"
-chmod +x "$WEED" 2>/dev/null || true
 
-# --- 2. random free port triple (no stale-server collisions, any OS) ------
+if [ "$SERVER" = "rclone" ]; then
+  # zip layout: rclone-v<ver>-<os>-<arch>/rclone(.exe) — find it portably.
+  RCLONE_BIN="$(find "$WORK" -type f \( -name rclone -o -name rclone.exe \) | head -1)"
+  [ -n "$RCLONE_BIN" ] || die "rclone binary not found after extract"
+  chmod +x "$RCLONE_BIN" 2>/dev/null || true
+else
+  WEED="$WORK/weed"
+  [ -x "$WEED" ] || WEED="$WORK/weed.exe"
+  [ -x "$WEED" ] || die "binary not found after extract (no weed / weed.exe)"
+  chmod +x "$WEED" 2>/dev/null || true
+fi
+
+# --- 2. random free port (rclone) / port triple (SeaweedFS) ----------------
 BASE=$(( (RANDOM % 20000) + 20000 ))
-S3_PORT=$BASE; MASTER_PORT=$((BASE + 1)); VOLUME_PORT=$((BASE + 2))
+S3_PORT=$BASE
+if [ "$SERVER" != "rclone" ]; then
+  MASTER_PORT=$((BASE + 1)); VOLUME_PORT=$((BASE + 2))
+fi
 
 cat > "$WORK/s3.json" <<'EOF'
 {
@@ -115,12 +175,21 @@ cat > "$WORK/s3.json" <<'EOF'
 EOF
 
 mkdir -p "$WORK/data"
-say "starting weed server (s3:$S3_PORT master:$MASTER_PORT volume:$VOLUME_PORT)"
-"$WEED" server -dir="$WORK/data" -ip=127.0.0.1 \
-  -master.port="$MASTER_PORT" -volume.port="$VOLUME_PORT" \
-  -s3 -s3.port="$S3_PORT" -s3.config="$WORK/s3.json" -idleTimeout=0 \
-  > "$WORK/weed.log" 2>&1 &
-WEED_PID=$!
+if [ "$SERVER" = "rclone" ]; then
+  say "starting rclone serve s3 (s3:$S3_PORT)"
+  "$RCLONE_BIN" serve s3 --auth-key "iumcikey,iumcisecret00000000000000000000000000000000" \
+    --addr "127.0.0.1:${S3_PORT}" "$WORK/data" > "$WORK/rclone.log" 2>&1 &
+  WEED_PID=$!   # single kill-handle name reused by cleanup
+  LOG="$WORK/rclone.log"
+else
+  say "starting weed server (s3:$S3_PORT master:$MASTER_PORT volume:$VOLUME_PORT)"
+  "$WEED" server -dir="$WORK/data" -ip=127.0.0.1 \
+    -master.port="$MASTER_PORT" -volume.port="$VOLUME_PORT" \
+    -s3 -s3.port="$S3_PORT" -s3.config="$WORK/s3.json" -idleTimeout=0 \
+    > "$WORK/weed.log" 2>&1 &
+  WEED_PID=$!
+  LOG="$WORK/weed.log"
+fi
 
 ready=0
 for _ in $(seq 1 120); do
@@ -128,14 +197,14 @@ for _ in $(seq 1 120); do
   if ! kill -0 "$WEED_PID" 2>/dev/null; then break; fi
   sleep 0.5
 done
-[ "$ready" = 1 ] || { tail -20 "$WORK/weed.log" >&2; die "S3 port not ready"; }
+[ "$ready" = 1 ] || { tail -20 "$LOG" >&2; die "S3 port not ready"; }
 say "S3 port ready"
 
 # --- 3. bucket -------------------------------------------------------------
 created=$("$PY" "$SCRIPT_DIR/s3curl.py" PUT "http://127.0.0.1:${S3_PORT}/${BUCKET}" | head -1 || true)
 case "$created" in
-  200|409) say "bucket ${BUCKET} ready (HTTP $created)" ;;
-  *) tail -20 "$WORK/weed.log" >&2; die "bucket create -> $created" ;;
+  200|201|409) say "bucket ${BUCKET} ready (HTTP $created)" ;;
+  *) tail -20 "$LOG" >&2; die "bucket create -> $created" ;;
 esac
 
 # --- 4. env + tests --------------------------------------------------------
@@ -153,6 +222,7 @@ export IUM_S3_REGION="us-east-1"
 cd "$REPO"
 
 if [ "$WITH_REALWORLD" = 1 ]; then
+  [ "$SERVER" = "seaweedfs" ] || die "--with-realworld is SeaweedFS-canonical only (#33)"
   [ "${#REALWORLD_FILES[@]}" -ge 1 ] || die "--with-realworld needs at least one file path"
   for f in "${REALWORLD_FILES[@]}"; do
     [ -f "$f" ] || die "real-world asset not found: $f"
@@ -171,9 +241,9 @@ if [ "$WITH_DRILL" = 1 ]; then
   cargo test -p ium-core --test s3_drill -- --nocapture
 fi
 
-if [ "$WITH_REAL" = 1 ]; then
+if [ "$WITH_REAL" = 1 ] && [ "$SERVER" = "seaweedfs" ]; then
   say "running real-data drill vs SeaweedFS (real_data, issue #17)"
   cargo test -p ium-core --test real_data -- --nocapture
 fi
 
-say "GREEN: S3 tests passed against SeaweedFS ${VERSION} on ${os}/${arch}"
+say "GREEN: S3 tests passed against ${SERVER} on ${os}/${arch}"

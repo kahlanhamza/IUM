@@ -81,6 +81,22 @@ prose. An entry without verifiable issue numbers does not belong here.
   call, then a bounded hold) makes the kill land deterministically at 25%:
   S4cancel cancels in 0.079 s with server HEAD 404; the same wedge gave
   S4pause a BOUNDED 10 s plateau (`pause_latency_s: 10.04`).
+- #33 — server diversity: the suites now run against THREE S3
+  implementations and TWO TUS implementations. `scripts/s3-test.sh --server
+  rclone` boots pinned rclone 1.75.2 `serve s3` (per-release SHA256SUMS is
+  the supply-chain guard — rclone ships no per-asset checksums); the full
+  23-test suite is green on it, re-confirming on a third implementation:
+  ListParts IS implemented although rclone's docs omit it, and Go's XML
+  encoder emits `&#34;` numeric entities in ETags (the exact #9 quirk class).
+  `scripts/tus-test.sh --server tus-node` boots pinned @tus/server 2.4.7 +
+  @tus/file-store 2.1.2 (committed package-lock.json — registry integrity
+  hashes are the supply-chain guard); the suite is green there with ONE
+  loud, recorded delta: tusd's GET-download is its own extension, NOT tus
+  1.0.0 core — @tus/server answers GET on the upload resource with 404, so
+  the read-back tests skip loudly on that lane (`IUM_TUS_SERVER` tells the
+  tests which wire they are on). CI gains Linux diversity legs; the kill-9
+  drills and the real-data drill stay canonical on SeaweedFS/tusd.
+
 ### Fixed
 - #36 — zero-byte PutObject sent no Content-Length: hyper puts neither
   Content-Length nor chunked-TE on the wire for an empty fixed-size body,
