@@ -444,6 +444,97 @@ else
 fi
 
 # ===========================================================================
+say "S7: real-network models — loss, RTT, reset (issue #32)"
+# ===========================================================================
+# Impairment beyond bandwidth, the application-observable of each (a userspace
+# relay cannot drop in-stream bytes): loss = RTO-scale stalls on a paced lane;
+# rtt = 250 ms ± jitter per connection, NO throttle; reset = a real one-shot
+# mid-body RST. Set IUM_S7_MODELS="loss,rtt,reset" to run the legs; empty/
+# unset skips (the default until this issue closes on a cloud run).
+IUM_S7_MODELS="${IUM_S7_MODELS:-}"
+if [ -n "$IUM_S7_MODELS" ]; then
+  S7_LOSS_PCT="${IUM_S7_LOSS_PCT:-2.0}"
+  S7_LOSS_RATE="${IUM_S7_LOSS_RATE:-2097152}"     # the loss lane rides a 2 MiB/s pace
+  S7_RTT_MS="${IUM_S7_RTT_MS:-250}"
+  S7_JITTER_MS="${IUM_S7_JITTER_MS:-50}"
+  S7_RESET_BYTES="${IUM_S7_RESET_BYTES:-1048576}" # 1 MiB into the first part PUT
+  IFS=',' read -r -a S7_MODELS <<< "$IUM_S7_MODELS"
+  for MODEL in "${S7_MODELS[@]}"; do
+    MODEL="${MODEL//[[:space:]]/}"
+    [ -n "$MODEL" ] || continue
+    say "S7[$MODEL]: real-network model leg"
+    mkdir -p "$RUN/s7-$MODEL"
+    S7_PORT="$(free_port)"
+    case "$MODEL" in
+      loss)  S7_FLAGS=(--victim-part all --victim-rate "$S7_LOSS_RATE" --victim-seconds 100000 --loss "$S7_LOSS_PCT") ;;
+      rtt)   S7_FLAGS=(--victim-part none --latency-ms "$S7_RTT_MS" --jitter-ms "$S7_JITTER_MS") ;;
+      reset) S7_FLAGS=(--victim-part none --reset-after-bytes "$S7_RESET_BYTES") ;;
+      *) die "S7: unknown model '$MODEL' (loss|rtt|reset)" ;;
+    esac
+    $PY3 "$SCRIPT_DIR/throttle_proxy.py" "$S7_PORT" "$SRV_HOST" "$SRV_PORT" \
+      "${S7_FLAGS[@]}" > "$RUN/s7-proxy-$MODEL.log" 2>&1 &
+    S7_PID=$!
+    for _ in $(seq 1 50); do
+      if $PY3 -c "import socket;s=socket.socket();s.settimeout(0.3);s.connect(('127.0.0.1',$S7_PORT));s.close()" 2>/dev/null; then break; fi
+      sleep 0.1
+    done
+    S7_EXIT=0
+    OUT_S7="$(run_bin s7net --journal "$RUN/s7-$MODEL" --file "$FF" \
+      --endpoint "http://127.0.0.1:$S7_PORT/$(basename "$BASE")/rw-s7-$MODEL/$(basename "$FF")" \
+      --model "$MODEL" 2>&1)" || S7_EXIT=1
+    sleep 2   # grace: the proxy's teardown/wire lines must land before SIGTERM
+    kill "$S7_PID" 2>/dev/null || true
+    wait "$S7_PID" 2>/dev/null || true
+    if [ "$S7_EXIT" != 0 ]; then die "S7[$MODEL] bin failed: $OUT_S7"; fi
+    collect "$OUT_S7"
+    $PY3 - "$MODEL" "$FF" "$RUN/s7-proxy-$MODEL.log" <<'EOF'
+import re, sys
+model, film, logpath = sys.argv[1], sys.argv[2], sys.argv[3]
+size = __import__("os").path.getsize(film)
+log = open(logpath).read()
+if model == "loss":
+    # The stalls must have REALLY happened on the wire, and the pace must
+    # have held: every byte of the film went through the 2 MiB/s lane.
+    stalls = sum(int(m) for m in re.findall(r"LOSS stalls=(\d+)", log))
+    assert stalls >= 1, "S7[loss]: no LOSS stalls in the proxy log — the model never fired"
+    moved = 0
+    for ln in log.splitlines():
+        m = re.search(r"VICTIM-FINAL moved=(\d+)B", ln)
+        if m: moved = max(moved, int(m.group(1)))
+        m = re.search(r"VICTIM-TICK moved=(\d+)B", ln)
+        if m: moved = max(moved, int(m.group(1)))
+    assert moved >= size, f"S7[loss]: wire moved {moved} < film {size} — read-back would lie"
+    print(f"[realworld] S7[loss] wire OK: {moved} B through the paced lane, {stalls} RTO stalls absorbed")
+elif model == "rtt":
+    n = len(re.findall(r"LATENCY ", log))
+    assert n >= 2, f"S7[rtt]: only {n} LATENCY pauses in the proxy log — the RTT model never fired"
+    print(f"[realworld] S7[rtt] wire OK: {n} RTT pauses applied, bandwidth untouched")
+elif model == "reset":
+    m = re.search(r"RESET-WIRE moved=(\d+)B", log)
+    assert m, "S7[reset]: no RESET-WIRE in the proxy log — the RST never landed"
+    moved = int(m.group(1))
+    assert log.count("RESET-WIRE") == 1, "S7[reset]: the one-shot latch fired more than once"
+    assert moved >= 65536, f"S7[reset]: RST landed at {moved} B — too early to be mid-body"
+    print(f"[realworld] S7[reset] wire OK: real mid-body RST at {moved} B, exactly one")
+EOF
+    S7_KEY="$BASE/rw-s7-$MODEL/$(basename "$FF")"
+    if [ "$MODEL" = "reset" ]; then
+      # the retry completed the object — server truth must carry it
+      st="$(s3_status HEAD "$S7_KEY")"
+      [ "$st" = "200" ] || die "S7[reset]: object HEAD -> $st (the retry must complete the upload)"
+    fi
+    s3_get_to "$S7_KEY" "$RUN/s7-received.mp4" >/dev/null
+    [ "$(sha_of "$RUN/s7-received.mp4")" = "$(sha_of "$FF")" ] || die "S7[$MODEL]: read-back sha256 mismatch"
+    rm -f "$RUN/s7-received.mp4"
+    echo "EVIDENCE {\"scenario\":\"s7net-$MODEL\",\"readback_sha256_ok\":true}" | tee -a "$EVID"
+    say "S7[$MODEL] GREEN — byte-exact through the $MODEL model"
+    wipe_bucket
+  done
+else
+  say "S7 skipped: IUM_S7_MODELS not set"
+fi
+
+# ===========================================================================
 {
   echo
   echo "## raw child/resume logs"
@@ -451,5 +542,6 @@ fi
   echo "- s2 attempts: $RUN/s2-*.journal.db (parent log per attempt)"
   echo "- throttle proxy: see $RUN/throttle-proxy.log"
   if [ -n "${IUM_S6_RATES:-}" ]; then echo "- s6 ladder: $RUN/s6-proxy-*.log (VICTIM-WIRE lines are the wire meter)"; fi
+  if [ -n "${IUM_S7_MODELS:-}" ]; then echo "- s7 models: $RUN/s7-proxy-*.log (LOSS/RESET-WIRE lines are the wire meter)"; fi
 } >> "$EVID"
 say "ALL SCENARIOS GREEN — evidence: $EVID"

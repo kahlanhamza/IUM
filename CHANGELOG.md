@@ -11,6 +11,17 @@ prose. An entry without verifiable issue numbers does not belong here.
 ## [Unreleased]
 
 ### Added
+- #32 — real-network impairment models in the stress bench: `throttle_proxy.py`
+  gains `--loss PCT` (RTO-scale stalls U(0.2,2.0) s per relayed segment — the
+  application-observable of packet loss; a userspace relay cannot drop
+  in-stream bytes), `--latency-ms`/`--jitter-ms` (connect + response RTT,
+  bandwidth untouched), and `--reset-after-bytes N` (ONE-SHOT hard RST of both
+  ends when the first UploadPart PUT crosses N bytes — a real mid-body
+  connection reset). New `realworld_stress s7net --model loss|rtt|reset`
+  scenario asserts journal truth per model (RTT link: ZERO evictions/resplits;
+  RST: ONE counted `chunk_error {kind: Transient, action: Retry}` then Done);
+  harness S7 legs + `stress.yml` `net_models` input. Wire truth per leg comes
+  from the proxy's LOSS/RESET-WIRE lines; server truth from read-back sha256.
 - #27 — adaptive resplit: pattern #9 is now driven from measured throughput.
   The pool's `resplit_pending` and `suggested_chunk_size` existed, were
   invariant-fuzz-tested, and had ZERO runtime callers — planning was one-shot

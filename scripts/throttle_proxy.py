@@ -31,6 +31,26 @@ relayed-bytes counter and prints `VICTIM-TICK moved=<N>B` every ~10 s while
 pacing, plus one `VICTIM-FINAL moved=<N>B` on SIGTERM — the harness sums
 those and never waits for the socket to die.
 
+REAL-NETWORK models (issue #32): a userspace relay CANNOT drop bytes inside
+an established TCP stream (the stream must arrive complete and ordered or
+HTTP itself breaks), so the models reproduce the APPLICATION-OBSERVABLE of
+each impairment — the thing an uploader must actually survive:
+- `--loss PCT`: each relayed segment independently, with probability PCT%,
+  incurs an RTO-scale stall drawn U(0.2, 2.0) s, then continues. This IS
+  what packet loss looks like to an uploader: multi-second progress freezes
+  on a connection that stays alive, then the stream resumes. Each affected
+  connection logs `LOSS stalls=<n> extra_s=<t>` when its body ends.
+- `--latency-ms N --jitter-ms N`: every connection pays N±U(0,jitter) ms
+  once at setup (connect RTT) and once before the response head is relayed
+  back (response RTT) — ~2x RTT per request, bandwidth untouched.
+- `--reset-after-bytes N`: ONE-SHOT. The first UploadPart PUT whose relayed
+  request body reaches N bytes gets BOTH ends hard-reset (SO_LINGER=0 ->
+  real RST, not FIN) and logs `RESET-WIRE moved=<N>B ...`. The latch
+  guarantees the retry succeeds — the model probes ONE dead attempt.
+Every sleep these models introduce is RESPONSIVE (<=250 ms steps, watching
+the client for death) — the issue #28 lesson: a blind sleep hides the
+engine's cancel behind minutes of pacing debt.
+
 Framing: the proxy forces `connection: close` on forwarded request heads, so
 each connection carries exactly one request/response pair. That keeps the
 parsing honest (one request head, one content-length body, one response head,
@@ -43,7 +63,10 @@ Usage: throttle_proxy.py LISTEN_PORT TARGET_HOST TARGET_PORT
 import argparse
 import asyncio
 import os
+import random
 import signal
+import socket
+import struct
 import sys
 import time
 
@@ -56,7 +79,9 @@ class Relay:
 
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                  target: tuple[str, int], victim_part: str, victim_rate: int,
-                 victim_seconds: int, state: dict):
+                 victim_seconds: int, state: dict, latency_ms: int = 0,
+                 jitter_ms: int = 0, loss_pct: float = 0.0,
+                 reset_after_bytes: int = 0):
         self.r = reader
         self.w = writer
         self.target = target
@@ -64,7 +89,48 @@ class Relay:
         self.uniform = victim_part == "all"  # issue #28: the WHOLE uplink is slow
         self.victim_rate = victim_rate
         self.victim_seconds = victim_seconds
-        self.state = state  # shared: {"victim_active_until": float|None, "victim_taken": bool}
+        self.state = state  # shared: {"victim_active_until", "victim_taken", "wire_moved", "reset_used"}
+        # issue #32 real-network models
+        self.latency_s = latency_ms / 1000.0
+        self.jitter_s = jitter_ms / 1000.0
+        self.loss_pct = loss_pct
+        self.reset_after = reset_after_bytes
+        self.stalls = 0
+        self.stall_extra_s = 0.0
+
+    async def _responsive_sleep(self, seconds: float,
+                                src: asyncio.StreamReader | None) -> bool:
+        """Sleep `seconds` in <=250 ms steps, watching `src` for client death
+        (the #28 lesson: a blind sleep hides the engine's cancel behind the
+        debt). Returns False if the peer died mid-sleep — the caller bails.
+        """
+        deadline = time.monotonic() + seconds
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                return True
+            if src is not None and (src.exception() is not None or src.at_eof()):
+                return False
+            await asyncio.sleep(min(0.25, deadline - now))
+
+    async def _maybe_stall(self, src: asyncio.StreamReader) -> bool:
+        """Issue #32 loss model: with probability loss_pct%, incur one
+        RTO-scale stall (U(0.2, 2.0) s) before this segment moves. Returns
+        False if the client died during the stall.
+        """
+        if self.loss_pct <= 0.0 or random.random() * 100.0 >= self.loss_pct:
+            return True
+        stall = random.uniform(0.2, 2.0)
+        self.stalls += 1
+        self.stall_extra_s += stall
+        return await self._responsive_sleep(stall, src)
+
+    def _rtt_pause(self) -> float:
+        """One RTT-sized pause (issue #32 latency model): N±U(0, jitter)."""
+        d = self.latency_s + (random.uniform(0, self.jitter_s) if self.jitter_s else 0.0)
+        if d > 0:
+            time.sleep(d)
+        return d
 
     async def read_head(self) -> tuple[str, dict[str, str], bytes] | None:
         """Read one request head: request line + headers, ending at CRLFCRLF."""
@@ -98,7 +164,8 @@ class Relay:
             return None
 
     async def _paced_relay(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter,
-                           until: int | None, rate: int | None, pre: bytes) -> int:
+                           until: int | None, rate: int | None, pre: bytes,
+                           reset_at: int | None = None) -> int:
         """Relay the request body client→server, paced to `rate` B/s when set.
 
         Cyclic on purpose (issue #28 lesson): a long unbroken pacing sleep at
@@ -172,15 +239,39 @@ class Relay:
                     return moved  # RST surfaced through the read itself
                 if b == b"":
                     return moved  # the client is gone (EOF at the transport)
+            if not await self._maybe_stall(src):
+                return moved  # the client died inside an RTO stall (#32 loss)
             dst.write(b)
             await dst.drain()
             moved += len(b)
             if rate:
                 self.state["wire_moved"] += len(b)
+            # Issue #32 reset model: one-shot hard RST of BOTH ends the moment
+            # this UploadPart PUT's relayed body crosses `reset_at`. Bytes past
+            # the threshold die in flight — the engine sees a real mid-body
+            # connection reset (ConnectionResetError), never a clean FIN.
+            if reset_at is not None and moved >= reset_at and not self.state["reset_used"]:
+                self.state["reset_used"] = True
+                print(f"[throttle-proxy] RESET-WIRE moved={moved}B {self.last_req} "
+                      f"— hard RST both ends (one-shot, issue #32)", flush=True)
+                for wr in (dst, self.w):
+                    try:
+                        sock = wr.get_extra_info("socket")
+                        if sock is not None:
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                                            struct.pack("ii", 1, 0))
+                    except OSError:
+                        pass
+                    try:
+                        wr.close()
+                    except OSError:
+                        pass
+                return moved
         return moved
 
     async def pump(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter,
-                   count: int, rate: int | None, pre: bytes = b"") -> int:
+                   count: int, rate: int | None, pre: bytes = b"",
+                   reset_at: int | None = None) -> int:
         """Move exactly `count` body bytes; pace reads when a rate is set.
 
         `pre` carries body bytes ALREADY consumed from the wire (they arrived
@@ -189,11 +280,12 @@ class Relay:
         the proxy then waits for bytes the client already sent, while the
         client waits for a response that can never complete.
         """
-        return await self._paced_relay(src, dst, count, rate, pre)
+        return await self._paced_relay(src, dst, count, rate, pre, reset_at)
 
     async def pump_until_eof(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter,
-                             rate: int | None, pre: bytes = b"") -> int:
-        return await self._paced_relay(src, dst, None, rate, pre)
+                             rate: int | None, pre: bytes = b"",
+                             reset_at: int | None = None) -> int:
+        return await self._paced_relay(src, dst, None, rate, pre, reset_at)
 
     async def run(self) -> None:
         try:
@@ -206,9 +298,16 @@ class Relay:
         request_line, headers, rest = head
         method = request_line.split(" ")[0] if " " in request_line else ""
         path = request_line.split(" ")[1] if " " in request_line else ""
+        self.last_req = f"{method} {path}"
         length = int(headers.get("content-length", "0"))
         te = "chunked" in headers.get("transfer-encoding", "").lower()
         print(f"[throttle-proxy] req {request_line}", flush=True)
+
+        # --- issue #32 latency model: the connect RTT -----------------------
+        if self.latency_s > 0:
+            d = self._rtt_pause()
+            print(f"[throttle-proxy] LATENCY connect {d * 1000:.0f}ms {method} {path}",
+                  flush=True)
 
         # --- victim selection -------------------------------------------------
         # uniform mode: every UploadPart PUT is a slow-link body, no latch, no
@@ -255,12 +354,18 @@ class Relay:
         # --- forward the body (paced iff victim) ---------------------------
         # `rest` is the body's first slice, read together with the head in one
         # TCP read. It MUST go upstream first and count in the pacing budget.
+        # reset_at arms the #32 one-shot RST for UploadPart PUTs only.
         t_body0 = time.monotonic()
         req_moved = 0
+        reset_at = (self.reset_after
+                    if self.reset_after > 0 and is_part_put
+                    and not self.state["reset_used"] else None)
         if te:
-            req_moved = await self.pump_until_eof(self.r, uwriter, rate, pre=rest)  # best effort
+            req_moved = await self.pump_until_eof(self.r, uwriter, rate, pre=rest,
+                                                  reset_at=reset_at)  # best effort
         elif length:
-            req_moved = await self.pump(self.r, uwriter, length, rate, pre=rest)
+            req_moved = await self.pump(self.r, uwriter, length, rate, pre=rest,
+                                        reset_at=reset_at)
             if req_moved != length:
                 # The client abandoned this connection mid-body — this is the
                 # engine's eviction/resplit/cancel tearing the impaired attempt
@@ -283,6 +388,9 @@ class Relay:
             el = time.monotonic() - t_body0
             print(f"[throttle-proxy] VICTIM-WIRE moved={req_moved}B in {el:.1f}s "
                   f"({req_moved / el:.0f} B/s) {method} {path}", flush=True)
+        if self.stalls:
+            print(f"[throttle-proxy] LOSS stalls={self.stalls} "
+                  f"extra_s={self.stall_extra_s:.2f} {method} {path}", flush=True)
 
         # --- relay the response head + body back, then close both ends
         try:
@@ -299,6 +407,11 @@ class Relay:
                 if ":" in ln:
                     k, _, v = ln.partition(":")
                     rheaders[k.strip().lower()] = v.strip()
+            # --- issue #32 latency model: the response RTT ------------------
+            if self.latency_s > 0:
+                d = self._rtt_pause()
+                print(f"[throttle-proxy] LATENCY response {d * 1000:.0f}ms {method} {path}",
+                      flush=True)
             self.w.write(bytes(resp_head))
             await self.w.drain()
             if method == "HEAD":
@@ -322,12 +435,15 @@ class Relay:
 
 
 async def main_async(a: argparse.Namespace) -> None:
-    state = {"victim_taken": False, "victim_active_until": None, "wire_moved": 0}
+    state = {"victim_taken": False, "victim_active_until": None, "wire_moved": 0,
+             "reset_used": False}
     target = (a.target_host, a.target_port)
 
     async def on_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         relay = Relay(reader, writer, target, a.victim_part, a.victim_rate,
-                      a.victim_seconds, state)
+                      a.victim_seconds, state, latency_ms=a.latency_ms,
+                      jitter_ms=a.jitter_ms, loss_pct=a.loss,
+                      reset_after_bytes=a.reset_after_bytes)
         await relay.run()
 
     server = await asyncio.start_server(on_conn, "127.0.0.1", a.listen_port)
@@ -344,6 +460,15 @@ async def main_async(a: argparse.Namespace) -> None:
     model = (f"UNIFORM every UploadPart PUT @ {a.victim_rate} B/s" if a.victim_part == "all"
              else f"victim partNumber={a.victim_part} @ {a.victim_rate} B/s, "
                   f"{a.victim_seconds}s, once")
+    net = []
+    if a.loss:
+        net.append(f"loss {a.loss}% of segments -> RTO-scale stall U(0.2,2.0)s")
+    if a.latency_ms:
+        net.append(f"latency {a.latency_ms}ms +-{a.jitter_ms}ms (connect+response)")
+    if a.reset_after_bytes:
+        net.append(f"one-shot RST after {a.reset_after_bytes} B of a part PUT")
+    if net:
+        model += " | " + "; ".join(net)
     print(f"[throttle-proxy] listening 127.0.0.1:{a.listen_port} -> {target[0]}:{target[1]} ({model})",
           flush=True)
     async with server:
@@ -361,10 +486,32 @@ def main() -> None:
     ap.add_argument("target_host")
     ap.add_argument("target_port", type=int)
     ap.add_argument("--victim-part", type=str, default="2",
-                    help="partNumber to impair once, or 'all' for the uniform "
-                         "whole-uplink model (issue #28)")
+                    help="partNumber to impair once, 'all' for the uniform "
+                         "whole-uplink model (issue #28), or 'none' to disable "
+                         "victim selection entirely (the latency/reset models "
+                         "must pass 'none' — any other value leaves the "
+                         "victim-rate default ARMED and contaminates the leg, "
+                         "caught live by s7net[rtt] first run, issue #32)")
     ap.add_argument("--victim-rate", type=int, default=96 * 1024)
     ap.add_argument("--victim-seconds", type=int, default=45)
+    # --- issue #32 real-network models -------------------------------------
+    ap.add_argument("--loss", type=float, default=0.0, metavar="PCT",
+                    help="probability PER RELAYED SEGMENT of an RTO-scale stall "
+                         "U(0.2,2.0)s — the application-observable of packet loss "
+                         "(a userspace relay cannot drop in-stream bytes; this "
+                         "reproduces what loss does to an uploader: freezes, then "
+                         "the stream resumes) (issue #32)")
+    ap.add_argument("--latency-ms", type=int, default=0, metavar="N",
+                    help="RTT modeled as one N ms pause per connection at setup "
+                         "and one before the response head is relayed back "
+                         "(issue #32)")
+    ap.add_argument("--jitter-ms", type=int, default=0, metavar="N",
+                    help="uniform 0..N ms jitter added to each latency pause "
+                         "(issue #32)")
+    ap.add_argument("--reset-after-bytes", type=int, default=0, metavar="N",
+                    help="ONE-SHOT: hard-RST both ends when the first UploadPart "
+                         "PUT's relayed body crosses N bytes — a real mid-body "
+                         "connection reset (issue #32)")
     a = ap.parse_args()
     try:
         asyncio.run(main_async(a))

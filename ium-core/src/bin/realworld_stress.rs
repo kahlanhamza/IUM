@@ -31,6 +31,16 @@
 //!   on EVERY connection — fast links included; it fires here because the
 //!   measured median says a part is > 90 s of wire time, the same arithmetic
 //!   that declines to churn a fast link.
+//! * `s7net` — the real-network models (issue #32): impairment beyond
+//!   bandwidth, the application-observable of each. `--model loss` = RTO-scale
+//!   stalls on a paced lane (completion + byte-exactness is the assertion;
+//!   evictions are recorded honestly — a stalling lease MAY be correctly
+//!   struck). `--model rtt` = 250 ms ± jitter RTT, no throttle (an
+//!   alive-but-latent link must NEVER be churned: zero evictions, zero
+//!   resplits). `--model reset` = a real mid-body RST (SO_LINGER=0 both ends)
+//!   must land as ONE counted `chunk_error {kind: Transient, action: Retry}`
+//!   and never a Failed. Server byte-exactness is the harness's read-back
+//!   job; wire truth is the proxy's own log (LOSS/RESET-WIRE lines).
 //!
 //! Env: IUM_S3_ENDPOINT / IUM_S3_ACCESS_KEY / IUM_S3_SECRET_KEY /
 //! IUM_S3_REGION (see `S3MultipartConfig::from_env`). Eviction policy is the
@@ -653,6 +663,137 @@ async fn s6worse(
     }))
 }
 
+/// Issue #32 — the real-network models. The proxy (scripts/throttle_proxy.py)
+/// now reproduces the APPLICATION-OBSERVABLE of each impairment a userspace
+/// relay can produce: loss = RTO-scale stalls with continuation, latency =
+/// per-connection connect/response RTT, reset = a real one-shot mid-body RST.
+/// This scenario owns the JOURNAL truth per model; the harness owns wire truth
+/// (the proxy's LOSS/RESET-WIRE lines) and server truth (read-back sha256).
+///
+/// * loss — completion IS the assertion: uniform stalls drag the fleet median
+///   down with them, so no eviction is expected; if the policy strikes a
+///   stalling lease anyway that is CORRECT (a fresh connection escapes the
+///   bad patch) and is recorded, never hidden. Byte-exactness + Done +
+///   bounded elapsed.
+/// * rtt — the sharp one: an alive-but-latent link must NEVER be churned.
+///   ZERO `chunk_evicted`, ZERO `chunk_resplit`, Done, bounded elapsed.
+/// * reset — the RST must be absorbed as exactly the designed machinery: at
+///   least one `chunk_error {kind: Transient, action: Retry}` (manager.rs:
+///   send_request error → AdapterError::Transient → counted retry, budget
+///   charged once), job Done, never Failed, never a false Done.
+async fn s7net(
+    journal: &str,
+    file: &str,
+    endpoint: &str,
+    model: &str,
+) -> Result<serde_json::Value, String> {
+    let deadline = match model {
+        "loss" => Duration::from_secs(600),
+        "rtt" | "reset" => Duration::from_secs(300),
+        other => return Err(format!("s7net: unknown model '{other}' (loss|rtt|reset)")),
+    };
+    let m = fresh_manager(journal)?;
+    let spec = spec_for(file, endpoint)?;
+    let size = spec.source_size;
+    let rec = m.create_job(&spec, 4).map_err(|e| e.to_string())?;
+    let t0 = Instant::now();
+    let done = m.run_job(&rec.id).await.map_err(|e| e.to_string())?;
+    let elapsed = t0.elapsed();
+    if done.state != JobState::Done {
+        return Err(format!(
+            "s7net[{model}] ended {:?} (must be Done)",
+            done.state
+        ));
+    }
+    if elapsed > deadline {
+        return Err(format!(
+            "s7net[{model}] took {:.1}s — past the {deadline:?} bound; the model \
+             crippled the upload instead of probing it",
+            elapsed.as_secs_f64()
+        ));
+    }
+    let snap = m.snapshot(&rec.id).map_err(|e| e.to_string())?;
+    let evictions: Vec<String> = snap
+        .events
+        .iter()
+        .filter(|(_, k, _)| k == "chunk_evicted")
+        .map(|(_, _, p)| p.clone())
+        .collect();
+    let resplits: Vec<serde_json::Value> = snap
+        .events
+        .iter()
+        .filter(|(_, k, _)| k == "chunk_resplit")
+        .map(|(_, _, p)| {
+            serde_json::from_str::<serde_json::Value>(p)
+                .expect("chunk_resplit payload must be json")
+        })
+        .collect();
+    let errors: Vec<serde_json::Value> = snap
+        .events
+        .iter()
+        .filter(|(_, k, _)| k == "chunk_error")
+        .map(|(_, _, p)| {
+            serde_json::from_str::<serde_json::Value>(p).expect("chunk_error payload must be json")
+        })
+        .collect();
+    match model {
+        "rtt" => {
+            if !evictions.is_empty() {
+                return Err(format!(
+                    "s7net[rtt]: {} chunk_evicted on an alive-but-latent link — \
+                     latency must never churn a healthy fleet (issue #32 RED)",
+                    evictions.len()
+                ));
+            }
+            if !resplits.is_empty() {
+                return Err(format!(
+                    "s7net[rtt]: {} chunk_resplit on a fast lane — 250 ms RTT must \
+                     not push any part past the 90 s slow-confirm horizon",
+                    resplits.len()
+                ));
+            }
+        }
+        "reset" => {
+            let retries: Vec<&serde_json::Value> = errors
+                .iter()
+                .filter(|e| {
+                    e["kind"].as_str().is_some_and(|k| k.contains("Transient"))
+                        && e["action"].as_str().is_some_and(|a| a.starts_with("Retry"))
+                })
+                .collect();
+            if retries.is_empty() {
+                // Self-diagnosing RED: carry the journal's shape so the next
+                // RED reads its own cause (the #28 lesson).
+                let kinds: std::collections::BTreeMap<&str, usize> = snap.events.iter().fold(
+                    std::collections::BTreeMap::new(),
+                    |mut m, (_, k, _)| {
+                        *m.entry(k.as_str()).or_insert(0) += 1;
+                        m
+                    },
+                );
+                return Err(format!(
+                    "s7net[reset]: no counted Transient retry in the journal — the \
+                     mid-body RST was not absorbed as designed (issue #32 RED); \
+                     events={kinds:?} errors={errors:?}"
+                ));
+            }
+        }
+        "loss" => {
+            // Completion + byte-exactness (harness read-back) IS the
+            // assertion; evictions/resplits are recorded honestly above.
+        }
+        _ => unreachable!("model validated above"),
+    }
+    Ok(serde_json::json!({
+        "scenario": "s7net", "model": model, "state": "Done", "size": size,
+        "elapsed_s": elapsed.as_secs_f64(),
+        "mean_throughput_Bps": size as f64 / elapsed.as_secs_f64(),
+        "evictions": evictions,
+        "resplits": resplits,
+        "chunk_errors": errors,
+    }))
+}
+
 async fn s5(
     journal: &str,
     files: &[String],
@@ -765,8 +906,16 @@ fn main() {
                     Duration::from_secs(secs),
                 ))
         }
+        "s7net" => {
+            let file = arg_of(&args, "--file").expect("--file required");
+            let endpoint = arg_of(&args, "--endpoint").expect("--endpoint required");
+            let model = arg_of(&args, "--model").expect("--model loss|rtt|reset required");
+            tokio::runtime::Runtime::new()
+                .expect("runtime")
+                .block_on(s7net(&journal, &file, &endpoint, &model))
+        }
         other => Err(format!(
-            "unknown scenario '{other}' (s1|s3hostile|s4pause|s4cancel|s5|s6worse)"
+            "unknown scenario '{other}' (s1|s3hostile|s4pause|s4cancel|s5|s6worse|s7net)"
         )),
     };
     match result {

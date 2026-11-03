@@ -49,12 +49,13 @@ the truth every seam reads and writes (ADR-002).
 | **journal ↔ everything** (state truth) | schema migrations, loud writes, rows-affected | Sprint-0 #1–#5, #15 unknown-state resurrection | `migrations_are_versioned_and_reopen_safe`, exhaustive `parse_state`, fuzz (`nightly.yml`) |
 | **manager ↔ journal** (transitions) | journaled-before-execute, cancel racing any transition | #26 Finishing refused Cancel | `tests/finishing_cancel.rs` |
 | **manager ↔ chunk pool** | leases, re-rentable partial confirms, plans, resplit reshape | Sprint-0 #4, #5 planless Done, #27 orphaned policy, #28 frozen rule | `tests/adaptive_resplit.rs`, `tests/frozen_link_resplit.rs`, fuzz invariants |
-| **manager ↔ eviction** | window medians, strikes, lone-vote floor | #25 lone impaired link | `tests/lone_worker_eviction.rs`, #18 live drill |
+| **manager ↔ eviction** | window medians, strikes, lone-vote floor | #25 lone impaired link | `tests/lone_worker_eviction.rs`, #18 live drill, #32 `s7net` (RTT link must never be struck; loss stalls recorded honestly) |
 | **manager ↔ adapter session** | probe token replay, reattach, budgets | #12 Finishing-entry empty session map | #12 5×RED pins, kill-9 drills (s3/tus) |
+| **manager ↔ retry** | counted attempts, backoff, exhaustion → Failed | Sprint-0 #5 infinite retry | attempt-map tests, #32 `s7net[reset]` (a real mid-body RST must land as ONE counted `chunk_error {kind: Transient, action: Retry}`) |
 | **adapter trait contract** | required methods, `ProbeReport` declarations | #1 verify-default, #8 cap ignored, #13 max_parallel ignored | trybuild `verify_is_required.rs`, `plan_capped` RED, `max_parallel` offline RED |
 | **adapter_s3 ↔ server wire** | etag case/entities, duplicate PUTs, Complete idempotency | `&#34;`/`&quot;` (`InvalidPart`), #24 duplicate entry | both servers' vectors pinned as tests, `tests/verify_repair.rs` |
 | **adapter_tus ↔ server wire** | offset semantics, 409 realign, flush scheduling | #10 409 drift, #30 flush race | live suite, `WIRE − WASTED == missing` exact assert |
-| **harness/proxy ↔ reality** | throttle model, wedge determinism, server idiosyncrasies | #23 NameError, #28 64 KB-burst vs 30 s idle timeout, #29 link-speed races | the S1–S6 scenario asserts + self-diagnosing REDs |
+| **harness/proxy ↔ reality** | throttle model, wedge determinism, server idiosyncrasies, network impairment models | #23 NameError, #28 64 KB-burst vs 30 s idle timeout, #29 link-speed races | the S1–S7 scenario asserts + self-diagnosing REDs (#32 `s7net`: loss/RTT/RST models, wire-truth lines LOSS/RESET-WIRE) |
 | **process** (gates, tree state) | what "green" measures | defects 8–10, #11, pipe-masked exits | `gate.sh` committed-tree + pipefail rule |
 
 ## 4. How to use it (mandatory since #31)

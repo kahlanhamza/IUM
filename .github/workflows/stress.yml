@@ -38,6 +38,10 @@ on:
         description: "Seconds each S6 ladder leg runs before the cancel (timebox)"
         required: false
         default: "120"
+      net_models:
+        description: "S7 real-network models CSV (issue #32): 'loss,rtt,reset' or a subset; empty skips S7"
+        required: false
+        default: ""
   schedule:
     - cron: "0 4 * * 6" # Saturdays 04:00 UTC
 
@@ -75,6 +79,7 @@ jobs:
           IUM_S3_VICTIM_SECONDS: ${{ inputs.victim_seconds || '45' }}
           IUM_S6_RATES: ${{ inputs.uniform_rates || '' }}
           IUM_S6_SECONDS: ${{ inputs.uniform_seconds || '120' }}
+          IUM_S7_MODELS: ${{ inputs.net_models || '' }}
         run: bash scripts/s3-test.sh --with-realworld /tmp/bbb_1080p.mp4 /tmp/bbb_30mb.mp4
 
       - name: Upload evidence
