@@ -18,6 +18,12 @@
 //! This file owns its test PROCESS (cargo runs each test binary separately):
 //! rlimit and signal dispositions are process-wide and must not leak into
 //! the other drills.
+//!
+//! Unix-scoped BY CONSTRUCTION, not by accident of imports (issue #37):
+//! `RLIMIT_FSIZE` and `SIGXFSZ` do not exist on Windows, so the whole file —
+//! adapter included — is `#![cfg(unix)]`. The windows lane compiles this
+//! target to an empty binary; the drill itself runs on linux + macOS CI.
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};

@@ -19,6 +19,16 @@
 //!   server truth (the drifted bytes WERE server-acked, just never
 //!   journaled);
 //! * `404` = unknown session → `SessionLost` (→ Reattach);
+//! * wire-fact delta (#33/#37): @tus/server answers an early-rejected PATCH
+//!   (unknown file, header rejections) by writing the error status and
+//!   closing the connection WITHOUT consuming the request body — a client
+//!   still streaming a large body may therefore observe a connection reset
+//!   (`error sending request`) instead of the status. tusd drains and
+//!   answers 404 normally. The adapter thus never declares from the reset
+//!   alone: after a PATCH transport failure it HEADs the session — the
+//!   server's answer, not the socket's mood, decides (`head()`);
+//!   `404/410` there → `SessionLost`, anything else → `Transient` (retries
+//!   stay counted).
 //! * verify is a **read-only** HEAD (`offset == length == source_size`) —
 //!   TUS needs no commit gate (contrast ADR-010's S3 finalize-if-needed);
 //! * tusd v2.10.1 offers no `checksum` extension — not used (verify is
@@ -187,7 +197,7 @@ impl TusAdapter {
             BytesCodec::new(),
         ));
 
-        let resp = self
+        let resp = match self
             .client
             .patch(location)
             .header("Tus-Resumable", TUS_VERSION)
@@ -197,9 +207,26 @@ impl TusAdapter {
             .body(body)
             .send()
             .await
-            .map_err(|e| {
-                PatchFailure::Adapter(AdapterError::Transient(format!("PATCH failed: {e}")))
-            })?;
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                // Transport failure is ambiguous by itself: a real network
+                // blip (→ Transient, retry) and @tus/server's early-reject
+                // socket close (#33/#37 — the 404 never reaches the client
+                // while the body is still streaming) look identical to
+                // hyper. Ask the server before declaring: a HEAD that comes
+                // back 404/410 is the session's real state (→ SessionLost);
+                // a HEAD that succeeds or also fails means the wire is the
+                // problem — keep the original Transient so retries are
+                // counted. Verify-before-declare, for error paths too.
+                return Err(PatchFailure::Adapter(match self.head(location).await {
+                    Err(AdapterError::SessionLost(_)) => AdapterError::SessionLost(format!(
+                        "PATCH transport-failed and HEAD confirms the session is gone: {e}"
+                    )),
+                    _ => AdapterError::Transient(format!("PATCH failed: {e}")),
+                }));
+            }
+        };
         match resp.status().as_u16() {
             204 => parse_upload_offset(
                 resp.headers()
@@ -361,7 +388,6 @@ impl TransferAdapter for TusAdapter {
                 // moves on a rejected PATCH). Its size is a scheduling race,
                 // not a protocol constant (issue #30) — so it is MEASURED
                 // waste, and the realign's bytes below stay honest movement.
-                progress.waste(progress.moved() - first_attempt_from);
                 let (_, server_offset) = self.head(&location).await?;
                 if server_offset < lease.resume_from {
                     return Err(AdapterError::Unresumable(format!(
@@ -377,14 +403,29 @@ impl TransferAdapter for TusAdapter {
                 }
                 // Exactly one realign attempt: another 409 here means the
                 // server moved under a single-worker lease — fail loudly.
-                self.patch(spec, &location, server_offset, lease.end, progress)
+                let realigned = self
+                    .patch(spec, &location, server_offset, lease.end, progress)
                     .await
                     .map_err(|f| match f {
                         PatchFailure::Conflict => AdapterError::Unknown(
                             "409 again after realign — server moved under the lease".into(),
                         ),
                         PatchFailure::Adapter(e) => e,
-                    })?
+                    })?;
+                // THE WASTE RECKONING — settled arithmetic, not an instant
+                // snapshot (issue #37): the rejected attempt's last chunks
+                // can still land in `moved()` after `patch()` returns (the
+                // body is counted on hyper's connection task, and a store
+                // can drain after the caller resumes — an 8 KiB chunk
+                // flipped CI's exact assert into a rare flake). Classify
+                // AFTER the realign settles: everything this call pushed
+                // BEYOND the re-PATCH's server-acked tail is, by
+                // construction, the rejected attempt's flush — persisted
+                // nowhere, exactly waste, whenever its count landed.
+                let tail = realigned - server_offset;
+                let pushed = progress.moved() - first_attempt_from;
+                progress.waste(pushed.saturating_sub(tail));
+                realigned
             }
             Err(PatchFailure::Adapter(e)) => return Err(e),
         };

@@ -112,12 +112,18 @@ impl ProgressReporter {
     }
     /// Record `n` more bytes handed to the transport. Cheap, non-blocking —
     /// adapters call this on the hot path.
+    ///
+    /// SeqCst, not Relaxed (issue #37): the count is produced on hyper's
+    /// connection task and read from the caller's task — the accounting
+    /// asserts (`moved() − wasted()` == server-persisted bytes) must see
+    /// every store the moment a response round-trip has passed, without a
+    /// store-buffer delay flipping an exact assert into a rare flake.
     pub fn add(&self, n: u64) {
-        self.bytes.fetch_add(n, Ordering::Relaxed);
+        self.bytes.fetch_add(n, Ordering::SeqCst);
     }
     /// Bytes moved so far in this call.
     pub fn moved(&self) -> u64 {
-        self.bytes.load(Ordering::Relaxed)
+        self.bytes.load(Ordering::SeqCst)
     }
     /// Reclassify `n` of the already-counted [`ProgressReporter::moved`]
     /// bytes as WASTED (issue #30): they crossed the wire, but the server
@@ -132,15 +138,15 @@ impl ProgressReporter {
     /// persisted movement, not waste.
     pub fn waste(&self, n: u64) {
         debug_assert!(
-            n <= self.bytes.load(Ordering::Relaxed),
+            n <= self.bytes.load(Ordering::SeqCst),
             "waste reclassifies already-counted bytes"
         );
-        self.wasted.fetch_add(n, Ordering::Relaxed);
+        self.wasted.fetch_add(n, Ordering::SeqCst);
     }
     /// Bytes counted in [`ProgressReporter::moved`] that the server never
     /// persisted (see [`ProgressReporter::waste`]).
     pub fn wasted(&self) -> u64 {
-        self.wasted.load(Ordering::Relaxed)
+        self.wasted.load(Ordering::SeqCst)
     }
 }
 
