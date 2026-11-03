@@ -362,11 +362,36 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         .await
         .expect("webdriver session against the real shell");
 
+    // Self-diagnosing boot dump (the #28 lesson: a RED must say WHY): what
+    // page did the webview actually load, and what does its DOM look like?
+    let url = wd
+        .call(reqwest::Method::GET, "/url", Value::Null)
+        .await
+        .map(|v| v.as_str().unwrap_or("?").to_string())
+        .unwrap_or_else(|e| format!("unavailable: {e}"));
+    let title = wd
+        .call(reqwest::Method::GET, "/title", Value::Null)
+        .await
+        .map(|v| v.as_str().unwrap_or("?").to_string())
+        .unwrap_or_else(|e| format!("unavailable: {e}"));
+    let source = wd
+        .call(reqwest::Method::GET, "/source", Value::Null)
+        .await
+        .map(|v| v.as_str().unwrap_or("").to_string())
+        .unwrap_or_else(|e| format!("unavailable: {e}"));
+    eprintln!(
+        "[e2e] boot dump: url={url} title={title} source_len={} head={:?}",
+        source.len(),
+        source.chars().take(400).collect::<String>()
+    );
+
     // ---- app booted: the form reflects the engine registry -----------------
     // The Upload button is disabled until `list_adapters` resolved and a path
     // + endpoint exist — waiting for it to become enabled IS the boot sync.
+    // 90 s: a cold CI runner's first GTK/WebKit render is slow; a blank or
+    // error page is diagnosed by the boot dump above, not guessed.
     let path_input = wd
-        .wait_for_element("#upload-path", Duration::from_secs(30))
+        .wait_for_element("#upload-path", Duration::from_secs(90))
         .await
         .expect("path seam");
     let endpoint_input = wd
