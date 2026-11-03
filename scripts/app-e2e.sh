@@ -50,7 +50,7 @@ def pattern(path, mib):
         while off < size:
             n = min(64 * 1024, size - off)
             f.write(chunk[:n]); off += n
-pattern(f"{work}/e2e-a.bin", 12)
+pattern(f"{work}/e2e-a.bin", 24)
 pattern(f"{work}/e2e-b.bin", 16)
 print(f"{work}/e2e-a.bin {work}/e2e-b.bin")
 PY

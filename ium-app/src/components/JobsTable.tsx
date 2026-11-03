@@ -61,7 +61,11 @@ export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCance
               </td>
               <td style={td}>{badgeFor(record.capability_badge)}</td>
               <td style={td}>
-                <span style={stateChip(record.state)}>{record.state}</span>
+                {/* data-state: the journal's truth as a WebDriver-readable
+                    attribute (#35) — the chip's text stays human-facing. */}
+                <span data-state={record.state} style={stateChip(record.state)}>
+                  {record.state}
+                </span>
               </td>
               <td style={{ ...td, minWidth: 180 }}>
                 <div style={barTrack}>
@@ -74,6 +78,7 @@ export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCance
               <td style={td}>{j.speed > 0 ? `${humanBytes(j.speed)}/s` : "—"}</td>
               <td style={td}>
                 <button
+                  aria-label={`pause job ${record.id}`}
                   disabled={!canPause(record.state)}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -83,6 +88,7 @@ export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCance
                   Pause
                 </button>{" "}
                 <button
+                  aria-label={`resume job ${record.id}`}
                   disabled={!canResume(record.state)}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -92,6 +98,7 @@ export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCance
                   Resume
                 </button>{" "}
                 <button
+                  aria-label={`cancel job ${record.id}`}
                   disabled={!canCancel(record.state)}
                   onClick={(e) => {
                     e.stopPropagation();

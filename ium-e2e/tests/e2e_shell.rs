@@ -476,6 +476,15 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         "Σ bytes_confirmed across the plan == the source size (journal truth)"
     );
 
+    // Close the drawer BEFORE leg B: it is a fixed-position overlay on the
+    // window's right edge — the next row's action buttons live underneath
+    // it, and a WebDriver click lands on the overlay, not the button.
+    let close_btn = wd
+        .wait_for_element("aside button", Duration::from_secs(5))
+        .await
+        .expect("inspector close button");
+    wd.click(&close_btn).await.expect("close inspector");
+
     // Server truth: the recorder holds the whole object.
     let (puts_a, bytes_a) = read_record(&env.record_a).await.expect("record A");
     assert!(puts_a >= 1, "recorder saw at least one PUT");

@@ -71,6 +71,26 @@ export function CreateJobForm({ onCreated }: CreateJobFormProps) {
     }
   }
 
+  /** Paste-a-path entry (issue #35): the picker is one way in, the keyboard
+   * is the other — the shell stats whatever lands here, the engine plans.
+   * The same input is the WebDriver seam: a GTK file dialog is not
+   * scriptable, a text field is. */
+  async function onPathTyped(path: string) {
+    setSourcePath(path);
+    if (!path.trim()) {
+      setSourceSize(null);
+      setError(null);
+      return;
+    }
+    setError(null);
+    try {
+      setSourceSize(await api.statFile(path));
+    } catch (e) {
+      setSourceSize(null);
+      setError(`cannot stat file: ${e}`);
+    }
+  }
+
   const ready = Boolean(adapter && sourcePath && sourceSize !== null && endpoint.trim() && !busy);
 
   return (
@@ -78,13 +98,20 @@ export function CreateJobForm({ onCreated }: CreateJobFormProps) {
       <legend>New upload</legend>
       <div style={row}>
         <button onClick={pickFile}>Choose file…</button>
-        <span style={mono}>{sourcePath || "no file selected"}</span>
+        <input
+          id="upload-path"
+          style={input}
+          placeholder="or type/paste a source path"
+          value={sourcePath}
+          onChange={(e) => onPathTyped(e.target.value)}
+        />
         {sourceSize !== null && <span>({humanBytes(sourceSize)})</span>}
       </div>
       <div style={row}>
         <label>
           Destination{" "}
           <input
+            id="upload-endpoint"
             style={input}
             placeholder="endpoint URL (bucket URL / tus endpoint / upload URL)"
             value={endpoint}
@@ -93,7 +120,7 @@ export function CreateJobForm({ onCreated }: CreateJobFormProps) {
         </label>
         <label>
           Adapter{" "}
-          <select value={adapter} onChange={(e) => setAdapter(e.target.value)}>
+          <select id="upload-adapter" value={adapter} onChange={(e) => setAdapter(e.target.value)}>
             {adapters.map((a) => (
               <option key={a} value={a}>
                 {a}
@@ -104,6 +131,7 @@ export function CreateJobForm({ onCreated }: CreateJobFormProps) {
         <label>
           Connections{" "}
           <input
+            id="upload-connections"
             type="number"
             min={1}
             max={32}
@@ -111,7 +139,7 @@ export function CreateJobForm({ onCreated }: CreateJobFormProps) {
             onChange={(e) => setMaxConns(Math.max(1, Number(e.target.value) || 1))}
           />
         </label>
-        <button onClick={submit} disabled={!ready}>
+        <button id="upload-submit" onClick={submit} disabled={!ready}>
           Upload
         </button>
       </div>
@@ -136,5 +164,3 @@ const row: React.CSSProperties = {
 };
 
 const input: React.CSSProperties = { width: 380 };
-
-const mono: React.CSSProperties = { fontFamily: "ui-monospace, monospace", fontSize: 12 };
