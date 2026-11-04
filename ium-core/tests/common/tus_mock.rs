@@ -63,6 +63,10 @@ struct MockState {
     /// abandoned paced connection still draining its receive buffer races
     /// the next PATCH's writes at the shared offset and corrupts the store.
     patch_busy: AtomicBool,
+    /// Every byte this server has READ off the wire (headers + bodies) —
+    /// the honest denominator for the per-PATCH overhead measurement the
+    /// #45 ladder records (issue #44's acceptance: measured, not asserted).
+    wire_bytes: AtomicU64,
     /// Diagnostics for assertions.
     patches_killed: AtomicU64,
     patches_completed: AtomicU64,
@@ -90,6 +94,7 @@ impl TusMock {
             script: Mutex::new(script.into()),
             read_pace_bps: Mutex::new(None),
             patch_busy: AtomicBool::new(false),
+            wire_bytes: AtomicU64::new(0),
             patches_killed: AtomicU64::new(0),
             patches_completed: AtomicU64::new(0),
         });
@@ -145,6 +150,12 @@ impl TusMock {
         self.state.patches_completed.load(Ordering::SeqCst)
     }
 
+    /// Total bytes read off the wire (request heads + bodies, PATCH and
+    /// HEAD/POST alike) — the ladder's overhead measurement denominator.
+    pub fn wire_bytes(&self) -> u64 {
+        self.state.wire_bytes.load(Ordering::SeqCst)
+    }
+
     /// Pace EVERY PATCH body read at `bps` bytes/second (None = full
     /// speed) — the uniformly-slow-uplink shape (#18), independent of the
     /// per-PATCH script.
@@ -165,6 +176,7 @@ struct Request {
     method: String,
     content_length: u64,
     upload_offset: Option<u64>,
+    head_len: usize,
 }
 
 /// Read one request head (through the blank line). Returns None on EOF.
@@ -190,6 +202,7 @@ async fn read_head(stream: &mut TcpStream) -> Option<Request> {
         }
     }
     let head = String::from_utf8_lossy(&buf).into_owned();
+    let head_len = buf.len();
     let request_line = head.lines().next().unwrap_or_default().to_string();
     let method = request_line
         .split_whitespace()
@@ -219,6 +232,7 @@ async fn read_head(stream: &mut TcpStream) -> Option<Request> {
         method,
         content_length,
         upload_offset,
+        head_len,
     })
 }
 
@@ -237,6 +251,9 @@ async fn respond(stream: &mut TcpStream, status: &str, extra: &[(&str, String)])
 }
 
 async fn persist(state: &MockState, data: Vec<u8>) {
+    state
+        .wire_bytes
+        .fetch_add(data.len() as u64, Ordering::SeqCst);
     let mut store = state.store.lock().unwrap();
     let base = state.offset.load(Ordering::SeqCst) as usize;
     // Store is written at the server offset (realign re-PATCHes start there).
@@ -253,6 +270,9 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
     let Some(req) = read_head(&mut stream).await else {
         return;
     };
+    state
+        .wire_bytes
+        .fetch_add(req.head_len as u64, Ordering::SeqCst);
     match req.method.as_str() {
         "POST" => {
             // Creation: 201 + absolute Location (tusd shape).

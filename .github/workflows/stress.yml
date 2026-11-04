@@ -82,6 +82,16 @@ jobs:
           IUM_S7_MODELS: ${{ inputs.net_models || '' }}
         run: bash scripts/s3-test.sh --with-realworld /tmp/bbb_1080p.mp4 /tmp/bbb_30mb.mp4
 
+      # Issue #45: the KB/s tail pinned forever — the owner's rate ladder
+      # (3 / 8 / 50 / 160 KB/s) through the real engine on the tus lane.
+      # The 3 KB/s leg is the old wall's edge (#42) riding the 64 KiB lane
+      # floor (#44); each leg asserts convergent Done, byte-exact readback,
+      # and MEASURED wire overhead. ~1 min, never on the PR lane.
+      - name: Throttled-link ladder 3/8/50/160 KB/s (issue #45)
+        env:
+          IUM_THROTTLE_LADDER: "1"
+        run: cargo test -p ium-core --test throttled_ladder -- --nocapture
+
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4
