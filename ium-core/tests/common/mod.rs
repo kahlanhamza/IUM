@@ -3,6 +3,8 @@
 //! slow-connection drill (#18). The fixture is generated at test time by
 //! ffmpeg and never committed (ADR-009).
 
+pub mod tus_mock;
+
 use std::io::{Read, Seek as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::Command;

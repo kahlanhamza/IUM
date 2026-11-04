@@ -56,6 +56,23 @@ use crate::JobSpec;
 
 const TUS_VERSION: &str = "1.0.0";
 const TUS_CONTENT_TYPE: &str = "application/offset+octet-stream";
+/// Idle-progress bound for tus requests (issue #42). The OLD client had a
+/// 600 s TOTAL request timeout — a wall that killed every legal piece below
+/// ~8.7 KB/s (a 5 MiB piece needs ≥ 600 s there), making the tus lane
+/// structurally non-convergent at the owner's 3 KB/s tunnel moment. The
+/// wall is GONE: no total request timeout exists anymore. What remains is
+/// PROGRESS-based: `read_timeout` cuts a request only when no bytes have
+/// arrived for this long (a stalled response is indistinguishable from a
+/// dead tunnel), while a steadily-draining lane rides for as long as it
+/// takes. Body-side stalls (buffers full, wire dead mid-send) are owned by
+/// the SUPERVISION layer — the frozen-link rule (#28) measures zero bytes
+/// and reshapes/aborts; the request layer must stop owning duration.
+/// MEASURED (tus_slow_lane drills): a moved()-based watchdog cannot make
+/// this distinction — kernel/hyper buffers absorb MiB before backpressure,
+/// so a healthy slow wire LOOKS frozen to a client-side counter; the
+/// response-side read timeout is the honest tripwire. A rate-scaled lease
+/// guard from #41's probe measurements remains the planned backstop.
+const TUS_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// `Upload-Offset` header → u64. Absent, empty, or malformed = no truth
 /// (never a silent 0 — an offset is a server acknowledgment).
 pub fn parse_upload_offset(header: Option<&str>) -> Result<u64, AdapterError> {
@@ -107,10 +124,24 @@ impl TusAdapter {
     /// A fresh adapter with its own HTTP client and an EMPTY session map —
     /// sessions are restored from the journal via `reattach` (#12), never
     /// guessed.
+    ///
+    /// Client timeouts (issue #42): NO total request timeout — the 600 s
+    /// wall made the lane structurally non-convergent below ~8.7 KB/s.
+    /// Instead: a connect timeout for dead endpoints and a READ timeout
+    /// (per-read idle) as the progress-based tripwire; body-side stalls
+    /// belong to the supervision layer (see `TUS_IDLE_TIMEOUT`).
     pub fn new() -> Self {
+        Self::with_idle(TUS_IDLE_TIMEOUT)
+    }
+
+    /// A fresh adapter with a custom idle-progress window. Production runs
+    /// `new` (30 s); drills compress the window to make the semantics
+    /// observable in seconds (tests/tus_slow_lane.rs).
+    pub fn with_idle(idle: Duration) -> Self {
         Self {
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(600))
+                .connect_timeout(Duration::from_secs(30))
+                .read_timeout(idle)
                 .build()
                 .expect("reqwest client builds"),
             sessions: Mutex::new(HashMap::new()),
@@ -211,12 +242,14 @@ impl TusAdapter {
             Ok(resp) => resp,
             Err(e) => {
                 // Transport failure is ambiguous by itself: a real network
-                // blip (→ Transient, retry) and @tus/server's early-reject
-                // socket close (#33/#37 — the 404/409 never reaches the
-                // client while the body is still streaming) look identical
-                // to hyper. Ask the server before declaring — its answer,
-                // not the socket's mood, classifies (verify-before-declare,
-                // for error paths too):
+                // blip (→ Transient, retry), an idle-progress cut (→ the
+                // server may hold SOME of the body it read before the
+                // socket died), and @tus/server's early-reject socket close
+                // (#33/#37 — the 404/409 never reaches the client while the
+                // body is still streaming) look identical to hyper. Ask the
+                // server before declaring — its answer, not the socket's
+                // mood, classifies (verify-before-declare, for error paths
+                // too):
                 //
                 // * HEAD 404/410 → SessionLost (→ Reattach): the session
                 //   is REALLY gone;
@@ -228,16 +261,17 @@ impl TusAdapter {
                 // * anything else (server at exactly our attempted offset
                 //   — the PATCH took nothing — or HEAD failing too) →
                 //   Transient: a genuine wire problem, retries counted.
+                let msg = e.to_string();
                 return Err(match self.head(location).await {
                     Err(AdapterError::SessionLost(_)) => {
                         PatchFailure::Adapter(AdapterError::SessionLost(format!(
-                            "PATCH transport-failed and HEAD confirms the session is gone: {e}"
+                            "PATCH transport-failed and HEAD confirms the session is gone: {msg}"
                         )))
                     }
                     Ok((_, server_offset)) if server_offset != offset => PatchFailure::Conflict,
-                    _ => {
-                        PatchFailure::Adapter(AdapterError::Transient(format!("PATCH failed: {e}")))
-                    }
+                    _ => PatchFailure::Adapter(AdapterError::Transient(format!(
+                        "PATCH failed: {msg}"
+                    ))),
                 });
             }
         };
