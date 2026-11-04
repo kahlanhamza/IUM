@@ -119,6 +119,42 @@ prose. An entry without verifiable issue numbers does not belong here.
   the read-back tests skip loudly on that lane (`IUM_TUS_SERVER` tells the
   tests which wire they are on). CI gains Linux diversity legs; the kill-9
   drills and the real-data drill stay canonical on SeaweedFS/tusd.
+- #50 — the tus concatenation lane (M8 rung 3): the server declares, the
+  lane parallelizes. `probe_fleet(spec, seed)` (new trait method, default =
+  `probe`) discovers `Tus-Extension: concatenation` at probe time (a failed
+  discovery degrades to the classic lane — a job never dies on an optional
+  probe), creates N partial sessions (`partial *i*` owns
+  `[i·L, min((i+1)·L, total))`, clamped to ceil(total/64 KiB)), and declares
+  `max_parallel: Some(N)` on the #13 channel — the prober (#48) and the AIMD
+  fleet (#49) adapt WITHIN it. A straddling chunk is two segments; a
+  fresh-partial straddle pushes the neighbor's bytes from the server's
+  offset (absolute source mapping `base + local`); confirm counts only the
+  segment's span. `finalize(spec)` materializes the final at the
+  all-Confirmed boundary (`concat_final` intent journaled BEFORE the call,
+  `done` + final URL AFTER — tusd re-POSTs create a SECOND final; the
+  journaled URL is never re-POSTed); verify gates on the FINAL URL and
+  honestly reports "not finalized" before it. 10/10 wire tests live vs tusd
+  2.10.1 (`scripts/tus-test.sh --concat`); @tus/server has no concatenation
+  (the fallback leg runs only there).
+- #55 — the aggregate-vs-single measurement drill (the M8 acceptance item
+  of #50): `scripts/tus-test.sh --measure` drives the REAL managed job
+  through `scripts/throttle_proxy.py` shaped wires — per-connection cap
+  (`--per-conn-rate`), shared bearer (`--total-rate`), and a seed-1 control.
+  On the record (`tests/concat_measurement.rs`, env-gated
+  `IUM_CONCAT_MEASURE=1`, skips loud on the PR lane): per-flow-capped wire →
+  the lane declares 4 partials and measures **3.71×S1** (ideal 4.00×; the
+  gap is the drill's own wall-clock arithmetic); shared-bearer wire → the
+  prober recommends fleet 1, the waterline parks the fleet, **0.82×S1** (no
+  multiplication, byte-exact); control → **0.97×S1** (the instrument's
+  honesty baseline, RED-proven — the multiplication assertion fails there).
+  Wire facts from the live rehearsal (`scripts/issue55_wire_rehearsal.sh`):
+  tusd honors the request Host (Location points at the proxy — the shaped
+  wire carries the whole session); no-body requests ride free. Three
+  instrument bugs caught by the drills themselves: the bearer bucket's
+  idle-credit burst (ceiling now 250 ms), read-schedule pacing letting a
+  socket-buffer-sized body cross at 4× its cap (the relay now pays its
+  schedule debt before returning), and a silent death on an upstream
+  early-409 (now `UPSTREAM-GONE` + honest teardown).
 
 ### Fixed
 - #47 — resplit × in-flight tus lease: the drive loop stranded a `Leased` row

@@ -74,6 +74,40 @@ CHUNK = 64 * 1024
 IDLE_TIMEOUT = 600
 
 
+class SharedBucket:
+    """One bearer's token bucket, SHARED by every connection (issue #55
+    BearerCap shape): every body byte written upstream acquires tokens
+    refilled continuously at `rate` B/s (2 s burst ceiling). The proxy runs
+    on one asyncio loop — no locking; the 20 ms poll is 1.25 KB of
+    granularity at the drill's 64 KiB/s. K concurrent sessions share the
+    bucket, so the aggregate never exceeds the bearer — the exact opposite
+    of the per-connection cap, where K flows each get their own C.
+    """
+
+    def __init__(self, rate_bps: float):
+        self.rate = float(rate_bps)
+        self.read_cap = max(1, int(self.rate * 0.25))  # ≤ 250 ms of bucket per read
+        self.tokens = 0.0  # starts EMPTY and never accumulates idle credit
+        # beyond 250 ms — a MEASUREMENT instrument must show the steady-state
+        # bearer shape, not a boot-time burst (caught live by the #55
+        # rehearsal: a 2 s ceiling handed the first PATCH 128 KiB free and
+        # the "bearer" measured 2× its own rate).
+        self.t0 = time.monotonic()
+
+    def _refill(self) -> None:
+        now = time.monotonic()
+        self.tokens = min(self.tokens + (now - self.t0) * self.rate, self.read_cap)
+        self.t0 = now
+
+    async def take(self, n: int) -> None:
+        while True:
+            self._refill()
+            if self.tokens >= n:
+                self.tokens -= n
+                return
+            await asyncio.sleep(0.02)
+
+
 class Relay:
     """One client connection: exactly one request/response pair."""
 
@@ -81,7 +115,8 @@ class Relay:
                  target: tuple[str, int], victim_part: str, victim_rate: int,
                  victim_seconds: int, state: dict, latency_ms: int = 0,
                  jitter_ms: int = 0, loss_pct: float = 0.0,
-                 reset_after_bytes: int = 0):
+                 reset_after_bytes: int = 0, per_conn_rate: int = 0,
+                 bucket: "SharedBucket | None" = None):
         self.r = reader
         self.w = writer
         self.target = target
@@ -90,6 +125,14 @@ class Relay:
         self.victim_rate = victim_rate
         self.victim_seconds = victim_seconds
         self.state = state  # shared: {"victim_active_until", "victim_taken", "wire_moved", "reset_used"}
+        # issue #55 measurement shapes: a per-connection cap (every body
+        # request gets its own C — K flows sum to K·C) or one shared bearer
+        # bucket (K flows share T — the aggregate is the bearer). They win
+        # over the S3 victim selection: a measurement drill wants the WHOLE
+        # link shaped, not one part.
+        self.per_conn_rate = per_conn_rate
+        self.bucket = bucket
+        self.flow_active = False  # this request's body is being paced
         # issue #32 real-network models
         self.latency_s = latency_ms / 1000.0
         self.jitter_s = jitter_ms / 1000.0
@@ -166,6 +209,9 @@ class Relay:
     async def _paced_relay(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter,
                            until: int | None, rate: int | None, pre: bytes,
                            reset_at: int | None = None) -> int:
+        # NOTE: the shared-bucket mode (issue #55) rides this same relay with
+        # `rate=None` and `self.bucket` set — the pacing happens at the WRITE
+        # (take tokens before each chunk), not at the read schedule.
         """Relay the request body client→server, paced to `rate` B/s when set.
 
         Cyclic on purpose (issue #28 lesson): a long unbroken pacing sleep at
@@ -187,7 +233,7 @@ class Relay:
         # kills the request mid-body on connection 1 exactly as it kills
         # bursty reads later. Smooth ≤1 s flow from byte zero.
         stash = bytearray(pre)
-        if pre and rate is None:
+        if pre and rate is None and self.bucket is None:
             dst.write(pre)
             await dst.drain()
             moved += len(pre)
@@ -223,8 +269,15 @@ class Relay:
             # the volume server's idle timeout (default 30 s — cloud RED
             # 41571828134) kills the request mid-body. Smooth ≤1 s flow keeps
             # the server alive AND the engine's progress meter advancing, so
-            # the resplit windows measure the real link.
-            cap = max(rate, 1) if rate else CHUNK
+            # the resplit windows measure the real link. Bucket mode reads
+            # only ≤ 250 ms of the shared bearer so one connection cannot
+            # hoard the whole bucket while its peers starve (issue #55).
+            if rate:
+                cap = max(rate, 1)
+            elif self.bucket is not None:
+                cap = self.bucket.read_cap
+            else:
+                cap = CHUNK
             n = min(CHUNK, cap)
             if until is not None:
                 n = min(n, until - moved)
@@ -241,10 +294,14 @@ class Relay:
                     return moved  # the client is gone (EOF at the transport)
             if not await self._maybe_stall(src):
                 return moved  # the client died inside an RTO stall (#32 loss)
+            if self.bucket is not None:
+                # The shared bearer paces the WRITES: tokens before bytes,
+                # so the aggregate across every connection never exceeds it.
+                await self.bucket.take(len(b))
             dst.write(b)
             await dst.drain()
             moved += len(b)
-            if rate:
+            if rate or self.bucket is not None:
                 self.state["wire_moved"] += len(b)
             # Issue #32 reset model: one-shot hard RST of BOTH ends the moment
             # this UploadPart PUT's relayed body crosses `reset_at`. Bytes past
@@ -267,6 +324,20 @@ class Relay:
                     except OSError:
                         pass
                 return moved
+        # The schedule paces READS, and a body that fits in the socket buffer
+        # would otherwise cross faster than its cap (caught live by the #55
+        # drill: a 64 KiB canary measured 4x its own per-connection cap —
+        # one 64 KiB read, zero schedule waits). The relay may only return
+        # once the wire's debt is paid: the end-to-end rate IS the cap for
+        # bodies of ANY size. Bucket mode already paces the writes (tokens
+        # before bytes) and needs no debt accounting.
+        if rate and moved:
+            behind = start + moved / rate - time.monotonic()
+            while behind > 0:
+                if src.exception() is not None or src.at_eof():
+                    break  # the client is gone — nothing left to pace for it
+                await asyncio.sleep(min(0.25, behind))
+                behind = start + moved / rate - time.monotonic()
         return moved
 
     async def pump(self, src: asyncio.StreamReader, dst: asyncio.StreamWriter,
@@ -310,17 +381,34 @@ class Relay:
                   flush=True)
 
         # --- victim selection -------------------------------------------------
+        # issue #55 measurement shapes FIRST: a per-connection cap paces every
+        # body-carrying request (tus PATCH eats the cap; creations/OPTIONS/
+        # HEAD ride free — exactly the per-flow-cap shape the prober's 1-vs-K
+        # question is about); the shared bucket paces nothing here — its take
+        # happens at the write inside _paced_relay.
+        rate: int | None = None
+        has_body = te or length > 0
+        if self.per_conn_rate and has_body:
+            rate = self.per_conn_rate
+            self.flow_active = True
+            print(f"[throttle-proxy] FLOW: {request_line} -> {self.per_conn_rate} B/s "
+                  f"(per-connection cap, issue #55)", flush=True)
+        elif self.bucket is not None and has_body:
+            self.flow_active = True
+            print(f"[throttle-proxy] FLOW: {request_line} -> shared bearer "
+                  f"(bucket mode, issue #55)", flush=True)
+
         # uniform mode: every UploadPart PUT is a slow-link body, no latch, no
         # expiry — the scenario ends when the engine cancels (issue #28).
         # victim mode: the FIRST connection EVER carrying the victim part.
-        rate: int | None = None
         is_part_put = "partNumber=" in path and method == "PUT"
-        if self.uniform and is_part_put:
+        if rate is None and self.bucket is None and self.uniform and is_part_put:
             rate = self.victim_rate
             print(f"[throttle-proxy] UNIFORM: {request_line} -> {self.victim_rate} B/s "
                   f"(binds to this connection's body)", flush=True)
-        elif (not self.uniform) and (f"partNumber={self.victim_part}" in path and method == "PUT"
-                and not self.state["victim_taken"]):
+        elif (rate is None and self.bucket is None and not self.uniform
+                and (f"partNumber={self.victim_part}" in path and method == "PUT"
+                     and not self.state["victim_taken"])):
             self.state["victim_taken"] = True
             self.state["victim_active_until"] = time.monotonic() + self.victim_seconds
             rate = self.victim_rate
@@ -361,11 +449,35 @@ class Relay:
                     if self.reset_after > 0 and is_part_put
                     and not self.state["reset_used"] else None)
         if te:
-            req_moved = await self.pump_until_eof(self.r, uwriter, rate, pre=rest,
-                                                  reset_at=reset_at)  # best effort
+            try:
+                req_moved = await self.pump_until_eof(self.r, uwriter, rate, pre=rest,
+                                                      reset_at=reset_at)  # best effort
+            except OSError as e:
+                # The upstream answered EARLY and closed (tusd 409s a stale
+                # offset without reading the body) — honest log, then tear
+                # the client side down too (a silent close would look like a
+                # proxy bug; caught live by the #55 rehearsal fact 3b).
+                print(f"[throttle-proxy] UPSTREAM-GONE mid-body ({e}) "
+                      f"{request_line} — after moved={req_moved}B", flush=True)
+                for wr in (uwriter, self.w):
+                    try:
+                        wr.close()
+                    except OSError:
+                        pass
+                return
         elif length:
-            req_moved = await self.pump(self.r, uwriter, length, rate, pre=rest,
-                                        reset_at=reset_at)
+            try:
+                req_moved = await self.pump(self.r, uwriter, length, rate, pre=rest,
+                                            reset_at=reset_at)
+            except OSError as e:
+                print(f"[throttle-proxy] UPSTREAM-GONE mid-body ({e}) "
+                      f"{request_line} — after moved={req_moved}B", flush=True)
+                for wr in (uwriter, self.w):
+                    try:
+                        wr.close()
+                    except OSError:
+                        pass
+                return
             if req_moved != length:
                 # The client abandoned this connection mid-body — this is the
                 # engine's eviction/resplit/cancel tearing the impaired attempt
@@ -374,9 +486,10 @@ class Relay:
                 # disconnect instead of a proxy that quietly waits forever.
                 print(f"[throttle-proxy] client abandoned {request_line.split(' ')[0]} "
                       f"{path} mid-body (moved {req_moved} of {length} B) — tearing the link down", flush=True)
-                if rate:
+                if rate or self.flow_active:
                     el = time.monotonic() - t_body0
-                    print(f"[throttle-proxy] VICTIM-WIRE moved={req_moved}B in {el:.1f}s "
+                    tag = "VICTIM-WIRE" if rate and not self.flow_active else "FLOW-WIRE"
+                    print(f"[throttle-proxy] {tag} moved={req_moved}B in {el:.1f}s "
                           f"({req_moved / el:.0f} B/s) {method} {path}", flush=True)
                 for wr in (uwriter, self.w):
                     try:
@@ -384,9 +497,10 @@ class Relay:
                     except OSError:
                         pass
                 return
-        if rate:
+        if rate or self.flow_active:
             el = time.monotonic() - t_body0
-            print(f"[throttle-proxy] VICTIM-WIRE moved={req_moved}B in {el:.1f}s "
+            tag = "VICTIM-WIRE" if rate and not self.flow_active else "FLOW-WIRE"
+            print(f"[throttle-proxy] {tag} moved={req_moved}B in {el:.1f}s "
                   f"({req_moved / el:.0f} B/s) {method} {path}", flush=True)
         if self.stalls:
             print(f"[throttle-proxy] LOSS stalls={self.stalls} "
@@ -438,12 +552,16 @@ async def main_async(a: argparse.Namespace) -> None:
     state = {"victim_taken": False, "victim_active_until": None, "wire_moved": 0,
              "reset_used": False}
     target = (a.target_host, a.target_port)
+    # issue #55: one bucket object is shared by EVERY connection — that
+    # sharing IS the bearer model (K flows, one T).
+    bucket = SharedBucket(a.total_rate) if a.total_rate else None
 
     async def on_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         relay = Relay(reader, writer, target, a.victim_part, a.victim_rate,
                       a.victim_seconds, state, latency_ms=a.latency_ms,
                       jitter_ms=a.jitter_ms, loss_pct=a.loss,
-                      reset_after_bytes=a.reset_after_bytes)
+                      reset_after_bytes=a.reset_after_bytes,
+                      per_conn_rate=a.per_conn_rate, bucket=bucket)
         await relay.run()
 
     server = await asyncio.start_server(on_conn, "127.0.0.1", a.listen_port)
@@ -457,9 +575,15 @@ async def main_async(a: argparse.Namespace) -> None:
             loop.add_signal_handler(sig, lambda: _dump_and_die(state))
         except NotImplementedError:
             pass  # windows
-    model = (f"UNIFORM every UploadPart PUT @ {a.victim_rate} B/s" if a.victim_part == "all"
-             else f"victim partNumber={a.victim_part} @ {a.victim_rate} B/s, "
-                  f"{a.victim_seconds}s, once")
+    if a.per_conn_rate:
+        model = f"PER-CONN every body request @ {a.per_conn_rate} B/s (issue #55)"
+    elif a.total_rate:
+        model = f"SHARED-BEARER all connections @ {a.total_rate} B/s total (issue #55)"
+    elif a.victim_part == "all":
+        model = f"UNIFORM every UploadPart PUT @ {a.victim_rate} B/s"
+    else:
+        model = (f"victim partNumber={a.victim_part} @ {a.victim_rate} B/s, "
+                 f"{a.victim_seconds}s, once")
     net = []
     if a.loss:
         net.append(f"loss {a.loss}% of segments -> RTO-scale stall U(0.2,2.0)s")
@@ -494,6 +618,17 @@ def main() -> None:
                          "caught live by s7net[rtt] first run, issue #32)")
     ap.add_argument("--victim-rate", type=int, default=96 * 1024)
     ap.add_argument("--victim-seconds", type=int, default=45)
+    # --- issue #55 measurement shapes ---------------------------------------
+    ap.add_argument("--per-conn-rate", type=int, default=0, metavar="BPS",
+                    help="pace EVERY body-carrying request to BPS per connection "
+                         "(any method/path — the tus per-flow-cap shape: K "
+                         "concurrent flows each get C and sum to K·C; creations, "
+                         "OPTIONS and HEAD carry no body and ride free) "
+                         "(issue #55)")
+    ap.add_argument("--total-rate", type=int, default=0, metavar="BPS",
+                    help="ALL connections share ONE token bucket of BPS — the "
+                         "shared-bearer shape: the aggregate never exceeds the "
+                         "bearer no matter how many flows (issue #55)")
     # --- issue #32 real-network models -------------------------------------
     ap.add_argument("--loss", type=float, default=0.0, metavar="PCT",
                     help="probability PER RELAYED SEGMENT of an RTO-scale stall "

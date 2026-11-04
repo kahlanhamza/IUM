@@ -36,9 +36,14 @@ WITH_DIR="${TUS_UPLOAD_DIR:-}"
 # --concat: also run the concatenation lane suite (tests/tus_concat.rs,
 # issue #50) — the tusd-only concat vectors + adapter legs; skipped loud on
 # the tus-node lane (@tus/server has no concatenation — recorded delta).
+# --measure: also run the aggregate-vs-single measurement drill
+# (tests/concat_measurement.rs, issue #55) — the managed drive loop through
+# the throttling proxy: prober classification + the lane's aggregate, three
+# legs (~90 s at the drill's 64 KiB/s rates); tusd-canonical like --concat.
 WITH_DRILL=0
 WITH_REAL=0
 WITH_CONCAT=0
+WITH_MEASURE=0
 say() { echo "[tus-test] $*"; }
 die() { echo "[tus-test] FAIL: $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
@@ -53,6 +58,7 @@ while [ $# -gt 0 ]; do
     --with-drill) WITH_DRILL=1 ;;
     --with-real) WITH_REAL=1 ;;
     --concat) WITH_CONCAT=1 ;;
+    --measure) WITH_MEASURE=1 ;;
     *) die "unknown flag: $1" ;;
   esac
   shift
@@ -64,6 +70,10 @@ fi
 
 if [ "$WITH_CONCAT" = 1 ] && [ "$SERVER" != "tusd" ]; then
   die "--concat is tusd-only (@tus/server has no concatenation — the #50 delta)"
+fi
+
+if [ "$WITH_MEASURE" = 1 ] && [ "$SERVER" != "tusd" ]; then
+  die "--measure is tusd-canonical (the concatenation lane is what's measured, #55)"
 fi
 
 PY=python3
@@ -170,6 +180,11 @@ fi
 if [ "$WITH_CONCAT" = 1 ]; then
   say "running concatenation lane suite (tus_concat, issue #50)"
   cargo test -p ium-core --test tus_concat
+fi
+
+if [ "$WITH_MEASURE" = 1 ]; then
+  say "running aggregate-vs-single measurement drill (concat_measurement, issue #55)"
+  IUM_CONCAT_MEASURE=1 cargo test -p ium-core --test concat_measurement -- --nocapture
 fi
 
 if [ "$WITH_REAL" = 1 ]; then
