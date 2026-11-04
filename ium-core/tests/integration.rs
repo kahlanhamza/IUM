@@ -900,11 +900,16 @@ async fn pause_between_chunks_returns_paused_then_resume_completes() {
 
     // 15 MiB with 5 MiB minimum → exactly 3 chunks; each upload takes ~20 ms
     // and all three run CONCURRENTLY (one worker per chunk). The pause fires
-    // at ~5 ms, mid-flight. Concurrent semantics: the in-flight chunks
-    // finish (a cancelled one-shot body cannot be re-sent), the workers then
-    // observe the flag and exit WITHOUT leasing anything new — so the job
-    // ends `Paused`, never `Done`. That Paused-not-Done outcome IS the proof
-    // the pause landed.
+    // while chunk 0 is WEDGED mid-flight — deterministic, no clock bet. (Run
+    // #93 post-mortem, #54: the old design slept 5 ms and unwrapped, betting
+    // 5 ms < 3 × 20 ms on every scheduler; Windows timer granularity plus
+    // runner starvation let the job reach Done first, pause() honestly
+    // returned WrongState("done", "non-terminal"), and the drill went red.)
+    // Concurrent semantics under test, unchanged: the in-flight chunk
+    // finishes (a cancelled one-shot body cannot be re-sent), the workers
+    // then observe the flag and exit WITHOUT leasing anything new — so the
+    // job ends `Paused`, never `Done`. That Paused-not-Done outcome IS the
+    // proof the pause landed.
     let dir = tempfile::tempdir().unwrap();
     let path = make_source(dir.path(), "f.bin", 15 * MIB);
 
@@ -926,15 +931,30 @@ async fn pause_between_chunks_returns_paused_then_resume_completes() {
         wedge_release: Arc::new(tokio::sync::Notify::new()),
         wedge_engaged: Arc::new(AtomicBool::new(false)),
     });
-    let m = Arc::new(manager_with(mock));
+    let (_release, _engaged) = mock.arm_wedge(0);
+    let m = Arc::new(manager_with(Arc::clone(&mock)));
     let rec = m.create_job(&spec_for(&path, 15 * MIB), 3).unwrap();
     assert_eq!(m.snapshot(&rec.id).unwrap().chunks.len(), 3);
 
+    // The pauser waits for the wedge (chunk 0 provably mid-flight — the job
+    // cannot reach Done before the release), pauses, then releases. If the
+    // wedge never engages that is a REAL bug: panic loudly after the budget.
     let m2 = Arc::clone(&m);
+    let mock2 = Arc::clone(&mock);
     let id = rec.id.clone();
     let pauser = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        for _ in 0..500 {
+            if mock2.wedge_engaged.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            mock2.wedge_engaged.load(Ordering::SeqCst),
+            "wedge never engaged — chunk 0 was never mid-flight"
+        );
         m2.pause(&id).unwrap();
+        mock2.release_wedge();
     });
 
     let out = m.run_job(&rec.id).await.unwrap();
