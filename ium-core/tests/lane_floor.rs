@@ -132,24 +132,40 @@ async fn slow_tus_lane_resplits_below_the_s3_minimum() {
     );
     let payload: serde_json::Value =
         serde_json::from_str(&resplits[0].2).expect("resplit payload json");
-    assert_eq!(
-        payload["target"].as_u64(),
-        Some(64 * KIB),
-        "the resplit target must clamp to the LANE floor (64 KiB), never to \
-         the 5 MiB S3 constant — payload: {payload}"
+    // The portable INVARIANT (#44), not an exact number: the target must
+    // clamp to AT LEAST the LANE floor and stay FAR below the 5 MiB S3
+    // constant. When the fleet median is unmeasurable (the frozen-link
+    // rule, most OS timings here) the target IS 64 KiB; when the window
+    // sampling catches a measurable median (Windows CI timing noise
+    // measured 138,831 B/s — run #84), the plan honestly picks a bigger
+    // sub-5MiB target and the floor only clamps UP. Both obey #44.
+    let target = payload["target"].as_u64().expect("resplit target");
+    assert!(
+        (64 * KIB..5 * 1024 * KIB).contains(&target),
+        "the resplit target must respect the LANE floor (>= 64 KiB) and \
+         never reach the 5 MiB S3 constant — payload: {payload}"
     );
 
-    // The plan obeys: sub-5MiB pieces exist (the pending 512 KiB piece
-    // split into lane-floor pieces).
+    // The plan obeys: the 1 MiB piece split into MANY lane-floor-scale
+    // pieces. Same portability rule as the target: the exact piece size
+    // follows the measured median (64 KiB when the frozen rule fires,
+    // up to ~2x the floor when a window catches a measurable median);
+    // the invariant is the SHAPE — at least 8 pieces, every one tiny.
+    let pieces = payload["chunks_after"].as_u64().expect("chunks_after");
+    assert!(
+        pieces >= 8,
+        "the pending 1 MiB piece must split into many lane-floor-scale \
+         pieces; got {pieces}"
+    );
     let chunks = j.load_chunks(&rec.id).expect("chunks");
-    let lane_pieces = chunks
+    let small = chunks
         .iter()
-        .filter(|c| c.end - c.begin == 64 * KIB)
+        .filter(|c| c.end - c.begin <= 128 * KIB)
         .count();
     assert!(
-        lane_pieces >= 8,
-        "the pending piece must split into 64 KiB lane-floor pieces; got {lane_pieces} \
-         across {} chunks",
+        small >= 8,
+        "the split pieces must be lane-floor-scale (<= 128 KiB = 2x lane \
+         floor); got {small} across {} chunks",
         chunks.len()
     );
     assert!(
