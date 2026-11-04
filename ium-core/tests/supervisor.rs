@@ -58,6 +58,7 @@ impl TransferAdapter for WedgeMock {
         Ok(ProbeReport {
             resumable: true,
             max_chunk_bytes: None,
+            min_chunk_bytes: None,
             max_parallel: None,
             session_token: Some("wedge-mock".into()),
         })

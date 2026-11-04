@@ -89,6 +89,7 @@ impl TransferAdapter for CancelInVerifyMock {
             resumable: true,
             session_token: Some(format!("tok-{n}")),
             max_chunk_bytes: None,
+            min_chunk_bytes: None,
             max_parallel: None,
         })
     }

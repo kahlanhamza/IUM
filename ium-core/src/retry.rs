@@ -22,6 +22,10 @@ pub enum ErrorKind {
     Corruption,
     /// Auth failure that needs user interaction (new token).
     AuthRequired,
+    /// Resource temporarily locked (tus 423) — a WAIT, never charged to the
+    /// retry budget, never evicted on (issue #44: the lock outlives any
+    /// ladder when an abandoned body drains on a slow link).
+    Busy,
     /// Anything we don't understand — fail fast, don't hammer.
     Unknown,
 }
@@ -80,10 +84,18 @@ impl RetryPolicy {
     /// Decide what to do with the Nth (1-based) failure of a chunk.
     pub fn decide(&self, kind: ErrorKind, attempt: u32, retry_after: Option<Duration>) -> Action {
         use ErrorKind::*;
+        // A lock wait is pacing, not failure: never charged, never exhausted
+        // (issue #44 — the tus lock outlives any ladder when an abandoned
+        // body drains on a slow link). Bounded by the user's cancel/pause.
+        if kind == Busy {
+            return Action::Retry(Duration::from_secs(1));
+        }
         if attempt > self.max_attempts {
             return Action::Fail;
         }
         match kind {
+            // (Busy is handled above — this arm keeps the match exhaustive.)
+            Busy => Action::Retry(Duration::from_secs(1)),
             Transient | Corruption => Action::Retry(self.backoff(attempt)),
             Throttled => {
                 if self.respect_retry_after {
@@ -130,6 +142,13 @@ mod tests {
         assert_eq!(p.decide(ErrorKind::SessionLost, 1, None), Action::Reattach);
         assert_eq!(p.decide(ErrorKind::Unresumable, 1, None), Action::Fail);
         assert_eq!(p.decide(ErrorKind::AuthRequired, 1, None), Action::Fail);
+        assert!(
+            matches!(
+                p.decide(ErrorKind::Busy, p.max_attempts + 100, None),
+                Action::Retry(_)
+            ),
+            "a lock wait never exhausts the budget"
+        );
         assert_eq!(p.decide(ErrorKind::Unknown, 1, None), Action::Fail);
         assert_eq!(
             p.decide(ErrorKind::Transient, p.max_attempts + 1, None),

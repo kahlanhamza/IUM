@@ -300,8 +300,10 @@ impl TusAdapter {
             412 => Err(PatchFailure::Adapter(AdapterError::Unknown(
                 "412: server rejected our Tus-Resumable preconditions — client bug".into(),
             ))),
-            423 => Err(PatchFailure::Adapter(AdapterError::Transient(
-                "423 Locked: upload busy".into(),
+            423 => Err(PatchFailure::Adapter(AdapterError::Busy(
+                "423 Locked: the upload resource is serialized — another writer or an \
+                 abandoned request's server-side drain holds it (issue #44)"
+                    .into(),
             ))),
             s if s >= 500 => Err(PatchFailure::Adapter(AdapterError::Transient(format!(
                 "PATCH -> {s}"
@@ -367,6 +369,12 @@ impl TransferAdapter for TusAdapter {
                     // uploads at 1 per session, so the adapter DECLARES it
                     // (ADR-011 channel) and the planner obeys.
                     max_parallel: Some(1),
+                    // Issue #44: tus has NO protocol minimum — the adapter
+                    // DECLARES a 64 KiB lane floor (ADR-011 channel). At the
+                    // owner's 3 KB/s bad-moment rate a piece confirms in
+                    // ~30 s; the per-PATCH header overhead at this size is
+                    // measured in the #45 ladder drill, not asserted.
+                    min_chunk_bytes: Some(64 * 1024),
                     session_token: Some(location),
                 })
             }
@@ -435,9 +443,11 @@ impl TransferAdapter for TusAdapter {
         // rejection. Either way the server's offset is the truth: absorb,
         // re-PATCH from it, and converge. BOUNDED at MAX_REALIGN_ROUNDS
         // rounds per lease — beyond that the failure is Transient (a
-        // counted retry that re-queues the chunk from journal truth), and
-        // `Unknown` is RESERVED for the one shape that is genuinely not
-        // ours: a server offset beyond this chunk's end.
+        // counted retry that re-queues the chunk from journal truth). On
+        // this single-writer lane there is no foreign writer, so a server
+        // offset at or beyond the lease end is ALSO our own drift
+        // (resplit-induced, issue #44): the piece confirms in full and the
+        // excess flows to the following pieces.
         let mut from = lease.resume_from;
         let mut realigns: u32 = 0;
         let final_offset = loop {
@@ -458,11 +468,24 @@ impl TransferAdapter for TusAdapter {
                             lease.resume_from
                         )));
                     }
-                    if server_offset > lease.end {
-                        return Err(AdapterError::Unknown(format!(
-                            "server offset {server_offset} beyond this chunk's end {}",
-                            lease.end
-                        )));
+                    if server_offset >= lease.end {
+                        // RESPLIT-INDUCED DRIFT (issue #44): the server
+                        // already holds this ENTIRE piece — a killed
+                        // longer-span PATCH (pre-resplit) pushed bytes across
+                        // the new, smaller piece boundaries. TUS is ONE
+                        // sequential-offset resource and DECLARES
+                        // max_parallel = 1: there is no foreign writer, so
+                        // beyond-the-lease bytes are OURS. The HEAD above is
+                        // the verification — confirm the piece in full; the
+                        // excess belongs to the FOLLOWING pieces, which
+                        // absorb it the same way (their first PATCH 409s,
+                        // they HEAD, they confirm) until the dance reaches
+                        // the piece that actually contains the server's
+                        // offset. (The old classification — Unknown → Fail —
+                        // turned every resplit on a dead-ish lane into a
+                        // terminal "someone else wrote there" that cannot
+                        // happen on this lane.)
+                        break lease.end;
                     }
                     from = server_offset;
                 }

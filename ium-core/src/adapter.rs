@@ -61,6 +61,15 @@ pub struct ProbeReport {
     /// `None` = no declared limit. TUS is ONE sequential-offset resource and
     /// declares `Some(1)`; S3 parts are independent and declare `None`.
     pub max_parallel: Option<u32>,
+    /// The LANE's chunk floor (issue #44, ADR-011 channel): the smallest
+    /// piece this adapter can legally confirm. `None` = the engine default
+    /// (`CHUNK_MIN`, 5 MiB — S3's multipart protocol minimum). TUS has NO
+    /// protocol minimum and declares 64 KiB: at the owner's 3 KB/s
+    /// bad-moment rate a 5 MiB piece confirms every ~29 min, while a 64 KiB
+    /// piece confirms in ~30 s — feedback latency and drop-waste scale
+    /// directly with piece size, and the resplit can only help below the
+    /// floor if the floor itself is lane-aware.
+    pub min_chunk_bytes: Option<u64>,
     /// Opaque session descriptor to carry across confirms.
     pub session_token: Option<String>,
 }
@@ -195,6 +204,13 @@ pub enum AdapterError {
     /// Credentials are missing or rejected — user action required.
     #[error("auth required: {0}")]
     AuthRequired(String),
+    /// The resource is temporarily locked (tus 423: ONE writer per upload —
+    /// another writer, or the server still draining an abandoned request's
+    /// buffered body). A WAIT, not a failure: the lock is released when the
+    /// drain ends, so waiting must be uncharged by the retry budget and
+    /// invisible to eviction (issue #44 drill finding).
+    #[error("busy: {0}")]
+    Busy(String),
     /// Anything the classification cannot name honestly.
     #[error("unknown: {0}")]
     Unknown(String),
@@ -213,6 +229,7 @@ impl AdapterError {
             AdapterError::Unresumable(_) => ErrorKind::Unresumable,
             AdapterError::Corruption(_) => ErrorKind::Corruption,
             AdapterError::AuthRequired(_) => ErrorKind::AuthRequired,
+            AdapterError::Busy(_) => ErrorKind::Busy,
             AdapterError::Unknown(_) => ErrorKind::Unknown,
         }
     }
@@ -319,6 +336,7 @@ mod tests {
             Ok(ProbeReport {
                 resumable: false,
                 max_chunk_bytes: None,
+                min_chunk_bytes: None,
                 max_parallel: None,
                 session_token: None,
             })

@@ -540,6 +540,8 @@ impl JobManager {
                         // journal — never from a live re-probe, which would
                         // orphan the session (ADR-002, #12).
                         "max_parallel": probe.max_parallel,
+                        // Issue #44: the lane floor rides the same channel.
+                        "min_chunk_bytes": probe.min_chunk_bytes,
                     }),
                 )
                 .map_err(EngineError::from)?;
@@ -613,7 +615,15 @@ impl JobManager {
         }
         let before = chunks.len() as u32;
         let job = self.require_job(job_id)?;
-        let pool = ChunkPool::new_capped(job.source_size, before, Some(cap));
+        // Issue #44: the replan runs against the LANE floor, so a binding
+        // cap on a small-floor lane (tus 64 KiB) yields lane-legal pieces
+        // instead of fighting the S3-shaped default.
+        let pool = ChunkPool::new_capped_floor(
+            job.source_size,
+            before,
+            self.declared_lane_floor(job_id),
+            Some(cap),
+        );
         self.j()
             .replace_chunks(job_id, &pool.rows())
             .map_err(EngineError::from)?;
@@ -648,6 +658,32 @@ impl JobManager {
             .and_then(|(_, _, payload)| serde_json::from_str::<serde_json::Value>(&payload).ok())
             .and_then(|v| v.get("max_parallel").cloned())
             .and_then(|v| v.as_u64().map(|n| n as u32))
+    }
+
+    /// Consume `ProbeReport.min_chunk_bytes` (issue #44, ADR-011 channel):
+    /// read the LAST journaled probe event and return the adapter's LANE
+    /// floor — the smallest piece this lane can legally confirm. Journals
+    /// without the key (pre-#44) declare nothing and fall back to the
+    /// engine default `CHUNK_MIN`, so old journals keep their exact plans.
+    /// Clamped into `[1 KiB, CHUNK_MIN]`: sub-KiB pieces are header
+    /// overhead with no feedback value, and a floor ABOVE the default would
+    /// silently re-tighten lanes that never declared one.
+    fn declared_lane_floor(&self, job_id: &str) -> u64 {
+        self.j()
+            .events_for(job_id)
+            .ok()
+            .and_then(|events| {
+                events
+                    .into_iter()
+                    .rev()
+                    .find(|(_, kind, _)| kind == "probe")
+                    .map(|(_, _, payload)| payload)
+            })
+            .and_then(|payload| serde_json::from_str::<serde_json::Value>(&payload).ok())
+            .and_then(|v| v.get("min_chunk_bytes").cloned())
+            .and_then(|v| v.as_u64())
+            .map(|floor| floor.clamp(1024, crate::chunk::CHUNK_MIN))
+            .unwrap_or(crate::chunk::CHUNK_MIN)
     }
 
     /// The transfer loop (Sprint 1: concurrent workers over one shared pool).
@@ -887,6 +923,9 @@ impl JobManager {
             let mut watch = ThroughputWatch::new(&self.eviction, Instant::now());
             let mut last_bps: Option<f64> = None;
             let mut last_median: Option<f64> = None;
+            // Consecutive 423-lock waits (issue #44): counted across leases
+            // while the drain persists, reset by ANY other outcome.
+            let mut busy_waits: u32 = 0;
             let mut ticker =
                 tokio::time::interval(self.eviction.window.max(Duration::from_millis(1)));
             ticker.tick().await; // Interval's first tick is immediate — consume it.
@@ -970,6 +1009,10 @@ impl JobManager {
 
             match step {
                 Step::Confirmed(confirm) => {
+                    #[allow(unused_assignments)] // control-flow barrier: the streak ends here
+                    {
+                        busy_waits = 0;
+                    }
                     // Issue #25: the completed lease keeps ONE vote — its
                     // freshest measured rate (last window when one elapsed,
                     // else the lease mean) — so the eviction floor survives
@@ -1036,6 +1079,51 @@ impl JobManager {
                     }
                 }
                 Step::Errored(err) => {
+                    // Issue #44 drill finding: tus 423 Locked is a WAIT, not a
+                    // failure — the resource is serialized behind another
+                    // writer or an abandoned request's server-side drain,
+                    // which on a slow link outlives ANY retry ladder. Wait
+                    // uncharged (the budget never sees it), outside the
+                    // eviction's strike accounting (a fresh watch per lease
+                    // never accumulates strikes across sub-second cycles),
+                    // with exponential backoff capped at 8 s. Bounded by the
+                    // user's cancel/pause, not by max_attempts.
+                    if err.kind() == crate::retry::ErrorKind::Busy {
+                        busy_waits = busy_waits.saturating_add(1);
+                        let delay = Duration::from_secs(1 << busy_waits.saturating_sub(1).min(3));
+                        self.j()
+                            .append_event(
+                                job_id,
+                                "chunk_busy_wait",
+                                &serde_json::json!({
+                                    "idx": lease.idx,
+                                    "wait_ms": delay.as_millis() as u64,
+                                    "consecutive": busy_waits,
+                                }),
+                            )
+                            .map_err(EngineError::from)?;
+                        self.j()
+                            .update_chunk(
+                                job_id,
+                                lease.idx,
+                                ChunkState::Pending,
+                                confirmed_at_lease,
+                                None,
+                            )
+                            .map_err(EngineError::from)?;
+                        {
+                            let mut pool = shared.pool.lock().expect("pool mutex poisoned");
+                            pool.evict(lease.idx, worker_id);
+                        }
+                        if !Self::nap(shared, delay).await {
+                            return Ok(()); // abort/pause woke us early
+                        }
+                        continue;
+                    }
+                    #[allow(unused_assignments)] // control-flow barrier: the streak ends here
+                    {
+                        busy_waits = 0;
+                    }
                     // Honor the server's own pacing when it declared one
                     // (429 + Retry-After) — spec §5.
                     let server_retry_after = match &err {
@@ -1252,8 +1340,13 @@ impl JobManager {
         let candidate = {
             let pool = shared.pool.lock().expect("pool mutex poisoned");
             let current = pool.outstanding_target();
+            // Issue #44: the floor regime runs against the LANE floor (the
+            // adapter's journaled declaration), not the S3-shaped global
+            // constant — on a 64 KiB-floor lane the resplit can actually
+            // reach wire-sized pieces.
+            let lane_floor = self.declared_lane_floor(job_id);
             match median_bps {
-                Some(m) if m > 0.0 => self.resplit.plan(Some(m), current, crate::chunk::CHUNK_MIN),
+                Some(m) if m > 0.0 => self.resplit.plan(Some(m), current, lane_floor),
                 _ => {
                     // Issue #28 frozen-link rule: an unmeasurable fleet median
                     // (every sample zero — the adapter's writes never complete
@@ -1263,7 +1356,7 @@ impl JobManager {
                     // honest target when no rate can be measured.
                     let starved = job_elapsed.is_some_and(|e| e >= self.resplit.slow_confirm);
                     if starved {
-                        self.resplit.plan_frozen(current, crate::chunk::CHUNK_MIN)
+                        self.resplit.plan_frozen(current, lane_floor)
                     } else {
                         None
                     }
@@ -1288,7 +1381,7 @@ impl JobManager {
         shared.resplit_tx.send_modify(|e| *e += 1);
         let mut pool = shared.pool.lock().expect("pool mutex poisoned");
         let chunks_before = pool.chunks().len();
-        pool.resplit_pending(new_target, crate::chunk::CHUNK_MIN);
+        pool.resplit_pending(new_target, self.declared_lane_floor(job_id));
         let rows = pool.rows();
         let chunks_after = rows.len();
         let journaled = (|| -> std::result::Result<(), EngineError> {
@@ -1413,6 +1506,7 @@ impl JobManager {
                         "resumable": probe.resumable,
                         "session_token": probe.session_token,
                         "max_parallel": probe.max_parallel,
+                        "min_chunk_bytes": probe.min_chunk_bytes,
                     }),
                 )
                 .map_err(EngineError::from)?;

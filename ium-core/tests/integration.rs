@@ -200,6 +200,7 @@ impl TransferAdapter for MockAdapter {
         Ok(ProbeReport {
             resumable: self.cap.has(Capability::RESUMABLE),
             max_chunk_bytes: self.probe_cap,
+            min_chunk_bytes: None,
             max_parallel: self.probe_max_parallel,
             session_token: Some("mock-session".into()),
         })
@@ -1198,6 +1199,7 @@ impl TransferAdapter for ScriptedAdapter {
         Ok(ProbeReport {
             resumable: self.cap.has(Capability::RESUMABLE),
             max_chunk_bytes: None,
+            min_chunk_bytes: None,
             max_parallel: None,
             session_token: Some("mock-scripted".into()),
         })

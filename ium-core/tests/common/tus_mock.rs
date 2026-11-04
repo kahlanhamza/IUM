@@ -18,7 +18,7 @@
 //! so a killed PATCH connection never blocks the HEAD that classifies it.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -53,9 +53,28 @@ struct MockState {
     offset: AtomicU64,
     length: AtomicU64,
     script: Mutex<VecDeque<PatchBehavior>>,
+    /// Global read pace (bytes/sec) applied to EVERY PATCH body read — the
+    /// whole uplink is slow, not one scripted connection. `None` = full
+    /// speed. This is the owner's-daily-reality shape (#18): no victims,
+    /// a uniformly slow wire.
+    read_pace_bps: Mutex<Option<f64>>,
+    /// tusd wire fact: PATCHes on ONE upload resource are serialized — a
+    /// second concurrent PATCH is answered 423 Locked. Without this, an
+    /// abandoned paced connection still draining its receive buffer races
+    /// the next PATCH's writes at the shared offset and corrupts the store.
+    patch_busy: AtomicBool,
     /// Diagnostics for assertions.
     patches_killed: AtomicU64,
     patches_completed: AtomicU64,
+}
+
+/// Holds `patch_busy` for one PATCH connection; released on every exit
+/// path (normal 204, mid-body kill, client abort, stall end).
+struct PatchGuard<'a>(&'a AtomicBool);
+impl Drop for PatchGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 impl TusMock {
@@ -69,6 +88,8 @@ impl TusMock {
             offset: AtomicU64::new(0),
             length: AtomicU64::new(length),
             script: Mutex::new(script.into()),
+            read_pace_bps: Mutex::new(None),
+            patch_busy: AtomicBool::new(false),
             patches_killed: AtomicU64::new(0),
             patches_completed: AtomicU64::new(0),
         });
@@ -123,6 +144,13 @@ impl TusMock {
     pub fn patches_completed(&self) -> u64 {
         self.state.patches_completed.load(Ordering::SeqCst)
     }
+
+    /// Pace EVERY PATCH body read at `bps` bytes/second (None = full
+    /// speed) — the uniformly-slow-uplink shape (#18), independent of the
+    /// per-PATCH script.
+    pub fn set_read_pace_bps(&self, bps: Option<f64>) {
+        *self.state.read_pace_bps.lock().unwrap() = bps;
+    }
 }
 
 impl Drop for TusMock {
@@ -136,6 +164,7 @@ impl Drop for TusMock {
 struct Request {
     method: String,
     content_length: u64,
+    upload_offset: Option<u64>,
 }
 
 /// Read one request head (through the blank line). Returns None on EOF.
@@ -179,9 +208,17 @@ async fn read_head(stream: &mut TcpStream) -> Option<Request> {
             value.trim().parse::<u64>().ok()
         })
         .unwrap_or(0);
+    let upload_offset = head.lines().find_map(|l| {
+        let (name, value) = l.split_once(':')?;
+        if !name.eq_ignore_ascii_case("Upload-Offset") {
+            return None;
+        }
+        value.trim().parse::<u64>().ok()
+    });
     Some(Request {
         method,
         content_length,
+        upload_offset,
     })
 }
 
@@ -250,6 +287,45 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
             .await;
         }
         "PATCH" => {
+            // tusd wire fact: a PATCH whose Upload-Offset ≠ the server's
+            // current offset is rejected with 409 AT THE REQUEST HEAD — the
+            // body is not consumed. Without this, a journal-behind-server
+            // retry would silently re-append bytes the server already
+            // holds, corrupting the store instead of exercising the
+            // adapter's realign dance.
+            if req.upload_offset != Some(state.offset.load(Ordering::SeqCst)) {
+                respond(
+                    &mut stream,
+                    "409 Conflict",
+                    &[
+                        (
+                            "Upload-Offset",
+                            state.offset.load(Ordering::SeqCst).to_string(),
+                        ),
+                        ("Tus-Resumable", "1.0.0".into()),
+                    ],
+                )
+                .await;
+                return;
+            }
+            // One writer per upload resource (tusd wire fact): a concurrent
+            // PATCH — e.g. one arriving while an abandoned paced connection
+            // is still draining — gets 423 Locked, and the adapter's retry
+            // ladder absorbs it (423 → Transient).
+            if state
+                .patch_busy
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                respond(
+                    &mut stream,
+                    "423 Locked",
+                    &[("Tus-Resumable", "1.0.0".into())],
+                )
+                .await;
+                return;
+            }
+            let _guard = PatchGuard(&state.patch_busy);
             let behavior = state
                 .script
                 .lock()
@@ -258,9 +334,14 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
                 .unwrap_or(PatchBehavior::Accept);
             match behavior {
                 PatchBehavior::Stall => {
-                    // Hold forever: read nothing, respond nothing. The drill's
-                    // client-side watchdog must be the one to cut this.
-                    tokio::time::sleep(Duration::from_secs(120)).await;
+                    // Hold the connection, reading nothing useful: the
+                    // client's watchdog must be the one to cut this. The
+                    // stall ENDS when the client aborts (RST/EOF reaches the
+                    // socket — a real dead peer does the same) or after 120 s
+                    // — either way the per-upload lock releases with it.
+                    let mut sink = [0u8; 512];
+                    let _ = tokio::time::timeout(Duration::from_secs(120), stream.read(&mut sink))
+                        .await;
                 }
                 PatchBehavior::KillAfterReading { bytes } => {
                     let mut taken = 0u64;
@@ -320,6 +401,7 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
                     .await;
                 }
                 PatchBehavior::Accept => {
+                    let pace = state.read_pace_bps.lock().unwrap().to_owned();
                     let mut remaining = req.content_length;
                     let mut buf = vec![0u8; 64 * 1024];
                     while remaining > 0 {
@@ -335,6 +417,10 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
                         };
                         persist(&state, buf[..read].to_vec()).await;
                         remaining -= read as u64;
+                        // THE UPLINK (global pace): this sleep is the slow wire.
+                        if let Some(bps) = pace {
+                            tokio::time::sleep(Duration::from_secs_f64(read as f64 / bps)).await;
+                        }
                     }
                     state.patches_completed.fetch_add(1, Ordering::SeqCst);
                     respond(

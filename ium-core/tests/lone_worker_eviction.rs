@@ -88,6 +88,7 @@ impl TransferAdapter for LoneMock {
             resumable: true,
             session_token: Some("tok-lone".into()),
             max_chunk_bytes: None,
+            min_chunk_bytes: None,
             max_parallel: None,
         })
     }

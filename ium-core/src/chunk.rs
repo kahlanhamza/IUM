@@ -172,7 +172,24 @@ impl ChunkPool {
     /// ADR-011 (issue #8): pool planned under the adapter-declared per-call
     /// cap. `cap = None` is exactly [`ChunkPool::new`].
     pub fn new_capped(total_len: u64, max_conns: u32, cap: Option<u64>) -> Self {
-        let ranges = Self::plan_capped(total_len, max_conns, CHUNK_MIN, cap);
+        Self::new_capped_floor(total_len, max_conns, CHUNK_MIN, cap)
+    }
+
+    /// ADR-011 with a LANE floor (issue #44): the smallest legal piece is
+    /// the adapter's declaration, not the global `CHUNK_MIN` — on a
+    /// 64 KiB-floor tus lane the planner may legally dip below the 5 MiB
+    /// S3 protocol minimum (which exists only for S3 multipart). The
+    /// ADR-011 composition is unchanged: `n = max(min(n, floor(total/
+    /// chunk_min)), ceil(total/cap))` — the cap still wins when the two
+    /// conflict, and the #27 floor-regime algebra and #5 invariants run
+    /// against the lane floor.
+    pub fn new_capped_floor(
+        total_len: u64,
+        max_conns: u32,
+        chunk_min: u64,
+        cap: Option<u64>,
+    ) -> Self {
+        let ranges = Self::plan_capped(total_len, max_conns, chunk_min, cap);
         let chunks = ranges
             .into_iter()
             .enumerate()

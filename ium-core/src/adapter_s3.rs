@@ -746,6 +746,7 @@ impl TransferAdapter for S3MultipartAdapter {
             return Ok(ProbeReport {
                 resumable: true,
                 max_chunk_bytes: None,
+                min_chunk_bytes: None,
                 max_parallel: None,
                 session_token: None,
             });
@@ -778,6 +779,9 @@ impl TransferAdapter for S3MultipartAdapter {
             max_chunk_bytes: Some(S3_MAX_PART_BYTES),
             // Parts are independent resources — no parallelism constraint.
             max_parallel: None,
+            // Issue #44: the 5 MiB S3 multipart minimum IS the engine
+            // default floor — no lane override (declared None).
+            min_chunk_bytes: None,
             session_token: Some(upload_id),
         })
     }
