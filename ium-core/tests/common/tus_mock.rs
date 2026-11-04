@@ -1,23 +1,36 @@
-//! A scriptable, tus-shaped loopback server for the slow-lane (#42) and
-//! own-drift (#43) drills. Wire facts follow the tus 1.0.0 core the adapter
-//! already pins (see `adapter_tus` module docs): creation POST → 201 +
-//! Location; PATCH + Upload-Offset → 204 + Upload-Offset; HEAD → 200 +
-//! Upload-Offset/Upload-Length. This mock adds the impairments the real
-//! servers cannot be asked to perform on demand:
+//! A scriptable, tus-shaped loopback server for the slow-lane (#42),
+//! own-drift (#43), lane-floor (#44), ladder (#45) and prober (#41)
+//! drills. Wire facts follow the tus 1.0.0 core the adapter already pins
+//! (see `adapter_tus` module docs): creation POST answers 201 plus a
+//! Location; PATCH with an Upload-Offset answers 204 plus the new
+//! Upload-Offset; HEAD answers 200 with Upload-Offset/Upload-Length.
+//! This mock adds the impairments real servers cannot be asked to
+//! perform on demand:
 //!
-//! * `KillAfterReading` — persist N received bytes, then drop the connection
-//!   WITHOUT a response: the client-side death that leaves the server AHEAD
-//!   of the journal (the own-drift #43 shape; tusd persists what arrived
-//!   before the socket died, captured on the live rehearsal #33/#37).
-//! * `Stall` — stop reading and never respond, holding the connection open:
-//!   a dead tunnel with a full kernel buffer (the #42 idle-progress shape).
-//! * `Pace` — read the body at a fixed B/s: a steady slow uplink with real
-//!   socket backpressure (not a simulated delay before an instant body).
+//! * `KillAfterReading` — persist N received bytes, then drop the
+//!   connection WITHOUT a response: the client-side death that leaves the
+//!   server AHEAD of the journal (the own-drift #43 shape; tusd persists
+//!   what arrived before the socket died, captured on the live rehearsal
+//!   #33/#37).
+//! * `Stall` — stop reading and never respond, holding the connection
+//!   open: a dead tunnel with a full kernel buffer (the #42 shape).
+//! * `Pace` — read the body at a fixed B/s: a steady slow uplink.
+//! * a GLOBAL per-connection pace and a GLOBAL shared-bearer pace — the
+//!   two link shapes the #41 prober must tell apart.
 //!
-//! All state lives behind atomics/mutexes; every connection is its own task,
-//! so a killed PATCH connection never blocks the HEAD that classifies it.
+//! tusd-honesty the drills depend on:
+//! * a PATCH whose Upload-Offset ≠ the session's offset is rejected 409
+//!   AT THE REQUEST HEAD (the body is not consumed — a naive
+//!   always-accept mock would silently re-append bytes and corrupt the
+//!   store instead of exercising the realign dance);
+//! * ONE writer per session — a concurrent PATCH on the same resource is
+//!   answered 423 Locked (real tusd behavior);
+//! * creations mint UNIQUE sessions (the #41 prober's K-stream phase runs
+//!   K independent sessions concurrently).
+//!
+//! All state is behind atomics/mutexes; every connection is its own task.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -29,17 +42,49 @@ use tokio::net::TcpStream;
 #[derive(Debug, Clone)]
 pub enum PatchBehavior {
     /// Persist `bytes` received bytes, then close WITHOUT any response —
-    /// the client observes a transport death; the bytes it read are durable
-    /// (server offset advances). Exactly the timed-out-PATCH aftermath.
+    /// the client observes a transport death; the bytes it read are
+    /// durable (session offset advances). The timed-out-PATCH aftermath.
     KillAfterReading { bytes: u64 },
-    /// Hold the connection open, read NOTHING, respond with NOTHING — the
-    /// stalled-tunnel shape (client's kernel buffers fill, then silence).
+    /// Hold the connection open, read NOTHING, respond with NOTHING —
+    /// the stalled-tunnel shape (client's kernel buffers fill, then
+    /// silence). Ends when the client aborts (a real dead peer does the
+    /// same) or after 120 s.
     Stall,
     /// Read the whole body at `bps` bytes/second, persist it, answer a
     /// normal 204 — a steady slow uplink (the owner's 3 KB/s moment).
     Pace { bps: f64 },
-    /// Read the whole body instantly, persist, answer 204 — a healthy link.
+    /// Read the whole body (at the global/bearer pace, if set), persist,
+    /// answer 204 — a healthy link.
     Accept,
+}
+
+/// One created upload resource: its own durable store and offset.
+struct Session {
+    store: Mutex<Vec<u8>>,
+    offset: AtomicU64,
+    length: u64,
+    /// ONE writer per session (tusd wire fact) — see MockState docs.
+    patch_busy: AtomicBool,
+}
+
+struct MockState {
+    sessions: Mutex<BTreeMap<String, Arc<Session>>>,
+    next_id: AtomicU64,
+    script: Mutex<VecDeque<PatchBehavior>>,
+    /// Per-CONNECTION read pace: N concurrent readers each get the full
+    /// `bps` (models per-flow caps; aggregate N×bps).
+    read_pace_bps: Mutex<Option<f64>>,
+    /// Shared-bearer pace: the AGGREGATE across all concurrent readers
+    /// never exceeds `bps` (models the owner's tunnel; the prober's
+    /// bearer-cap shape).
+    bearer_pace_bps: Mutex<Option<f64>>,
+    /// The next free slot on the bearer's timeline.
+    bearer_slot: Mutex<tokio::time::Instant>,
+    /// Every byte READ off the wire (request heads + bodies, upload
+    /// direction) — the #45 ladder's overhead denominator.
+    wire_bytes: AtomicU64,
+    patches_killed: AtomicU64,
+    patches_completed: AtomicU64,
 }
 
 pub struct TusMock {
@@ -48,56 +93,38 @@ pub struct TusMock {
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
-struct MockState {
-    store: Mutex<Vec<u8>>,
-    offset: AtomicU64,
-    length: AtomicU64,
-    script: Mutex<VecDeque<PatchBehavior>>,
-    /// Global read pace (bytes/sec) applied to EVERY PATCH body read — the
-    /// whole uplink is slow, not one scripted connection. `None` = full
-    /// speed. This is the owner's-daily-reality shape (#18): no victims,
-    /// a uniformly slow wire.
-    read_pace_bps: Mutex<Option<f64>>,
-    /// tusd wire fact: PATCHes on ONE upload resource are serialized — a
-    /// second concurrent PATCH is answered 423 Locked. Without this, an
-    /// abandoned paced connection still draining its receive buffer races
-    /// the next PATCH's writes at the shared offset and corrupts the store.
-    patch_busy: AtomicBool,
-    /// Every byte this server has READ off the wire (headers + bodies) —
-    /// the honest denominator for the per-PATCH overhead measurement the
-    /// #45 ladder records (issue #44's acceptance: measured, not asserted).
-    wire_bytes: AtomicU64,
-    /// Diagnostics for assertions.
-    patches_killed: AtomicU64,
-    patches_completed: AtomicU64,
-}
-
-/// Holds `patch_busy` for one PATCH connection; released on every exit
-/// path (normal 204, mid-body kill, client abort, stall end).
-struct PatchGuard<'a>(&'a AtomicBool);
-impl Drop for PatchGuard<'_> {
-    fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
-    }
-}
-
 impl TusMock {
-    /// Spawn with a PATCH script consumed in order; when the script is
-    /// exhausted every further PATCH is `Accept` (a recovered link).
+    /// Spawn with a PATCH script consumed in order (per session? no — the
+    /// script is GLOBAL and consumed in arrival order, matching the
+    /// engine's sequential single-worker lane); when exhausted, every
+    /// further PATCH is `Accept`.
     pub fn spawn(script: Vec<PatchBehavior>, length: u64) -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let addr = listener.local_addr().expect("local addr");
         let state = Arc::new(MockState {
-            store: Mutex::new(Vec::new()),
-            offset: AtomicU64::new(0),
-            length: AtomicU64::new(length),
+            sessions: Mutex::new(BTreeMap::new()),
+            next_id: AtomicU64::new(0),
             script: Mutex::new(script.into()),
             read_pace_bps: Mutex::new(None),
-            patch_busy: AtomicBool::new(false),
+            bearer_pace_bps: Mutex::new(None),
+            bearer_slot: Mutex::new(tokio::time::Instant::now()),
             wire_bytes: AtomicU64::new(0),
             patches_killed: AtomicU64::new(0),
             patches_completed: AtomicU64::new(0),
         });
+        // Pre-mint the first session so single-session drills (HEAD before
+        // any creation the test makes itself) still see a resource at the
+        // documented path.
+        state.sessions.lock().unwrap().insert(
+            "/files/ium-mock-0".to_string(),
+            Arc::new(Session {
+                store: Mutex::new(Vec::new()),
+                offset: AtomicU64::new(0),
+                length,
+                patch_busy: AtomicBool::new(false),
+            }),
+        );
+        state.next_id.store(1, Ordering::SeqCst);
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         let st = state.clone();
         std::thread::spawn(move || {
@@ -134,12 +161,29 @@ impl TusMock {
         format!("http://{}/files/", self.addr)
     }
 
+    /// The ACTIVE session's offset (the one with the most persisted
+    /// bytes) — the single-session drills' view. With per-session state
+    /// the engine's session is the active one; the pre-minted session
+    /// stays empty.
     pub fn offset(&self) -> u64 {
-        self.state.offset.load(Ordering::SeqCst)
+        self.state
+            .sessions
+            .lock()
+            .unwrap()
+            .values()
+            .map(|s| s.offset.load(Ordering::SeqCst))
+            .max()
+            .unwrap_or(0)
     }
 
+    /// The ACTIVE session's store (same rule as `offset`).
     pub fn stored(&self) -> Vec<u8> {
-        self.state.store.lock().unwrap().clone()
+        let sessions = self.state.sessions.lock().unwrap();
+        let best = sessions
+            .values()
+            .max_by_key(|s| s.offset.load(Ordering::SeqCst));
+        best.map(|s| s.store.lock().unwrap().clone())
+            .unwrap_or_default()
     }
 
     pub fn patches_killed(&self) -> u64 {
@@ -150,17 +194,20 @@ impl TusMock {
         self.state.patches_completed.load(Ordering::SeqCst)
     }
 
-    /// Total bytes read off the wire (request heads + bodies, PATCH and
-    /// HEAD/POST alike) — the ladder's overhead measurement denominator.
+    /// Total bytes read off the wire (request heads + bodies, upload
+    /// direction) — the ladder's overhead measurement denominator.
     pub fn wire_bytes(&self) -> u64 {
         self.state.wire_bytes.load(Ordering::SeqCst)
     }
 
-    /// Pace EVERY PATCH body read at `bps` bytes/second (None = full
-    /// speed) — the uniformly-slow-uplink shape (#18), independent of the
-    /// per-PATCH script.
+    /// Per-CONNECTION pace (see MockState.read_pace_bps).
     pub fn set_read_pace_bps(&self, bps: Option<f64>) {
         *self.state.read_pace_bps.lock().unwrap() = bps;
+    }
+
+    /// Shared-bearer pace (see MockState.bearer_pace_bps).
+    pub fn set_bearer_pace_bps(&self, bps: Option<f64>) {
+        *self.state.bearer_pace_bps.lock().unwrap() = bps;
     }
 }
 
@@ -172,10 +219,20 @@ impl Drop for TusMock {
     }
 }
 
+/// Holds the per-session writer lock; released on every exit path.
+struct PatchGuard<'a>(&'a AtomicBool);
+impl Drop for PatchGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 struct Request {
     method: String,
+    path: String,
     content_length: u64,
     upload_offset: Option<u64>,
+    upload_length: Option<u64>,
     head_len: usize,
 }
 
@@ -184,8 +241,6 @@ async fn read_head(stream: &mut TcpStream) -> Option<Request> {
     let mut buf = Vec::with_capacity(1024);
     let mut byte = [0u8; 1];
     loop {
-        // 10 s head budget: a drill that cannot even deliver headers is a
-        // broken drill, and a hanging one poisons CI worse than a panic.
         let n = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut byte))
             .await
             .ok()?
@@ -201,14 +256,12 @@ async fn read_head(stream: &mut TcpStream) -> Option<Request> {
             panic!("request head exceeded 64 KiB — parser bug");
         }
     }
-    let head = String::from_utf8_lossy(&buf).into_owned();
     let head_len = buf.len();
+    let head = String::from_utf8_lossy(&buf).into_owned();
     let request_line = head.lines().next().unwrap_or_default().to_string();
-    let method = request_line
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .to_string();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_string();
+    let path = parts.next().unwrap_or_default().to_string();
     let content_length = head
         .lines()
         .find_map(|l| {
@@ -228,10 +281,19 @@ async fn read_head(stream: &mut TcpStream) -> Option<Request> {
         }
         value.trim().parse::<u64>().ok()
     });
+    let upload_length = head.lines().find_map(|l| {
+        let (name, value) = l.split_once(':')?;
+        if !name.eq_ignore_ascii_case("Upload-Length") {
+            return None;
+        }
+        value.trim().parse::<u64>().ok()
+    });
     Some(Request {
         method,
+        path,
         content_length,
         upload_offset,
+        upload_length,
         head_len,
     })
 }
@@ -250,20 +312,41 @@ async fn respond(stream: &mut TcpStream, status: &str, extra: &[(&str, String)])
     stream.flush().await.expect("flush response");
 }
 
-async fn persist(state: &MockState, data: Vec<u8>) {
-    state
-        .wire_bytes
-        .fetch_add(data.len() as u64, Ordering::SeqCst);
-    let mut store = state.store.lock().unwrap();
-    let base = state.offset.load(Ordering::SeqCst) as usize;
-    // Store is written at the server offset (realign re-PATCHes start there).
+async fn persist(session: &Session, data: Vec<u8>, wire: &AtomicU64) {
+    wire.fetch_add(data.len() as u64, Ordering::SeqCst);
+    let mut store = session.store.lock().unwrap();
+    let base = session.offset.load(Ordering::SeqCst) as usize;
     if store.len() < base + data.len() {
         store.resize(base + data.len(), 0);
     }
     store[base..base + data.len()].copy_from_slice(&data);
     drop(store);
-    state.offset.fetch_add(data.len() as u64, Ordering::SeqCst);
-    drop(data);
+    session
+        .offset
+        .fetch_add(data.len() as u64, Ordering::SeqCst);
+}
+
+/// Sleep the current caller until its `bytes` fit into the shared bearer's
+/// timeline. Reads are claimed in arrival order (the slot chain) — a fair
+/// first-order bearer model.
+async fn claim_bearer_slots(state: &MockState, bytes: u64) {
+    let total = *state.bearer_pace_bps.lock().unwrap();
+    let Some(total) = total else { return };
+    if total <= 0.0 {
+        return;
+    }
+    let span = Duration::from_secs_f64(bytes as f64 / total);
+    let now = tokio::time::Instant::now();
+    let start = {
+        let mut slot = state.bearer_slot.lock().unwrap();
+        let s = (*slot).max(now);
+        *slot = s + span;
+        s
+    };
+    if start > now {
+        tokio::time::sleep_until(start).await;
+    }
+    tokio::time::sleep(span).await;
 }
 
 async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
@@ -275,11 +358,20 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
         .fetch_add(req.head_len as u64, Ordering::SeqCst);
     match req.method.as_str() {
         "POST" => {
-            // Creation: 201 + absolute Location (tusd shape).
-            let location = format!(
-                "http://{}/files/ium-mock-1",
-                stream.local_addr().expect("local")
+            // Creation: mint a UNIQUE session, 201 + absolute Location.
+            let n = state.next_id.fetch_add(1, Ordering::SeqCst);
+            let path = format!("/files/ium-mock-{n}");
+            let length = req.upload_length.unwrap_or(0);
+            state.sessions.lock().unwrap().insert(
+                path.clone(),
+                Arc::new(Session {
+                    store: Mutex::new(Vec::new()),
+                    offset: AtomicU64::new(0),
+                    length,
+                    patch_busy: AtomicBool::new(false),
+                }),
             );
+            let location = format!("http://{}{path}", stream.local_addr().expect("local"));
             respond(
                 &mut stream,
                 "201 Created",
@@ -288,18 +380,19 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
             .await;
         }
         "HEAD" => {
+            let Some(session) = state.sessions.lock().unwrap().get(&req.path).cloned() else {
+                respond(&mut stream, "404 Not Found", &[]).await;
+                return;
+            };
             respond(
                 &mut stream,
                 "200 OK",
                 &[
                     (
                         "Upload-Offset",
-                        state.offset.load(Ordering::SeqCst).to_string(),
+                        session.offset.load(Ordering::SeqCst).to_string(),
                     ),
-                    (
-                        "Upload-Length",
-                        state.length.load(Ordering::SeqCst).to_string(),
-                    ),
+                    ("Upload-Length", session.length.to_string()),
                     ("Tus-Resumable", "1.0.0".into()),
                     ("Cache-Control", "no-store".into()),
                 ],
@@ -307,20 +400,21 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
             .await;
         }
         "PATCH" => {
-            // tusd wire fact: a PATCH whose Upload-Offset ≠ the server's
-            // current offset is rejected with 409 AT THE REQUEST HEAD — the
-            // body is not consumed. Without this, a journal-behind-server
-            // retry would silently re-append bytes the server already
-            // holds, corrupting the store instead of exercising the
-            // adapter's realign dance.
-            if req.upload_offset != Some(state.offset.load(Ordering::SeqCst)) {
+            let Some(session) = state.sessions.lock().unwrap().get(&req.path).cloned() else {
+                respond(&mut stream, "404 Not Found", &[]).await;
+                return;
+            };
+            // tusd wire fact: a PATCH whose Upload-Offset ≠ the session's
+            // offset is rejected 409 AT THE REQUEST HEAD — the body is not
+            // consumed.
+            if req.upload_offset != Some(session.offset.load(Ordering::SeqCst)) {
                 respond(
                     &mut stream,
                     "409 Conflict",
                     &[
                         (
                             "Upload-Offset",
-                            state.offset.load(Ordering::SeqCst).to_string(),
+                            session.offset.load(Ordering::SeqCst).to_string(),
                         ),
                         ("Tus-Resumable", "1.0.0".into()),
                     ],
@@ -328,11 +422,9 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
                 .await;
                 return;
             }
-            // One writer per upload resource (tusd wire fact): a concurrent
-            // PATCH — e.g. one arriving while an abandoned paced connection
-            // is still draining — gets 423 Locked, and the adapter's retry
-            // ladder absorbs it (423 → Transient).
-            if state
+            // One writer per session: a concurrent PATCH gets 423, and the
+            // adapter's Busy-wait absorbs it (issue #44).
+            if session
                 .patch_busy
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                 .is_err()
@@ -345,7 +437,7 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
                 .await;
                 return;
             }
-            let _guard = PatchGuard(&state.patch_busy);
+            let _guard = PatchGuard(&session.patch_busy);
             let behavior = state
                 .script
                 .lock()
@@ -356,9 +448,9 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
                 PatchBehavior::Stall => {
                     // Hold the connection, reading nothing useful: the
                     // client's watchdog must be the one to cut this. The
-                    // stall ENDS when the client aborts (RST/EOF reaches the
-                    // socket — a real dead peer does the same) or after 120 s
-                    // — either way the per-upload lock releases with it.
+                    // stall ENDS when the client aborts (RST/EOF reaches
+                    // the socket) or after 120 s — the lock releases with
+                    // it either way.
                     let mut sink = [0u8; 512];
                     let _ = tokio::time::timeout(Duration::from_secs(120), stream.read(&mut sink))
                         .await;
@@ -368,9 +460,6 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
                     let mut buf = vec![0u8; 16 * 1024];
                     while taken < bytes {
                         let want = (bytes - taken).min(buf.len() as u64) as usize;
-                        // The client may legitimately stop sending first
-                        // (span smaller than the kill budget): a short read
-                        // with the body exhausted ends the attempt.
                         let read = match tokio::time::timeout(
                             Duration::from_secs(5),
                             stream.read(&mut buf[..want]),
@@ -380,7 +469,7 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
                             Ok(Ok(n)) if n > 0 => n,
                             _ => break,
                         };
-                        persist(&state, buf[..read].to_vec()).await;
+                        persist(&session, buf[..read].to_vec(), &state.wire_bytes).await;
                         taken += read as u64;
                     }
                     state.patches_killed.fetch_add(1, Ordering::SeqCst);
@@ -401,7 +490,7 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
                             Ok(Ok(n)) if n > 0 => n,
                             _ => break,
                         };
-                        persist(&state, buf[..read].to_vec()).await;
+                        persist(&session, buf[..read].to_vec(), &state.wire_bytes).await;
                         remaining -= read as u64;
                         // THE UPLINK: this sleep is the slow wire.
                         tokio::time::sleep(Duration::from_secs_f64(read as f64 / bps)).await;
@@ -413,7 +502,7 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
                         &[
                             (
                                 "Upload-Offset",
-                                state.offset.load(Ordering::SeqCst).to_string(),
+                                session.offset.load(Ordering::SeqCst).to_string(),
                             ),
                             ("Tus-Resumable", "1.0.0".into()),
                         ],
@@ -435,12 +524,14 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
                             Ok(Ok(n)) if n > 0 => n,
                             _ => break,
                         };
-                        persist(&state, buf[..read].to_vec()).await;
+                        persist(&session, buf[..read].to_vec(), &state.wire_bytes).await;
                         remaining -= read as u64;
-                        // THE UPLINK (global pace): this sleep is the slow wire.
+                        // THE UPLINK: per-connection pace, then the shared
+                        // bearer's slot (both None on a healthy link).
                         if let Some(bps) = pace {
                             tokio::time::sleep(Duration::from_secs_f64(read as f64 / bps)).await;
                         }
+                        claim_bearer_slots(&state, read as u64).await;
                     }
                     state.patches_completed.fetch_add(1, Ordering::SeqCst);
                     respond(
@@ -449,7 +540,7 @@ async fn handle(mut stream: TcpStream, state: Arc<MockState>) {
                         &[
                             (
                                 "Upload-Offset",
-                                state.offset.load(Ordering::SeqCst).to_string(),
+                                session.offset.load(Ordering::SeqCst).to_string(),
                             ),
                             ("Tus-Resumable", "1.0.0".into()),
                         ],

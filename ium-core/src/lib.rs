@@ -44,6 +44,7 @@ pub mod chunk;
 pub mod eviction;
 pub mod journal;
 pub mod manager;
+pub mod prober;
 pub mod retry;
 pub mod state;
 pub mod supervisor;
