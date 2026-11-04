@@ -416,20 +416,31 @@ impl TransferAdapter for TusAdapter {
             )
         })?;
 
-        // The empty span (issue #5's [(0, 0)] chunk): confirm via HEAD — a
-        // real server round-trip, zero pointless empty PATCHes.
-        if lease.end == lease.resume_from {
-            let (_, server_offset) = self.head(&location).await?;
-            if server_offset < lease.resume_from {
-                return Err(AdapterError::Unresumable(format!(
-                    "server offset {server_offset} behind journaled {}",
-                    lease.resume_from
-                )));
-            }
+        // THE ENTRY HEAD — the alignment point (CI wire-suite finding, #43
+        // follow-up): the journal can be BEHIND the server at call entry
+        // (a previous call died after the server acked bytes that never
+        // reached the journal — crash recovery's whole reason to exist).
+        // PATCHing from the journal offset would 409 blindly; HEADing first
+        // makes the server's truth the starting point, saves the doomed
+        // round-trip, and makes the waste reckoning EXACT (server-persisted
+        // during this call = final − entry, with no ambiguity between
+        // pre-existing drift and this call's consumed bytes).
+        let (_, entry_offset) = self.head(&location).await?;
+        if entry_offset < lease.resume_from {
+            return Err(AdapterError::Unresumable(format!(
+                "server offset {entry_offset} behind journaled {} — the server lost confirmed bytes",
+                lease.resume_from
+            )));
+        }
+        // Confirm-before-send shapes (issue #5's empty span, and #44's
+        // resplit-induced drift): the server already holds the whole span —
+        // a real server round-trip verified it. Confirm in full; zero
+        // pointless PATCHes.
+        if lease.end <= entry_offset {
             return Ok(ChunkConfirm {
                 idx: lease.idx,
-                bytes_confirmed: 0,
-                adapter_token: Some(server_offset.to_string()),
+                bytes_confirmed: lease.end - lease.resume_from,
+                adapter_token: Some(entry_offset.to_string()),
             });
         }
 
@@ -437,18 +448,17 @@ impl TransferAdapter for TusAdapter {
         // rejected attempts' flush can be reclassified exactly.
         let first_attempt_from = progress.moved();
         // THE REALIGN DANCE (issues #10, #30, #43): a conflict means the
-        // server's offset is elsewhere — on a single-worker lease that is
+        // server's offset moved mid-call — on a single-worker lease that is
         // OUR OWN drift (a killed PATCH's body landed on the server after
-        // the socket died; tusd persists what arrived), or a plain 409
-        // rejection. Either way the server's offset is the truth: absorb,
-        // re-PATCH from it, and converge. BOUNDED at MAX_REALIGN_ROUNDS
-        // rounds per lease — beyond that the failure is Transient (a
-        // counted retry that re-queues the chunk from journal truth). On
-        // this single-writer lane there is no foreign writer, so a server
-        // offset at or beyond the lease end is ALSO our own drift
+        // the socket died; tusd persists what arrived). The server's offset
+        // is the truth: absorb, re-PATCH from it, and converge. BOUNDED at
+        // MAX_REALIGN_ROUNDS rounds per lease — beyond that the failure is
+        // Transient (a counted retry that re-queues the chunk from journal
+        // truth). On this single-writer lane there is no foreign writer, so
+        // a server offset at or beyond the lease end is ALSO our own drift
         // (resplit-induced, issue #44): the piece confirms in full and the
         // excess flows to the following pieces.
-        let mut from = lease.resume_from;
+        let mut from = entry_offset;
         let mut realigns: u32 = 0;
         let final_offset = loop {
             match self.patch(spec, &location, from, lease.end, progress).await {
@@ -462,29 +472,15 @@ impl TransferAdapter for TusAdapter {
                         )));
                     }
                     let (_, server_offset) = self.head(&location).await?;
-                    if server_offset < lease.resume_from {
+                    if server_offset < entry_offset {
                         return Err(AdapterError::Unresumable(format!(
-                            "server offset {server_offset} behind journaled {} — the server lost confirmed bytes",
-                            lease.resume_from
+                            "server offset {server_offset} behind the entry offset {entry_offset} — the server lost confirmed bytes",
                         )));
                     }
                     if server_offset >= lease.end {
-                        // RESPLIT-INDUCED DRIFT (issue #44): the server
-                        // already holds this ENTIRE piece — a killed
-                        // longer-span PATCH (pre-resplit) pushed bytes across
-                        // the new, smaller piece boundaries. TUS is ONE
-                        // sequential-offset resource and DECLARES
-                        // max_parallel = 1: there is no foreign writer, so
-                        // beyond-the-lease bytes are OURS. The HEAD above is
-                        // the verification — confirm the piece in full; the
-                        // excess belongs to the FOLLOWING pieces, which
-                        // absorb it the same way (their first PATCH 409s,
-                        // they HEAD, they confirm) until the dance reaches
-                        // the piece that actually contains the server's
-                        // offset. (The old classification — Unknown → Fail —
-                        // turned every resplit on a dead-ish lane into a
-                        // terminal "someone else wrote there" that cannot
-                        // happen on this lane.)
+                        // RESPLIT-INDUCED DRIFT (issue #44): see the
+                        // entry-HEAD shape above — the piece confirms in
+                        // full; the excess belongs to the FOLLOWING pieces.
                         break lease.end;
                     }
                     from = server_offset;
@@ -503,16 +499,18 @@ impl TransferAdapter for TusAdapter {
         // `moved()` after `patch()` returns (the body is counted on hyper's
         // connection task — an 8 KiB chunk once flipped CI's exact assert).
         // Reckon ONCE, after the dance settles: during this call the
-        // server's durable truth moved from `lease.resume_from` to
+        // server's durable truth moved from the ENTRY offset to
         // `final_offset`; every byte this call pushed BEYOND that is, by
         // construction, flushed-nowhere (a rejected attempt's socket flush
         // or a dead attempt's never-consumed tail) — exactly waste,
         // whenever its count landed. Own-drift bytes (server-persisted
-        // slices of killed attempts) sit INSIDE `final_offset -
-        // resume_from`: they are CONFIRMED, never double-counted as waste
-        // (issue #43's correction to the one-shot-realign arithmetic).
+        // slices of killed attempts) sit INSIDE `final_offset - entry`:
+        // they are CONFIRMED, never double-counted as waste — and
+        // pre-existing drift (journal behind the server at entry) sits
+        // BELOW the entry offset: it is neither pushed by this call nor
+        // subtracted from it (the CI drift-realign wire test pins this).
         let pushed = progress.moved() - first_attempt_from;
-        progress.waste(pushed.saturating_sub(final_offset - lease.resume_from));
+        progress.waste(pushed.saturating_sub(final_offset - entry_offset));
         Ok(ChunkConfirm {
             idx: lease.idx,
             bytes_confirmed: final_offset - lease.resume_from,
