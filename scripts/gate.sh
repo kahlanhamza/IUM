@@ -27,8 +27,14 @@ git worktree add --detach "$WT" HEAD >/dev/null
 cleanup() { git worktree remove --force "$WT" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-# Reuse dependency artifacts across gate runs (a fresh worktree has no target/).
-export CARGO_TARGET_DIR=/home/z/my-project/.gate-target
+# Share the default target/ with local builds: one artifact cache, half the
+# disk (a 2026-11-04 session twice filled the rootfs with two 4 GiB caches
+# built under different RUSTFLAGS). The gate's guarantees are about the
+# COMMITTED TREE (worktree checkout + fmt/clippy/test/doc lanes) — the
+# artifact cache is content-addressed and shared safely. The linker flags
+# live in the LOCAL CARGO_HOME config (.toolchain/cargo/config.toml, never
+# committed), so local builds and the gate compile with identical flags.
+unset CARGO_TARGET_DIR
 
 echo "== gate: committed tree $HEAD_SHA =="
 cargo fmt --all -- --check
