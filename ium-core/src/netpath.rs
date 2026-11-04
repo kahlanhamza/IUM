@@ -208,8 +208,9 @@ pub fn discover(override_list: Option<&[String]>) -> Vec<NetPath> {
 /// The scheduler's plan: live paths, their weights, who was excluded.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PathPlan {
-    /// Weight per LIVE path (same order as [`PathPlan::paths`]); the
-    /// minimum live weight is normalized to 1.0.
+    /// Weight per LIVE path, compacted over the probed set with the
+    /// excluded indexes removed (the minimum live weight is normalized
+    /// to 1.0); `live_indexes` maps weights back to probed positions.
     pub weights: Vec<f64>,
     /// Indexes into the PROBED path list that measured 0 throughput —
     /// journaled as `path_excluded`, never assigned to.
