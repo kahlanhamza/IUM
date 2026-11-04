@@ -83,7 +83,7 @@ filed and closed through the register discipline; the red streak #62–#74 ended
 #75 all-green (8/8 jobs). Next tranche (transports / OAuth / Sprint-2 UX / v0.1.0
 packaging) is the owner's call.
 
-## M7 — Speed architecture: measured profiles → the IDM brain — 🚧 **CURRENT** (owner mandate 2026-11-04; milestone 6, issues #41–#46)
+## M7 — Speed architecture: measured profiles → the IDM brain — ✅ **COMPLETE** (2026-11-04: all 6 issues closed with measured evidence + the drill-discovered #47 fixed via the full loop; CI runs #80/#81 green, real-tusd wire 12/12)
 
 M6 proved the engine's RELIABILITY promises. The owner's field measurements define the SPEED
 promise: the SAME tunnel measured ~3 KB/s uplink (NapsternetV counter moment) and **1.29 Mbps
@@ -93,23 +93,35 @@ pay a wall that kills healthy flows. The analysis pass also fixed the honest voc
 no algorithm beats the sum of the summoned bearers; speed engineering reaches the bound
 (saturation, zero waste, no false walls) and aggregates bearers (parallel flows / multipath).
 
-- [ ] #41 — **link prober at probe time**: single-stream vs K-stream aggregate (~20 s) →
+- [x] #41 — **link prober at probe time**: single-stream vs K-stream aggregate (~20 s) →
       classify per-flow cap / total-bearer cap / fat pipe; lane + fleet decision journaled
-      (ADR-011 channel extension) and enforced every drive round
-- [ ] #42 — **tus total→idle request timeout**: the 600 s wall is structurally
-      non-convergent below ~8.7 KB/s (no legal piece ≥ 5 MiB fits one attempt); an
-      idle-progress timeout owns SILENCE, the supervision layer owns DURATION
-- [ ] #43 — **tus realign absorbs own-drift**: a timed-out PATCH's landed bytes are drift
-      to absorb (bounded dance), never `Unknown→Fail` — misclassification made slow links
-      terminal
-- [ ] #44 — **lane-aware chunk floor via ADR-011**: tus has no protocol minimum; 64 KiB
-      pieces confirm in ~30 s at the owner's bad-moment rate (S3 keeps its 5 MiB rule)
-- [ ] #45 — **CI throttled ladder 3/8/50/160 KB/s**: the KB/s tail was discovered by the
-      owner in the field because no drill went below the wall — pinned forever after
-- [ ] #46 — **research track, measured spikes**: multipath aggregation (MPTCP RFC 8684 /
-      part→path scheduling — S3 multipart maps 1:1 onto multiple paths) + FASP-style
-      UDP+FEC for the lossy-tunnel regime; verdicts recorded, including "not worth it"
+      (ADR-011 channel extension) and enforced every drive round — drills prove BOTH
+      classifications (per-flow SK/S1 = 4.0× → fleet 4; bearer 1.0× → fleet 1)
+- [x] #42 — **tus total→idle request timeout**: the 600 s wall is GONE;
+      `read_timeout(idle)` is the progress tripwire (30 s default); MEASURED finding: a
+      moved()-watchdog cannot work — kernel/hyper buffers absorb MiB before backpressure
+- [x] #43 — **tus realign absorbs own-drift**: bounded dance (≤4 rounds) with the ENTRY
+      HEAD as the alignment point (the CI-run-78 post-mortem: the journal can be BEHIND
+      after crash recovery; exact `moved−wasted` reckoning, the doomed blind PATCH gone)
+- [x] #44 — **lane-aware chunk floor via ADR-011**: tus declares 64 KiB; the planner obeys
+      `declared_lane_floor` clamped [1 KiB, CHUNK_MIN]; en route: **423 Locked is a WAIT,
+      not a failure** (`ErrorKind::Busy`, uncharged/un-evicted) and beyond-lease resplit
+      drift confirms-in-full on a single-writer lane
+- [x] #45 — **CI throttled ladder 3/8/50/160 KB/s**: 99%+ of wire at every rung
+      (3070.5/8186/51081/162884 B/s achieved), byte-exact, overhead MEASURED
+      0.72% → 0.05%; wired into stress.yml (`IUM_THROTTLE_LADDER=1`)
+- [x] #46 — **research track, verified sources**: docs/07_Speed_Architecture.md
+      (RFC 8684, draft-ietf-quic-multipath-21, RFC 3449, RFC 6330, tus concatenation) +
+      ADR-012; honest bound: research REACHES the bearer sum and AGGREGATES bearers
+- [x] #47 — **resplit × tus lease race** (discovered by the #44 drill, filed with full
+      journal evidence, closed the same day via the full loop): the driver's never-consumed
+      epoch signal poisoned every post-resplit lease and the ResplitUnderneath arm
+      stranded live leases silently; fix = epoch consumed at lease time + identity guard
+      in the arm + driver reclaim-then-decide with `drive_pool_snapshot` evidence on
+      every non-clean exit; the drill is un-ignored and permanent — suite 159 → **160**
 
-DoD: the prober's decision is journaled and enforced; the tus lane converges at 3 KB/s;
-the ladder drill is green in stress.yml; every speed claim in this file cites a
-measurement. The old next tranche (Sprint-2 UX / WebDAV+Drive / OAuth / v0.1.0) follows M7.
+DoD: met and evidenced on each issue — the prober's decision is journaled and enforced;
+the tus lane converges at 3 KB/s (the #45 ladder proves 3 KB/s end-to-end at ≥99% of
+wire); the ladder drill is green in stress.yml; every speed claim in this file cites a
+measurement. The next tranche (Sprint-2 UX / WebDAV+Drive / OAuth / v0.1.0) is the
+owner's call.

@@ -11,7 +11,7 @@ crashes and reboots — with *honest* badges where physics says a protocol canno
 [![nightly](https://github.com/kahlanhamza/IUM/actions/workflows/nightly.yml/badge.svg)](https://github.com/kahlanhamza/IUM/actions/workflows/nightly.yml)
 [![stress](https://github.com/kahlanhamza/IUM/actions/workflows/stress.yml/badge.svg)](https://github.com/kahlanhamza/IUM/actions/workflows/stress.yml)
 ![rust](https://img.shields.io/badge/rust-stable%201.99-blue)
-![tests](https://img.shields.io/badge/tests-152%20core%20%2B%209%20UI-brightgreen)
+![tests](https://img.shields.io/badge/tests-160%20core%20%2B%209%20UI-brightgreen)
 ![platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
 </div>
@@ -32,6 +32,7 @@ the industry usually leaves implicit: **never claim what was not verified**.
 | **Verify-before-declare** | `verify` is a *required* trait method — compile-fail-pinned by a trybuild contract test. A job reaches Done only after the server confirms the assembled object. |
 | **Three real transports** | HTTP one-shot (streaming PUT), S3 multipart (hand-rolled SigV4, zero SDK), TUS 1.0.0 (byte-level resume with 409 realign). Each declares its capabilities; the UI renders honest badges from them. |
 | **Adaptive engine** | Dynamic chunk pool, slow-connection eviction voted on measured throughput, shrink-only adaptive resplit, per-error-class retry budgets — every path ends in Done or Failed, never in silence. |
+| **Built for KB/s links** | A link prober measures 1-vs-K streams at probe time and classifies the bottleneck (per-flow vs total bearer) to pick the fleet; the tus lane floor drops pieces to 64 KiB when the adapter declares it; an idle-progress timeout replaces the 600 s total-request wall that could never fit a legal piece on a 3 KB/s moment; a 423 Locked wait is a wait, not a failure. |
 | **Proven against reality** | Real-network impairment models (packet loss, RTT/jitter, mid-body RST), B/s-class uplink ladders, overnight long-haul legs with fresh-journal replay, resource-growth soak bounds, real video files through every adapter. |
 | **Real shell, really driven** | Tauri 2 + React desktop app exercised end-to-end on CI by a hand-rolled W3C WebDriver suite (WebKitGTK under xvfb): create → live progress → pause/resume → Done → per-chunk inspector → cancel commits nothing. |
 
@@ -67,7 +68,7 @@ the industry usually leaves implicit: **never claim what was not verified**.
 
 ```bash
 # Engine — builds anywhere with a Rust stable toolchain
-cargo test -p ium-core          # 152 tests: unit + wire + drills + contracts
+cargo test -p ium-core          # 160 tests: unit + wire + drills + contracts
 cargo clippy -p ium-core --all-targets -- -D warnings
 
 # Desktop shell
@@ -100,11 +101,11 @@ The badge is derived from the adapter's declared capabilities — never hard-cod
 
 | Lane | What runs | Where |
 |---|---|---|
-| Offline core | **152 tests** — unit, chunk-algebra fuzz, integration drills, supervisor, journal contracts (incl. compile-fail) | every push, 3 OS |
+| Offline core | **160 tests** — unit, chunk-algebra fuzz, integration drills, supervisor, journal contracts (incl. compile-fail) | every push, 3 OS |
 | Live wire | 23/23 S3 vs **SeaweedFS 4.51**, 23/23 vs **rclone 1.75.2**; 12/12 TUS vs **tusd 2.10.1**, 12/12 vs **@tus/server 2.4.7** | every push (Linux), 5 real server implementations |
 | Shell e2e | real WebDriver session through tauri-driver → WebKitGTK; both upload legs asserted against **server truth** (recorder record + HEAD), not UI promises | every push (ubuntu) |
 | Nightly | invariant fuzz at 400×, coverage artifact, **kill -9 drills** (S3 + TUS: resume with zero re-upload), >100 MiB end-to-end | scheduled |
-| Stress bench | real 308 MiB film S1–S5; impairment models `loss` / `rtt` / `reset`; B/s uniform ladders; long-haul with journal replay + RSS/journal bounds | dispatchable (`stress.yml`) |
+| Stress bench | real 308 MiB film S1–S5; impairment models `loss` / `rtt` / `reset`; B/s uniform ladders; the KB/s throttled ladder (3/8/50/160 KB/s through the real engine, ≥99% of wire, byte-exact); long-haul with journal replay + RSS/journal bounds | dispatchable (`stress.yml`) |
 
 Numbers the drills pin: kill -9 at 25% → resume moves exactly the missing bytes;
 16,391 journal events → ≈153 B/event linear, WAL checkpoints to 0, RSS +5.5 MiB;
@@ -174,16 +175,18 @@ checksum-verified. Report vulnerabilities via a private GitHub security advisory
 
 ## Status & roadmap
 
-Milestones **M0–M6 are complete** — including the M6 readiness probe generation
+Milestones **M0–M7 are complete** — M6 closed the readiness probe generation
 (real-network impairment · server diversity · long-horizon & resource honesty ·
-real-shell e2e), closed on CI run evidence. All CI lanes green.
-**Current: M7 — Speed architecture** (owner mandate, measured field profiles): a link
-prober that classifies the bottleneck at probe time and picks lane + fleet from
-measurement; the tus idle-progress timeout (the 600 s total wall is non-convergent on
-KB/s links); own-drift absorption in the realign dance; a lane-aware chunk floor; a
-permanent throttled-link ladder in CI; and a measured research track (multipath
-aggregation, FEC). After M7: Sprint-2 UX, more transports (WebDAV, Google Drive),
-account/OAuth layer, and release packaging toward **v0.1.0**.
+real-shell e2e); **M7 landed the speed architecture** on measured field profiles: the
+link prober (1-vs-K, per-flow vs bearer), the tus idle-progress timeout (the 600 s
+total wall is gone), own-drift absorption in the realign dance, the lane-aware chunk
+floor, the permanent KB/s throttled ladder, and a verified-sources research track
+(multipath aggregation per RFC 8684, UDP+FEC) — plus #47, a resplit × lease race the
+M7 drills themselves discovered, fixed via the full loop (RED → design note → three-
+layer fix → GREEN, `drive_pool_snapshot` evidence on every non-clean exit). All CI
+lanes green.
+**Next (owner decides the order)**: Sprint-2 UX, more transports (WebDAV, Google
+Drive), account/OAuth layer, and release packaging toward **v0.1.0**.
 
 ---
 
