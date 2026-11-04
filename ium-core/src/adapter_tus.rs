@@ -17,7 +17,10 @@
 //!   adapter absorbs the drift — HEAD, re-PATCH from the server offset, and
 //!   report `final_offset - lease.resume_from` so the journal converges to
 //!   server truth (the drifted bytes WERE server-acked, just never
-//!   journaled);
+//!   journaled). The dance is BOUNDED (#43): up to `MAX_REALIGN_ROUNDS`
+//!   absorption rounds per lease — on slow links a realign can die the same
+//!   death as the attempt that spawned it (the server kept OUR bytes), and
+//!   that is drift to absorb again, never a loud client bug;
 //! * `404` = unknown session → `SessionLost` (→ Reattach);
 //! * wire-fact delta (#33/#37): @tus/server answers an early-rejected PATCH
 //!   (unknown file, offset conflict) by writing the error status and
@@ -73,6 +76,13 @@ const TUS_CONTENT_TYPE: &str = "application/offset+octet-stream";
 /// response-side read timeout is the honest tripwire. A rate-scaled lease
 /// guard from #41's probe measurements remains the planned backstop.
 const TUS_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Bounded realign rounds per lease (issue #43): the dance absorbs own-drift
+/// (a killed PATCH's bytes landing on the server) up to this many times;
+/// beyond it the failure is `Transient` — a counted retry that re-queues
+/// the chunk from journal truth. Four rounds absorb every realistic
+/// slow-link death spiral while keeping a pathological server from spinning
+/// the dance forever.
+const MAX_REALIGN_ROUNDS: u32 = 4;
 /// `Upload-Offset` header → u64. Absent, empty, or malformed = no truth
 /// (never a silent 0 — an offset is a server acknowledgment).
 pub fn parse_upload_offset(header: Option<&str>) -> Result<u64, AdapterError> {
@@ -416,66 +426,47 @@ impl TransferAdapter for TusAdapter {
         }
 
         // Issue #30 wire honesty: snapshot before the first PATCH so the
-        // rejected attempt's flush can be reclassified exactly.
+        // rejected attempts' flush can be reclassified exactly.
         let first_attempt_from = progress.moved();
-        let sent = self
-            .patch(spec, &location, lease.resume_from, lease.end, progress)
-            .await;
-        let final_offset = match sent {
-            Ok(offset) => offset,
-            // 409 = the server is AHEAD of the journal: an in-flight PATCH
-            // was killed after the server acked but before the journal write.
-            // Absorb the drift: HEAD, re-PATCH from the server offset. The
-            // drifted bytes were server-acked — counting them in THIS call's
-            // confirm is honest and makes the journal converge to the truth.
-            Err(PatchFailure::Conflict) => {
-                // The server decided the 409 on the request HEAD and read
-                // none of the body; whatever this attempt flushed into the
-                // socket before the rejection surfaced crossed the wire and
-                // was persisted NOWHERE (server-verified: the offset never
-                // moves on a rejected PATCH). Its size is a scheduling race,
-                // not a protocol constant (issue #30) — so it is MEASURED
-                // waste, and the realign's bytes below stay honest movement.
-                let (_, server_offset) = self.head(&location).await?;
-                if server_offset < lease.resume_from {
-                    return Err(AdapterError::Unresumable(format!(
-                        "server offset {server_offset} behind journaled {} — the server lost confirmed bytes",
-                        lease.resume_from
-                    )));
+        // THE REALIGN DANCE (issues #10, #30, #43): a conflict means the
+        // server's offset is elsewhere — on a single-worker lease that is
+        // OUR OWN drift (a killed PATCH's body landed on the server after
+        // the socket died; tusd persists what arrived), or a plain 409
+        // rejection. Either way the server's offset is the truth: absorb,
+        // re-PATCH from it, and converge. BOUNDED at MAX_REALIGN_ROUNDS
+        // rounds per lease — beyond that the failure is Transient (a
+        // counted retry that re-queues the chunk from journal truth), and
+        // `Unknown` is RESERVED for the one shape that is genuinely not
+        // ours: a server offset beyond this chunk's end.
+        let mut from = lease.resume_from;
+        let mut realigns: u32 = 0;
+        let final_offset = loop {
+            match self.patch(spec, &location, from, lease.end, progress).await {
+                Ok(offset) => break offset,
+                Err(PatchFailure::Adapter(e)) => return Err(e),
+                Err(PatchFailure::Conflict) => {
+                    realigns += 1;
+                    if realigns > MAX_REALIGN_ROUNDS {
+                        return Err(AdapterError::Transient(format!(
+                            "tus realign dance exceeded {MAX_REALIGN_ROUNDS} rounds on this lease — re-queues from journal truth"
+                        )));
+                    }
+                    let (_, server_offset) = self.head(&location).await?;
+                    if server_offset < lease.resume_from {
+                        return Err(AdapterError::Unresumable(format!(
+                            "server offset {server_offset} behind journaled {} — the server lost confirmed bytes",
+                            lease.resume_from
+                        )));
+                    }
+                    if server_offset > lease.end {
+                        return Err(AdapterError::Unknown(format!(
+                            "server offset {server_offset} beyond this chunk's end {}",
+                            lease.end
+                        )));
+                    }
+                    from = server_offset;
                 }
-                if server_offset > lease.end {
-                    return Err(AdapterError::Unknown(format!(
-                        "server offset {server_offset} beyond this chunk's end {}",
-                        lease.end
-                    )));
-                }
-                // Exactly one realign attempt: another 409 here means the
-                // server moved under a single-worker lease — fail loudly.
-                let realigned = self
-                    .patch(spec, &location, server_offset, lease.end, progress)
-                    .await
-                    .map_err(|f| match f {
-                        PatchFailure::Conflict => AdapterError::Unknown(
-                            "409 again after realign — server moved under the lease".into(),
-                        ),
-                        PatchFailure::Adapter(e) => e,
-                    })?;
-                // THE WASTE RECKONING — settled arithmetic, not an instant
-                // snapshot (issue #37): the rejected attempt's last chunks
-                // can still land in `moved()` after `patch()` returns (the
-                // body is counted on hyper's connection task, and a store
-                // can drain after the caller resumes — an 8 KiB chunk
-                // flipped CI's exact assert into a rare flake). Classify
-                // AFTER the realign settles: everything this call pushed
-                // BEYOND the re-PATCH's server-acked tail is, by
-                // construction, the rejected attempt's flush — persisted
-                // nowhere, exactly waste, whenever its count landed.
-                let tail = realigned - server_offset;
-                let pushed = progress.moved() - first_attempt_from;
-                progress.waste(pushed.saturating_sub(tail));
-                realigned
             }
-            Err(PatchFailure::Adapter(e)) => return Err(e),
         };
 
         if final_offset < lease.resume_from {
@@ -484,6 +475,21 @@ impl TransferAdapter for TusAdapter {
                 lease.resume_from
             )));
         }
+        // THE WASTE RECKONING — settled arithmetic, not an instant snapshot
+        // (issue #37): the killed attempts' last chunks can still land in
+        // `moved()` after `patch()` returns (the body is counted on hyper's
+        // connection task — an 8 KiB chunk once flipped CI's exact assert).
+        // Reckon ONCE, after the dance settles: during this call the
+        // server's durable truth moved from `lease.resume_from` to
+        // `final_offset`; every byte this call pushed BEYOND that is, by
+        // construction, flushed-nowhere (a rejected attempt's socket flush
+        // or a dead attempt's never-consumed tail) — exactly waste,
+        // whenever its count landed. Own-drift bytes (server-persisted
+        // slices of killed attempts) sit INSIDE `final_offset -
+        // resume_from`: they are CONFIRMED, never double-counted as waste
+        // (issue #43's correction to the one-shot-realign arithmetic).
+        let pushed = progress.moved() - first_attempt_from;
+        progress.waste(pushed.saturating_sub(final_offset - lease.resume_from));
         Ok(ChunkConfirm {
             idx: lease.idx,
             bytes_confirmed: final_offset - lease.resume_from,
