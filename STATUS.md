@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-04** · Phase: **M6 COMPLETE-PROBE LANES GREEN — run #75 is the first ALL-GREEN CI since #61 (8/8 jobs: fmt, core ×3 OS, ium-app ×3 OS, app-e2e). The red streak #62–#74 is fully accounted: every failure audited from raw logs, root-caused, fixed by its own commit (#63/#64 core lanes; #65–#74 the app-e2e leg's seam-by-seam shakedown ending in the recorder's record-at-boot, `dd046a7`), and the final fix was verified locally (committed-tree gate + wire-level smoke: boot-record exists, HEAD 404 pre-PUT, aborted-PUT leaves zeros) before ONE push. #35 (real-shell WebDriver e2e, both legs proven on CI) and #37 (CI debt ledger) CLOSED with evidence comments. All issues #1–#40 closed; no open CI debt.**
+> Last updated: **2026-11-04** · Phase: **M7 STARTED — SPEED ARCHITECTURE (owner mandate: "the purpose was speed and time … there is always a solution and paper researches").** Filed milestone 6 + issues #41–#46 from the owner's measured field profiles: the SAME tunnel measured ~3 KB/s up (NapsternetV counter moment) and 1.29 Mbps up = 161 KB/s (Google speed test) within one hour — a 54× swing — with 27.1 Mbps down (21:1 asymmetry). M6 COMPLETE before that: run #75 the first ALL-GREEN CI since #61 (8/8 jobs), red streak #62–#74 fully accounted and fixed, #35/#37 closed with evidence, all issues #1–#40 closed. M6 milestone (id 5) formally closed 2026-11-04.
 
 ---
 
@@ -288,8 +288,28 @@ executed at least once.
     through create → progress → pause/resume → Done → cancel/no-object~~ ✅ (2026-11-04,
     BOTH legs green on CI run #75 through the real shell; issue closed with the full
     seam-shakedown ledger; M6 COMPLETE — see docs/04).
-31. **Next tranche (owner decides the order)** — the readiness probes are done; the four
-    candidate directions from the M6 verdict, each filed as its own issue when started:
+31. **M7 — SPEED ARCHITECTURE (owner mandate 2026-11-04, filed as milestone 6 + #41–#46; takes
+    priority over everything below)** — the owner's field measurements turned into the next
+    milestone: (a) same tunnel, one hour apart: ~3 KB/s uplink moment vs 1.29 Mbps up =
+    161 KB/s (54× swing) — the engine must MEASURE the link, not assume it; (b) 27.1/1.29 =
+    21:1 asymmetry is why an upload manager exists at all. Analysis pass over the real engine
+    code found the speed-blocking seams: tus's 600 s TOTAL request timeout is structurally
+    non-convergent below ~8.7 KB/s (no legal piece ≥ 5 MiB fits one attempt; the realign's
+    second Conflict misclassifies our own timed-out bytes as Unknown→Fail terminal), S3's 1 h
+    timeout survives single-worker down to ~1.5 KB/s but parallel parts starve below 1.5 KB/s
+    each (atomic parts confirm nothing), and nothing in the engine measures per-flow vs
+    total-bearer caps — the fork that decides whether parallelism multiplies anything. Issues:
+    **#41** link prober (single vs K-stream aggregate → classify + pick lane/fleet, journaled
+    ADR-011-style) · **#42** tus idle-progress timeout (kill the 600 s wall; RED at 2 KB/s) ·
+    **#43** realign absorbs own-drift (bounded dance, never Unknown→Fail for our bytes) ·
+    **#44** lane-aware chunk floor (tus legally < 5 MiB — 64 KiB pieces confirm in ~30 s at
+    the owner's bad-moment rate) · **#45** CI throttled ladder 3/8/50/160 KB/s (the tail was
+    found in the field because no drill went below the wall — never again) · **#46** research
+    track with measured spikes: multipath aggregation (MPTCP RFC 8684 / part→path scheduling)
+    + FASP-style UDP+FEC for the lossy-tunnel regime — honest bounds: nothing beats the sum
+    of the summoned bearers; research REACHES the bound and AGGREGATES bearers.
+32. **Next tranche (after M7; owner decides the order)** — the four candidate directions from
+    the M6 verdict, each filed as its own issue when started:
     a. **Sprint-2 UX** — the shell is proven end-to-end but the UI is Sprint-1 dumb
        components: drag-and-drop sources, notifications, settings persistence, queue
        management, speed-cap control, per-job detail polish, installer assets.
@@ -301,11 +321,11 @@ executed at least once.
        adapter trait's endpoint/token seam).
     d. **Release engineering toward v0.1.0** — tauri bundle signed installers (3 OS),
        auto-update channel decision, CHANGELOG 0.1.0 cut per the semver-0.x policy.
-32. **Kaggle cloud bench** (scaffolding committed: `scripts/kaggle/`, `scripts/kaggle_push.sh`,
+33. **Kaggle cloud bench** (scaffolding committed: `scripts/kaggle/`, `scripts/kaggle_push.sh`,
     token in gitignored `.secrets/kaggle_token`): move the owner-mandated intensive runs
     off the sandbox — the 17-h overnight longhaul leg and expanded fuzz rounds run there
     as notebook/kernel jobs; results land as artifacts + a session-log row.
-33. **Standing hygiene**: rotate the GitHub PAT (pasted into chat 6×, per §10) and the
+34. **Standing hygiene**: rotate the GitHub PAT (pasted into chat 6×, per §10) and the
     Kaggle key at the next convenient break; keep `.secrets/` restore discipline on recycle.
 
 ## 5. Defect audit trail
@@ -447,6 +467,7 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-04 | **Run #72 → #35 harness fix (row click).** #40's fix proven: leg A fully green through the real shell (recorder full 24 MiB; running → live progress → pause → resume → Done), then `element not interactable` clicking the row for the inspector — the jobs table is wider than the window (7 cols + 3 buttons), a full-width `<tr>` cannot be scrolled into view horizontally (geckodriver#1294 class); harness-only fix: click the row's first CELL (bubbles to the `<tr>` onClick — same user path). Evidence + mechanism on #35 | e2e compiles, fmt + clippy clean; closes when the lane goes green | this commit |
 | 2026-11-04 | **RED STREAK ENDED — run #75 ALL GREEN (8/8 jobs), the first since #61; #35 + #37 closed on the owner's raw-log evidence.** The owner pasted run #74's job log directly; it showed the deepest e2e failure mode yet: EVERY assert before it passed (row B found by file, `running`, cancel clicked, `Canceled` badge) and the test died at the last server-truth read — `recorder-b.json never appeared` (10 s poll). Root cause: a canceled PUT dies mid-body, the recorder's handler takes the read error, and the OLD recorder wrote its record file only after a completed request — a perfect "holds nothing" ending was indistinguishable from a missing server. Fix `dd046a7`: the record file is a server-truth surface and now exists from BOOT (all-zero record IS the truth "served nothing yet"). Verified locally before the single push: committed-tree gate GREEN (152/152 core, fmt, clippy `-D warnings`, vitest 9/9) + a wire-level smoke replaying the exact #74 scenario (boot-record exists + HEAD 404 pre-PUT + RST-mid-body leaves zeros + completed PUT still updates the record). One push → run 41726278945 GREEN; #35 and #37 closed with full ledger comments (every red #62–#74 mapped to its fix). Kaggle token restored to `.secrets/kaggle_token` (600, uncommitted) per the standing security note | run 41726278945 8/8 success; issues #35/#37 closed; row authored locally (unpushed by design — no CI run spent on docs) | `dd046a7` |
 | 2026-11-04 | **Housekeeping tranche after the green run — README to product standard, PR #38 resolved, roadmap truth.** (1) README.md rewritten from the stale Sprint-0 text ("45 tests", shell "parked") to a scannable product README: badges (ci/nightly/stress), highlights table, architecture diagram, invariants, quick start, transport/honesty table, test-lane matrix with the drills' pinned numbers, repo map, doc index, the loop as Contributing, security, status — every claim traced to the verified record (152 core tests recounted per-suite this session; 5 real server implementations; kill-9 zero-re-upload; soak ≈153 B/event). (2) PR #38 (`e2e-fix` → main, the async-commands variant of the #39 fix) CLOSED as superseded, not merged: main's `940ddc9` fixes the same abort at the root (`Supervisor::with_handle`, every spawn site, +2 regression tests) and run #75 proves the shell end-to-end; rationale comment posted on the PR, branch deleted. (3) docs/04 M6 checkboxes ticked + verdict paragraph (probes closed; #36/#39/#40 found-and-closed chain; next tranche = owner's call). (4) STATUS backlog §4 rewritten: #35 ✅, items 31–33 = the next-steps plan (Sprint-2 UX / WebDAV+Drive transports / OAuth+keyring / v0.1.0 packaging / Kaggle cloud bench for the 17-h longhaul + fuzz / token rotation). (5) Kaggle scaffolding + session evidence scripts committed (secret-scanned first: no token material in any tracked file). Sandbox recycled again mid-task (7th): `.secrets/` + `.toolchain/` wiped and restored per §0/§10; `.gate-target` cleared for disk headroom | gate on committed tree; push = one CI run on docs-only + untracked-script changes | this commit |
+| 2026-11-04 | **M7 filed — the speed architecture (owner mandate: "the purpose was speed and time … physics are not always right, there is always a solution and paper researches").** Two owner field measurements of the SAME tunnel within one hour — NapsternetV uplink counter ~3 KB/s moment, Google speed test 1.29 Mbps up / 27.1 Mbps down / 50 ms (a 54× swing, 21:1 asymmetry) — are the milestone's motivating evidence. Code-level analysis pass (chunk/eviction/retry/manager/tus/s3/state read in full) established the honest seams: tus 600 s total timeout = structural non-convergence below ~8.7 KB/s; realign's second Conflict = own-drift misclassified as Unknown→Fail terminal; S3 atomic parts confirm nothing when per-part wire time exceeds the 1 h timeout (fleet ≥ 3 at 3 KB/s dies); nothing measures per-flow vs total-bearer — the fork that decides if parallelism multiplies. Filed milestone 6 + **#41 prober / #42 idle-timeout / #43 own-drift absorption / #44 lane floor / #45 throttled ladder drill / #46 multipath+FEC research**; M6 milestone (id 5) closed. Pre-flight verified: tree clean at `09ecb4a`, PR #38 supersession comment on record (the user's "check the PR" — it is closed-unmerged BY DESIGN, superseded by `940ddc9`/#39), 0 open issues | issues #41–#46 filed with RED-first acceptance criteria; math re-derived with code at 1.29 Mbps: 2 GB ≈ 4.1 h through the tunnel TODAY (the 8-day figure belonged to the 3 KB/s moment only) | this commit |
 
 ## 10. Security
 

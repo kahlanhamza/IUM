@@ -176,9 +176,14 @@ checksum-verified. Report vulnerabilities via a private GitHub security advisory
 
 Milestones **M0–M6 are complete** — including the M6 readiness probe generation
 (real-network impairment · server diversity · long-horizon & resource honesty ·
-real-shell e2e), closed on CI run evidence. All CI lanes green. 
-Next tranche (owner decision pending): more transports (WebDAV, Google Drive),
-account/OAuth layer, Sprint-2 UX, and release packaging toward **v0.1.0**.
+real-shell e2e), closed on CI run evidence. All CI lanes green.
+**Current: M7 — Speed architecture** (owner mandate, measured field profiles): a link
+prober that classifies the bottleneck at probe time and picks lane + fleet from
+measurement; the tus idle-progress timeout (the 600 s total wall is non-convergent on
+KB/s links); own-drift absorption in the realign dance; a lane-aware chunk floor; a
+permanent throttled-link ladder in CI; and a measured research track (multipath
+aggregation, FEC). After M7: Sprint-2 UX, more transports (WebDAV, Google Drive),
+account/OAuth layer, and release packaging toward **v0.1.0**.
 
 ---
 

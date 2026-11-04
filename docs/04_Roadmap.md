@@ -82,3 +82,34 @@ found (#36 Content-Length, #39 main-thread spawn abort, #40 missing ACL capabili
 filed and closed through the register discipline; the red streak #62–#74 ended with run
 #75 all-green (8/8 jobs). Next tranche (transports / OAuth / Sprint-2 UX / v0.1.0
 packaging) is the owner's call.
+
+## M7 — Speed architecture: measured profiles → the IDM brain — 🚧 **CURRENT** (owner mandate 2026-11-04; milestone 6, issues #41–#46)
+
+M6 proved the engine's RELIABILITY promises. The owner's field measurements define the SPEED
+promise: the SAME tunnel measured ~3 KB/s uplink (NapsternetV counter moment) and **1.29 Mbps
+up = 161 KB/s** (Google speed test, 27.1 Mbps down / 50 ms) within one hour — a 54× swing —
+so the engine must **measure the link and choose lane + fleet from measurement**, and never
+pay a wall that kills healthy flows. The analysis pass also fixed the honest vocabulary:
+no algorithm beats the sum of the summoned bearers; speed engineering reaches the bound
+(saturation, zero waste, no false walls) and aggregates bearers (parallel flows / multipath).
+
+- [ ] #41 — **link prober at probe time**: single-stream vs K-stream aggregate (~20 s) →
+      classify per-flow cap / total-bearer cap / fat pipe; lane + fleet decision journaled
+      (ADR-011 channel extension) and enforced every drive round
+- [ ] #42 — **tus total→idle request timeout**: the 600 s wall is structurally
+      non-convergent below ~8.7 KB/s (no legal piece ≥ 5 MiB fits one attempt); an
+      idle-progress timeout owns SILENCE, the supervision layer owns DURATION
+- [ ] #43 — **tus realign absorbs own-drift**: a timed-out PATCH's landed bytes are drift
+      to absorb (bounded dance), never `Unknown→Fail` — misclassification made slow links
+      terminal
+- [ ] #44 — **lane-aware chunk floor via ADR-011**: tus has no protocol minimum; 64 KiB
+      pieces confirm in ~30 s at the owner's bad-moment rate (S3 keeps its 5 MiB rule)
+- [ ] #45 — **CI throttled ladder 3/8/50/160 KB/s**: the KB/s tail was discovered by the
+      owner in the field because no drill went below the wall — pinned forever after
+- [ ] #46 — **research track, measured spikes**: multipath aggregation (MPTCP RFC 8684 /
+      part→path scheduling — S3 multipart maps 1:1 onto multiple paths) + FASP-style
+      UDP+FEC for the lossy-tunnel regime; verdicts recorded, including "not worth it"
+
+DoD: the prober's decision is journaled and enforced; the tus lane converges at 3 KB/s;
+the ladder drill is green in stress.yml; every speed claim in this file cites a
+measurement. The old next tranche (Sprint-2 UX / WebDAV+Drive / OAuth / v0.1.0) follows M7.
