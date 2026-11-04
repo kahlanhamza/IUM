@@ -100,3 +100,22 @@ offline RED (2 concurrent calls against a declared-1 session) and the honest
 live finding that tusd's per-upload lock happens to serialize concurrent
 ascending chunks — server mercy, not protocol honesty; the engine obeys the
 declaration regardless of which compliant server it meets.
+
+## ADR-012 — Measure the link, declare the profile, plan from the journal ✅ accepted (issue #41, 2026-11-04)
+
+The engine never guesses the link. The prober (`prober.rs`, #41) measures
+the 1-vs-K question with the job's OWN bytes: a single-stream canary (S1),
+then K independent tus sessions concurrently (SK — the session is
+sequential, the link is what is measured; each stream carries 1/K so both
+phases cost the same wall time). Classification: SK ≥ 2×S1 → PerFlowCap
+(fleet = K); SK < 1.5×S1 → BearerCap (fleet = 1); between → Mixed (raise
+cautiously). The recommendation (piece = 20 s of measured wire, clamped to
+the lane floor #44 and the engine max) is DATA: the host journals it as a
+`link_profile` event (ADR-002 — journaled, never re-probed mid-flight), and
+the planner consumes journaled profiles. The prober's canary sizing is
+rate-adaptive (no fixed 8 MiB probe — at 3 KB/s that is 45 minutes). Fleet
+and piece consumers land with the M8 scheduler (docs/07 §3); what ships in
+M7 is the measurement, the classification, the drills, and the journal
+shape. Evidence: prober_drills.rs — per-flow caps (8 KiB/s per connection)
+classify PerFlowCap with SK/S1 = 4.0×; a shared bearer (8 KiB/s TOTAL)
+classifies BearerCap with SK/S1 = 1.0×.
