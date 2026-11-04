@@ -87,6 +87,7 @@ impl TransferAdapter for LoneMock {
         Ok(ProbeReport {
             resumable: true,
             session_token: Some("tok-lone".into()),
+            concatenation: false,
             max_chunk_bytes: None,
             min_chunk_bytes: None,
             max_parallel: None,

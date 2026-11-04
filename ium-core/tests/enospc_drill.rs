@@ -134,6 +134,7 @@ impl TransferAdapter for DrillAdapter {
             min_chunk_bytes: None,
             max_parallel: None,
             session_token: None,
+            concatenation: false,
         })
     }
 

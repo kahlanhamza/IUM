@@ -286,6 +286,12 @@ impl JobManager {
                     "endpoint": spec.endpoint,
                     "chunks": pool.chunks().len(),
                     "badge": cap.badge(),
+                    // Issue #50: the REQUESTED concurrency, journaled — the
+                    // create-time plan is CHUNK_MIN-floored (a 768 KiB job
+                    // plans one 5 MiB-shaped chunk), so the probe's fleet
+                    // seed cannot read the intent off the pool. Pre-#50
+                    // journals lack the key and fall back to the pool.
+                    "max_conns": workers,
                 }),
             )
             .map_err(EngineError::from)?;
@@ -551,10 +557,33 @@ impl JobManager {
             if record.state == JobState::Created {
                 record.state = self.transition(job_id, JobState::Probing).await?;
             }
-            let probe = adapter
-                .probe(&spec)
-                .await
-                .map_err(|e| EngineError::Adapter(e.to_string()))?;
+            let probe = {
+                // Issue #50: the host offers its journal-derived seed — the
+                // REQUESTED concurrency (journaled at creation), falling back
+                // to the planned chunk count for pre-#50 journals, clamped to
+                // the engine ceiling. The create-time plan is
+                // CHUNK_MIN-floored, so the pool alone under-seeds small
+                // files. The adapter still OBEYS THE SERVER first (ADR-011):
+                // no advertised extension → the classic lane, byte-for-byte.
+                let events = self.j().events_for(job_id).map_err(EngineError::from)?;
+                let asked = events
+                    .iter()
+                    .rev()
+                    .find(|(_, k, _)| k == "job_created")
+                    .and_then(|(_, _, p)| serde_json::from_str::<serde_json::Value>(p).ok())
+                    .and_then(|v| v.get("max_conns").and_then(|c| c.as_u64()))
+                    .map(|c| c as u32);
+                let planned = self
+                    .j()
+                    .load_chunks(job_id)
+                    .map_err(EngineError::from)?
+                    .len() as u32;
+                let seed = asked.unwrap_or(planned).clamp(1, MAX_WORKERS as u32);
+                adapter
+                    .probe_fleet(&spec, seed)
+                    .await
+                    .map_err(|e| EngineError::Adapter(e.to_string()))?
+            };
             self.j()
                 .append_event(
                     job_id,
@@ -570,6 +599,10 @@ impl JobManager {
                         "max_parallel": probe.max_parallel,
                         // Issue #44: the lane floor rides the same channel.
                         "min_chunk_bytes": probe.min_chunk_bytes,
+                        // Issue #50: the OPTIONS-discovered capability,
+                        // journaled so resume re-derives without re-probing
+                        // (ADR-002). Absent in pre-#50 journals = false.
+                        "concatenation": probe.concatenation,
                     }),
                 )
                 .map_err(EngineError::from)?;
@@ -834,6 +867,102 @@ impl JobManager {
             .and_then(|(_, _, payload)| serde_json::from_str::<serde_json::Value>(&payload).ok())
             .and_then(|v| v.get("recommended_fleet").cloned())
             .and_then(|v| v.as_u64().map(|n| n as u32))
+    }
+
+    /// Issue #50: run the adapter's finalize EXACTLY once per job —
+    /// journal-before-execute (`concat_final` intent BEFORE the call, the
+    /// `done` event with the produced URL AFTER; ADR-002). A journaled
+    /// `done` makes every later call a no-op AND restores the final URL
+    /// into a fresh process's adapter (a crash between `done` and the
+    /// re-journaled probe event otherwise leaves the adapter blind to a
+    /// materialized final — the journal is the truth, ADR-002). Classic
+    /// lanes journal NOTHING: their finalize is a pure in-memory no-op.
+    async fn concat_finalize_once(
+        &self,
+        job_id: &str,
+        spec: &JobSpec,
+        adapter: &dyn TransferAdapter,
+    ) -> Result<()> {
+        let events = self.j().events_for(job_id).map_err(EngineError::from)?;
+        let last_probe = events
+            .iter()
+            .rev()
+            .find(|(_, k, _)| k == "probe")
+            .and_then(|(_, _, p)| serde_json::from_str::<serde_json::Value>(p).ok());
+        // Concat topology = the journaled token is the JSON shape.
+        let token_is_json = last_probe
+            .as_ref()
+            .and_then(|v| v.get("session_token").and_then(|t| t.as_str()))
+            .map(|t| t.starts_with('{'))
+            .unwrap_or(false);
+        let last = events
+            .iter()
+            .rev()
+            .find(|(_, k, _)| k == "concat_final")
+            .and_then(|(_, _, p)| serde_json::from_str::<serde_json::Value>(p).ok());
+        let done_url = last
+            .as_ref()
+            .filter(|v| v.get("state").and_then(|s| s.as_str()) == Some("done"))
+            .and_then(|v| {
+                v.get("final_url")
+                    .and_then(|u| u.as_str())
+                    .map(String::from)
+            });
+        if token_is_json {
+            if let Some(url) = done_url {
+                // Restore the complete session (final URL included) — the
+                // crash-window repair, journaled truth over process memory.
+                if let Some(tok) = last_probe
+                    .as_ref()
+                    .and_then(|v| v.get("session_token").and_then(|t| t.as_str()))
+                {
+                    if let Ok(mut t) = serde_json::from_str::<serde_json::Value>(tok) {
+                        t["final"] = serde_json::json!(url);
+                        adapter
+                            .reattach(&spec.endpoint, &t.to_string())
+                            .await
+                            .map_err(|e| EngineError::Adapter(e.to_string()))?;
+                    }
+                }
+                return Ok(());
+            }
+            self.j()
+                .append_event(
+                    job_id,
+                    "concat_final",
+                    &serde_json::json!({ "state": "intent" }),
+                )
+                .map_err(EngineError::from)?;
+        }
+        // Classic lanes (and only they) answer None — no journal noise.
+        let url = adapter
+            .finalize(spec)
+            .await
+            .map_err(|e| EngineError::Adapter(e.to_string()))?;
+        if let (true, Some(url)) = (token_is_json, url) {
+            self.j()
+                .append_event(
+                    job_id,
+                    "concat_final",
+                    &serde_json::json!({ "state": "done", "final_url": url }),
+                )
+                .map_err(EngineError::from)?;
+            // Re-journal session truth (the repair path's pattern): the
+            // newest probe event carries the final URL, so a resumed
+            // process's reattach restores the complete concat session.
+            if let Some(mut v) = last_probe {
+                if let Some(tok) = v.get("session_token").and_then(|t| t.as_str()) {
+                    if let Ok(mut t) = serde_json::from_str::<serde_json::Value>(tok) {
+                        t["final"] = serde_json::json!(url);
+                        v["session_token"] = serde_json::json!(t.to_string());
+                        self.j()
+                            .append_event(job_id, "probe", &v)
+                            .map_err(EngineError::from)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Consume the LAST journaled fleet decision (issue #49): a fresh
@@ -1873,6 +2002,10 @@ impl JobManager {
             // No-op without a journaled probe token (one-shot endpoints,
             // 0-byte S3 sources).
             self.reattach_from_journal(job_id, spec, adapter.as_ref(), "finishing_entry")
+                .await?;
+            // Issue #50: materialize the concatenation final BEFORE verify
+            // gates on it — the final URL only exists once finalize ran.
+            self.concat_finalize_once(job_id, spec, adapter.as_ref())
                 .await?;
             let verify = adapter
                 .verify(spec)

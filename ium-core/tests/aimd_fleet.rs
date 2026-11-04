@@ -210,6 +210,7 @@ impl TransferAdapter for AimdAdapter {
             max_parallel: None,
             min_chunk_bytes: None,
             session_token: Some("aimd-session".into()),
+            concatenation: false,
         })
     }
     async fn upload_chunk(

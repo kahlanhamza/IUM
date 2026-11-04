@@ -31,22 +31,40 @@
 //!   alone: after a PATCH transport failure it HEADs the session and lets
 //!   the SERVER's answer classify — `404/410` → `SessionLost` (→ Reattach),
 //!   offset moved past the attempt → the `Conflict` realign dance (the 409
-//!   it never saw), otherwise → `Transient` (retries stay counted).
+//!   it never saw), otherwise → `Transient` (retries stay counted);
 //! * verify is a **read-only** HEAD (`offset == length == source_size`) —
 //!   TUS needs no commit gate (contrast ADR-010's S3 finalize-if-needed);
 //! * tusd v2.10.1 offers no `checksum` extension — not used (verify is
 //!   offset-based; per-request checksums are a future negotiation).
 //!
-//! Sessions are keyed by `spec.endpoint` (the creation URL), journaled via
-//! the probe event (ADR-002); `restore_session` is the reattach path —
-//! identical shape to S3. The empty `[(0, 0)]` chunk (issue #5) confirms via
-//! HEAD instead of a pointless empty PATCH — still a real server round-trip.
+//! **The concatenation lane (issue #50, M8 rung 3).** tusd advertises
+//! `concatenation` in `OPTIONS` (rehearsed live, vectors pinned on #50 and
+//! asserted by `tests/tus_concat.rs`): partial creation
+//! (`Upload-Concat: partial`) ×N, N concurrent PATCHes on independent
+//! sessions, then ONE final POST (`Upload-Concat: final;<u1> <u2> …`) the
+//! server materializes eagerly. Wire facts that shape the code:
+//! * the final REQUIRES every partial complete (`400
+//!   ERR_UPLOAD_NOT_FINISHED` otherwise) — finalize runs only at the
+//!   all-Confirmed boundary;
+//! * the final is IMMUTABLE (`403 ERR_MODIFY_FINAL`) and a re-POST creates
+//!   a SECOND final — the journaled final URL is never re-POSTed;
+//! * verify gates on the FINAL URL (`offset == length == source_size`).
+//!
+//! Sessions are keyed by `spec.endpoint`, journaled via the probe event
+//! (ADR-002); `restore_session` is the reattach path — identical shape to
+//! S3. The token carries the TOPOLOGY: a plain URL is the classic
+//! single-session lane; a JSON blob (`{"concat":true,"partials":[…],
+//! "final":…}`) is the concatenation lane — `parse_session_token` is the
+//! dispatch, so old journals (plain URLs) re-derive byte-identically. The
+//! empty `[(0, 0)]` chunk (issue #5) confirms via HEAD instead of a
+//! pointless empty PATCH — still a real server round-trip (classic lane).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::adapter::{
@@ -83,6 +101,7 @@ const TUS_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// slow-link death spiral while keeping a pathological server from spinning
 /// the dance forever.
 const MAX_REALIGN_ROUNDS: u32 = 4;
+
 /// `Upload-Offset` header → u64. Absent, empty, or malformed = no truth
 /// (never a silent 0 — an offset is a server acknowledgment).
 pub fn parse_upload_offset(header: Option<&str>) -> Result<u64, AdapterError> {
@@ -123,11 +142,91 @@ pub fn resolve_location(base: &str, location: &str) -> String {
     }
 }
 
+/// The journaled session TOPOLOGY (issue #50): what the probe event's
+/// `session_token` actually describes. A plain URL is the classic
+/// single-session lane (every pre-#50 journal); the JSON shape is the
+/// concatenation lane. Parsing never fails: anything unrecognized stays a
+/// classic URL — a token is server truth, never discarded.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionToken {
+    /// One sequential-offset session (the pre-#50 shape).
+    Classic(String),
+    /// N partial sessions + the materialized final URL once finalize ran.
+    Concat {
+        /// The partial upload URLs, in final-list order (fact 5).
+        partials: Vec<String>,
+        /// The final upload's URL — `None` until finalize materializes it.
+        final_url: Option<String>,
+    },
+}
+
+/// Encode a concat session as the journaled JSON token.
+pub fn encode_concat_token(partials: &[String], final_url: Option<&str>) -> String {
+    serde_json::json!({
+        "concat": true,
+        "partials": partials,
+        "final": final_url,
+    })
+    .to_string()
+}
+
+/// Parse a journaled session token — plain URL = classic, JSON = concat.
+/// Malformed JSON falls back to classic: the token is server truth.
+pub fn parse_session_token(raw: &str) -> SessionToken {
+    if !raw.starts_with('{') {
+        return SessionToken::Classic(raw.to_string());
+    }
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(v) if v.get("concat").and_then(|c| c.as_bool()) == Some(true) => {
+            let partials = v
+                .get("partials")
+                .and_then(|p| p.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|u| u.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if partials.is_empty() {
+                return SessionToken::Classic(raw.to_string());
+            }
+            SessionToken::Concat {
+                partials,
+                final_url: v.get("final").and_then(|f| f.as_str()).map(String::from),
+            }
+        }
+        _ => SessionToken::Classic(raw.to_string()),
+    }
+}
+
+/// The byte-range partition behind the lane (issue #50): partial *i* owns
+/// `[i·L, min((i+1)·L, total))`, `L = ceil(total/n)` — a pure tiling with
+/// no gaps and no overlaps. Chunks (planned or resplit) route their
+/// intersection with each range to that partial's session; a chunk
+/// spanning a boundary is two segments on two sessions, confirmed once.
+pub fn concat_partition(total: u64, n: u32) -> Vec<(u64, u64)> {
+    let n = n.max(1) as u64;
+    let piece = total.div_ceil(n);
+    (0..n)
+        .map(|i| {
+            let start = (i * piece).min(total);
+            let end = ((i + 1) * piece).min(total);
+            (start, end)
+        })
+        .collect()
+}
+
 /// TUS 1.0.0 client. No credentials by design (tusd-style servers); auth
 /// headers are a future negotiation when a real deployment needs them.
 pub struct TusAdapter {
     client: reqwest::Client,
-    sessions: Mutex<HashMap<String, String>>,
+    sessions: Mutex<HashMap<String, SessionToken>>,
+    /// Per-partial serialization (issue #50): a partial session is ONE
+    /// sequential-offset resource — two leased chunks routed to the same
+    /// partial (after a resplit) must not race its offsets. Different
+    /// partials run concurrently: the SESSION stays sequential, the LANE
+    /// is parallel. Lazily sized per endpoint.
+    partial_locks: Mutex<HashMap<String, Vec<std::sync::Arc<AsyncMutex<()>>>>>,
 }
 
 impl TusAdapter {
@@ -155,21 +254,177 @@ impl TusAdapter {
                 .build()
                 .expect("reqwest client builds"),
             sessions: Mutex::new(HashMap::new()),
+            partial_locks: Mutex::new(HashMap::new()),
         }
     }
 
-    /// The upload URL for a job (the journaled probe event's session token).
+    /// The upload URL for a job — the journaled probe event's session token,
+    /// ENCODED (classic = the plain URL, concat = the JSON shape; the
+    /// journal and this map carry the same string).
     pub fn session_for(&self, endpoint: &str) -> Option<String> {
-        self.sessions.lock().unwrap().get(endpoint).cloned()
+        let t = self.sessions.lock().unwrap().get(endpoint).cloned()?;
+        Some(match t {
+            SessionToken::Classic(url) => url,
+            SessionToken::Concat {
+                partials,
+                final_url,
+            } => encode_concat_token(&partials, final_url.as_deref()),
+        })
     }
 
     /// Reattach a fresh adapter instance to an existing upload (the host
-    /// replays the journaled probe event — ADR-002).
+    /// replays the journaled probe event — ADR-002). Both topologies parse.
     pub fn restore_session(&self, endpoint: &str, location: String) {
         self.sessions
             .lock()
             .unwrap()
-            .insert(endpoint.to_string(), location);
+            .insert(endpoint.to_string(), parse_session_token(&location));
+    }
+
+    /// The per-partial lock vector for an endpoint, grown lazily to `n`.
+    fn locks_for(&self, endpoint: &str, n: usize) -> Vec<std::sync::Arc<AsyncMutex<()>>> {
+        let mut map = self.partial_locks.lock().unwrap();
+        let v = map.entry(endpoint.to_string()).or_default();
+        while v.len() < n {
+            v.push(std::sync::Arc::new(AsyncMutex::new(())));
+        }
+        v.clone()
+    }
+
+    /// OPTIONS discovery (issue #50): does the server ADVERTISE the
+    /// concatenation extension? One request per probe; journaled in the
+    /// probe event, re-derived from the journal on resume — never re-probed
+    /// mid-flight (ADR-002). FAILURE IS NOT FATAL: any OPTIONS error or
+    /// unexpected status means "no advertisement" — the classic lane
+    /// proceeds byte-for-byte as pre-#50 (a server that never implemented
+    /// OPTIONS, or a momentary hiccup, must not kill a job that creation
+    /// can still serve; the immediately-following creation POST surfaces
+    /// any REAL server failure on its own).
+    async fn discover_concat(&self, endpoint: &str) -> Result<bool, AdapterError> {
+        let resp = match self
+            .client
+            .request(reqwest::Method::OPTIONS, endpoint)
+            .header("Tus-Resumable", TUS_VERSION)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => return Ok(false),
+        };
+        Ok(matches!(resp.status().as_u16(), 200 | 204)
+            && resp
+                .headers()
+                .get("tus-extension")
+                .and_then(|v| v.to_str().ok())
+                .map(|ext| {
+                    ext.split(',')
+                        .any(|e| e.trim().eq_ignore_ascii_case("concatenation"))
+                })
+                .unwrap_or(false))
+    }
+
+    /// The CLASSIC creation — the pre-#50 probe body, byte-for-byte: one
+    /// POST, one session, `max_parallel: Some(1)`.
+    async fn create_classic(
+        &self,
+        spec: &JobSpec,
+        concatenation: bool,
+    ) -> Result<ProbeReport, AdapterError> {
+        let resp = self
+            .client
+            .post(&spec.endpoint)
+            .header("Tus-Resumable", TUS_VERSION)
+            .header("Upload-Length", spec.source_size.to_string())
+            .send()
+            .await
+            .map_err(|e| AdapterError::Transient(format!("creation failed: {e}")))?;
+        match resp.status().as_u16() {
+            201 => {
+                let raw = resp
+                    .headers()
+                    .get("location")
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| {
+                        AdapterError::Unknown("201 creation without a Location header".into())
+                    })?
+                    .to_string();
+                let location = resolve_location(&spec.endpoint, &raw);
+                self.restore_session(&spec.endpoint, location.clone());
+                Ok(ProbeReport {
+                    resumable: true,
+                    max_chunk_bytes: None,
+                    // Issue #13: TUS is ONE sequential-offset resource.
+                    // Concurrent PATCHes to different offsets 409-realign
+                    // into Unresumable — the protocol itself caps parallel
+                    // uploads at 1 per session, so the adapter DECLARES it
+                    // (ADR-011 channel) and the planner obeys.
+                    max_parallel: Some(1),
+                    // Issue #44: tus has NO protocol minimum — the adapter
+                    // DECLARES a 64 KiB lane floor (ADR-011 channel). At the
+                    // owner's 3 KB/s bad-moment rate a piece confirms in
+                    // ~30 s; the per-PATCH header overhead at this size is
+                    // measured in the #45 ladder drill, not asserted.
+                    min_chunk_bytes: Some(64 * 1024),
+                    session_token: Some(location),
+                    concatenation,
+                })
+            }
+            404 | 410 => Err(AdapterError::SessionLost(format!(
+                "creation endpoint {} is gone ({})",
+                spec.endpoint,
+                resp.status()
+            ))),
+            413 => Err(AdapterError::Unknown(format!(
+                "creation refused: Upload-Length {} exceeds the server's Tus-Max-Size",
+                spec.source_size
+            ))),
+            412 => Err(AdapterError::Unknown(
+                "creation 412: server rejected Tus-Resumable preconditions".into(),
+            )),
+            s if s >= 500 => Err(AdapterError::Transient(format!("creation -> {s}"))),
+            s => Err(AdapterError::Unknown(format!("creation -> {s}"))),
+        }
+    }
+
+    /// Create ONE partial session (issue #50 fact 2): `Upload-Concat:
+    /// partial` + the range's `Upload-Length` → `201` + `Location`.
+    async fn create_partial(&self, spec: &JobSpec, length: u64) -> Result<String, AdapterError> {
+        let resp = self
+            .client
+            .post(&spec.endpoint)
+            .header("Tus-Resumable", TUS_VERSION)
+            .header("Upload-Concat", "partial")
+            .header("Upload-Length", length.to_string())
+            .send()
+            .await
+            .map_err(|e| AdapterError::Transient(format!("partial creation failed: {e}")))?;
+        match resp.status().as_u16() {
+            201 => {
+                let raw = resp
+                    .headers()
+                    .get("location")
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| {
+                        AdapterError::Unknown("201 partial creation without a Location".into())
+                    })?
+                    .to_string();
+                Ok(resolve_location(&spec.endpoint, &raw))
+            }
+            404 | 410 => Err(AdapterError::SessionLost(format!(
+                "creation endpoint {} is gone ({})",
+                spec.endpoint,
+                resp.status()
+            ))),
+            412 => Err(AdapterError::Unknown(
+                "partial creation 412: server rejected Tus-Resumable preconditions".into(),
+            )),
+            400 => Err(AdapterError::Unknown(format!(
+                "partial creation 400: {}",
+                String::from_utf8_lossy(&resp.bytes().await.unwrap_or_default())
+            ))),
+            s if s >= 500 => Err(AdapterError::Transient(format!("partial creation -> {s}"))),
+            s => Err(AdapterError::Unknown(format!("partial creation -> {s}"))),
+        }
     }
 
     fn io_err(e: std::io::Error) -> AdapterError {
@@ -209,23 +464,28 @@ impl TusAdapter {
         }
     }
 
-    /// One PATCH from `offset`, streaming `[offset, end)` from the source.
-    /// `409` is not an `AdapterError` — it is the protocol's crash-recovery
-    /// signal and the caller (the realign dance) must see it as data.
+    /// One PATCH. `upload_offset` is the PARTIAL-LOCAL offset the server
+    /// expects; `source_offset` is where the bytes live in the SOURCE file.
+    /// They coincide on the classic lane (one session == the whole file);
+    /// on the concat lane partial *i*'s local offset L maps to absolute
+    /// source offset `base + L` (issue #50). `409` is not an
+    /// `AdapterError` — it is the protocol's crash-recovery signal and the
+    /// caller (the realign dance) must see it as data.
     async fn patch(
         &self,
         spec: &JobSpec,
         location: &str,
-        offset: u64,
+        upload_offset: u64,
+        source_offset: u64,
         end: u64,
         progress: &ProgressReporter,
     ) -> Result<u64, PatchFailure> {
-        let span = end - offset;
+        let span = end - upload_offset;
         let mut file = tokio::fs::File::open(&spec.source_path)
             .await
             .map_err(Self::io_err)
             .map_err(PatchFailure::Adapter)?;
-        file.seek(std::io::SeekFrom::Start(offset))
+        file.seek(std::io::SeekFrom::Start(source_offset))
             .await
             .map_err(Self::io_err)
             .map_err(PatchFailure::Adapter)?;
@@ -242,7 +502,7 @@ impl TusAdapter {
             .client
             .patch(location)
             .header("Tus-Resumable", TUS_VERSION)
-            .header("Upload-Offset", offset.to_string())
+            .header("Upload-Offset", upload_offset.to_string())
             .header("Content-Type", TUS_CONTENT_TYPE)
             .header("Content-Length", span.to_string())
             .body(body)
@@ -278,7 +538,9 @@ impl TusAdapter {
                             "PATCH transport-failed and HEAD confirms the session is gone: {msg}"
                         )))
                     }
-                    Ok((_, server_offset)) if server_offset != offset => PatchFailure::Conflict,
+                    Ok((_, server_offset)) if server_offset != upload_offset => {
+                        PatchFailure::Conflict
+                    }
                     _ => PatchFailure::Adapter(AdapterError::Transient(format!(
                         "PATCH failed: {msg}"
                     ))),
@@ -313,6 +575,91 @@ impl TusAdapter {
             )))),
         }
     }
+
+    /// Push one SEGMENT `[seg.0, seg.1)` (absolute source bytes) through
+    /// the partial session that owns `[base, …)` (issue #50). The #10/#43
+    /// rules apply PER SESSION: entry-HEAD alignment, the bounded realign
+    /// dance, the waste reckoning — all scoped to the partial's own offset
+    /// space, with the segment's confirm reported in ABSOLUTE bytes. The
+    /// per-partial lock is held across the whole dance: a partial is ONE
+    /// sequential-offset resource (the lane's parallelism lives BETWEEN
+    /// partials).
+    ///
+    /// The SERVER'S OFFSET IS THE TRUTH, whatever it is: on a fresh
+    /// partial (or after a resplit re-routed chunks) it can legally sit
+    /// BELOW the segment's local start — the PATCH then pushes from the
+    /// server's offset up to the segment end, streaming the source from
+    /// the mapped absolute position (`base + local`). Those extra bytes
+    /// belong to the neighboring chunk's span (the journal confirms them
+    /// there, via its own confirm-before-send HEAD), the wire pushes them
+    /// exactly once, and the confirm counts ONLY this segment's span —
+    /// the accounting stays per-call honest (issue #37's arithmetic,
+    /// scoped per segment).
+    async fn push_segment(
+        &self,
+        spec: &JobSpec,
+        partial_url: &str,
+        lock: &AsyncMutex<()>,
+        seg: (u64, u64),
+        base: u64,
+        progress: &ProgressReporter,
+    ) -> Result<u64, AdapterError> {
+        let _guard = lock.lock().await;
+        let local_end = seg.1 - base;
+
+        // THE ENTRY HEAD — per session (the #43 discipline, concat edition):
+        // the journal can be behind THIS partial's server truth.
+        let (_, entry) = self.head(partial_url).await?;
+        // Confirm-before-send: this partial already holds the whole segment.
+        if entry >= local_end {
+            return Ok(seg.1 - seg.0);
+        }
+
+        let first_attempt_from = progress.moved();
+        let mut from = entry;
+        let mut realigns: u32 = 0;
+        let final_local = loop {
+            match self
+                .patch(spec, partial_url, from, base + from, local_end, progress)
+                .await
+            {
+                Ok(offset) => break offset,
+                Err(PatchFailure::Adapter(e)) => return Err(e),
+                Err(PatchFailure::Conflict) => {
+                    realigns += 1;
+                    if realigns > MAX_REALIGN_ROUNDS {
+                        return Err(AdapterError::Transient(format!(
+                            "tus realign dance exceeded {MAX_REALIGN_ROUNDS} rounds on this segment — re-queues from journal truth"
+                        )));
+                    }
+                    let (_, server_offset) = self.head(partial_url).await?;
+                    if server_offset < from.min(entry) {
+                        return Err(AdapterError::Unresumable(format!(
+                            "partial offset {server_offset} behind the entry offset {entry} — the server lost confirmed bytes",
+                        )));
+                    }
+                    if server_offset >= local_end {
+                        // The segment is fully server-held (own-drift or a
+                        // same-partial neighbor chunk's confirmed bytes —
+                        // the lock makes them ordered, the journal makes
+                        // them owned): confirm in full.
+                        break local_end;
+                    }
+                    from = server_offset;
+                }
+            }
+        };
+        // THE WASTE RECKONING — the same settled arithmetic as the classic
+        // path (issue #37), scoped to this segment: bytes pushed beyond what
+        // the server persisted between the entry offset and the final one.
+        let pushed = progress.moved() - first_attempt_from;
+        progress.waste(pushed.saturating_sub(final_local - entry));
+        // The confirm counts ONLY this segment's span: the server may hold
+        // more than the segment end (a same-partial neighbor's bytes) —
+        // those belong to the neighbor's journal confirm, never to ours.
+        let confirmed_abs = (base + final_local).min(seg.1);
+        Ok(confirmed_abs.saturating_sub(seg.0))
+    }
 }
 
 /// Why one PATCH did not produce a server-acked offset.
@@ -339,15 +686,99 @@ impl TransferAdapter for TusAdapter {
         Capability::new(Capability::RESUMABLE)
     }
 
+    /// The classic probe PLUS discovery (issue #50): one OPTIONS for the
+    /// capability (journaled in the report), then the pre-#50 creation
+    /// body — one session, `max_parallel: Some(1)`. Plain `probe` NEVER
+    /// activates the concat lane: only the host's `probe_fleet` intent
+    /// does (the wire sequence gains exactly one OPTIONS request; every
+    /// semantic is unchanged, and the pre-#50 wire suite passes as-is).
     async fn probe(&self, spec: &JobSpec) -> Result<ProbeReport, AdapterError> {
+        let concatenation = self.discover_concat(&spec.endpoint).await?;
+        self.create_classic(spec, concatenation).await
+    }
+
+    /// The fleet-seeded probe (issue #50, ADR-011 channel): the host offers
+    /// its journal-derived seed; the adapter obeys the SERVER first — no
+    /// advertisement, or a seed too small to parallelize (or a 0-byte
+    /// source, where there is nothing to split) → the classic lane,
+    /// byte-for-byte. With the advertisement: N = seed partial sessions
+    /// (fact 2) and the declaration `max_parallel: Some(N)` rides the
+    /// #13 channel — the prober's measured fleet (#48) and AIMD (#49)
+    /// adapt WITHIN it.
+    async fn probe_fleet(
+        &self,
+        spec: &JobSpec,
+        fleet_seed: u32,
+    ) -> Result<ProbeReport, AdapterError> {
+        let concatenation = self.discover_concat(&spec.endpoint).await?;
+        if !concatenation || fleet_seed < 2 || spec.source_size == 0 {
+            return self.create_classic(spec, concatenation).await;
+        }
+        // The adapter's own honest ceiling: no more partial sessions than
+        // the declared lane floor can justify — a 64 KiB partial is the
+        // smallest useful session (the #44 floor), below it parallelism is
+        // pure header overhead. A huge host seed on a tiny file collapses.
+        let max_useful = spec.source_size.div_ceil(64 * 1024).max(1) as u32;
+        let n = fleet_seed.clamp(1, max_useful);
+        let partition = concat_partition(spec.source_size, n);
+        let mut partials = Vec::with_capacity(partition.len());
+        for (start, end) in &partition {
+            partials.push(self.create_partial(spec, end - start).await?);
+        }
+        let token = encode_concat_token(&partials, None);
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(spec.endpoint.clone(), parse_session_token(&token));
+        self.locks_for(&spec.endpoint, partials.len());
+        Ok(ProbeReport {
+            resumable: true,
+            max_chunk_bytes: None,
+            max_parallel: Some(partials.len() as u32),
+            min_chunk_bytes: Some(64 * 1024),
+            session_token: Some(token),
+            concatenation: true,
+        })
+    }
+
+    /// Reattach (issue #12): replay the journaled probe event's session
+    /// token into the session map — both topologies (classic URL, concat
+    /// JSON). Pure in-memory restore — no network, no new POST creation
+    /// (that would start a second upload resource and orphan the first).
+    async fn reattach(&self, endpoint: &str, token: &str) -> Result<(), AdapterError> {
+        self.restore_session(endpoint, token.to_string());
+        Ok(())
+    }
+
+    /// Materialize the final upload (issue #50): `POST` + `Upload-Concat:
+    /// final;<u1> <u2> …` (fact 5). Idempotent per session: a journaled
+    /// final URL is REUSED, never re-POSTed (fact 5b — a re-POST would
+    /// create a SECOND final). Returns the URL the verify gate checks, or
+    /// `None` on the classic lane (nothing to materialize).
+    async fn finalize(&self, spec: &JobSpec) -> Result<Option<String>, AdapterError> {
+        let token = {
+            let map = self.sessions.lock().unwrap();
+            map.get(&spec.endpoint).cloned()
+        };
+        let (partials, known) = match token {
+            Some(SessionToken::Concat {
+                partials,
+                final_url,
+            }) => (partials, final_url),
+            _ => return Ok(None),
+        };
+        if let Some(url) = known {
+            return Ok(Some(url));
+        }
+        let header = format!("final;{}", partials.join(" "));
         let resp = self
             .client
             .post(&spec.endpoint)
             .header("Tus-Resumable", TUS_VERSION)
-            .header("Upload-Length", spec.source_size.to_string())
+            .header("Upload-Concat", header)
             .send()
             .await
-            .map_err(|e| AdapterError::Transient(format!("creation failed: {e}")))?;
+            .map_err(|e| AdapterError::Transient(format!("final creation failed: {e}")))?;
         match resp.status().as_u16() {
             201 => {
                 let raw = resp
@@ -355,53 +786,35 @@ impl TransferAdapter for TusAdapter {
                     .get("location")
                     .and_then(|v| v.to_str().ok())
                     .ok_or_else(|| {
-                        AdapterError::Unknown("201 creation without a Location header".into())
+                        AdapterError::Unknown("201 final creation without a Location".into())
                     })?
                     .to_string();
-                let location = resolve_location(&spec.endpoint, &raw);
-                self.restore_session(&spec.endpoint, location.clone());
-                Ok(ProbeReport {
-                    resumable: true,
-                    max_chunk_bytes: None,
-                    // Issue #13: TUS is ONE sequential-offset resource.
-                    // Concurrent PATCHes to different offsets 409-realign
-                    // into Unresumable — the protocol itself caps parallel
-                    // uploads at 1 per session, so the adapter DECLARES it
-                    // (ADR-011 channel) and the planner obeys.
-                    max_parallel: Some(1),
-                    // Issue #44: tus has NO protocol minimum — the adapter
-                    // DECLARES a 64 KiB lane floor (ADR-011 channel). At the
-                    // owner's 3 KB/s bad-moment rate a piece confirms in
-                    // ~30 s; the per-PATCH header overhead at this size is
-                    // measured in the #45 ladder drill, not asserted.
-                    min_chunk_bytes: Some(64 * 1024),
-                    session_token: Some(location),
-                })
+                let url = resolve_location(&spec.endpoint, &raw);
+                self.sessions.lock().unwrap().insert(
+                    spec.endpoint.clone(),
+                    SessionToken::Concat {
+                        partials,
+                        final_url: Some(url.clone()),
+                    },
+                );
+                Ok(Some(url))
             }
+            // Fact 8c: a partial is not finished — the caller violated the
+            // all-Confirmed boundary. Loud, never retried blindly.
+            400 => Err(AdapterError::Unknown(format!(
+                "final creation 400: {}",
+                String::from_utf8_lossy(&resp.bytes().await.unwrap_or_default()).trim()
+            ))),
             404 | 410 => Err(AdapterError::SessionLost(format!(
-                "creation endpoint {} is gone ({})",
-                spec.endpoint,
+                "final creation 404: a partial in the list is gone ({})",
                 resp.status()
             ))),
-            413 => Err(AdapterError::Unknown(format!(
-                "creation refused: Upload-Length {} exceeds the server's Tus-Max-Size",
-                spec.source_size
-            ))),
             412 => Err(AdapterError::Unknown(
-                "creation 412: server rejected Tus-Resumable preconditions".into(),
+                "final creation 412: server rejected Tus-Resumable preconditions".into(),
             )),
-            s if s >= 500 => Err(AdapterError::Transient(format!("creation -> {s}"))),
-            s => Err(AdapterError::Unknown(format!("creation -> {s}"))),
+            s if s >= 500 => Err(AdapterError::Transient(format!("final creation -> {s}"))),
+            s => Err(AdapterError::Unknown(format!("final creation -> {s}"))),
         }
-    }
-
-    /// Reattach (issue #12): replay the journaled probe event's creation URL
-    /// into the session map. Pure in-memory restore — no network, no new
-    /// POST creation (that would start a second upload resource and orphan
-    /// the first).
-    async fn reattach(&self, endpoint: &str, token: &str) -> Result<(), AdapterError> {
-        self.restore_session(endpoint, token.to_string());
-        Ok(())
     }
 
     async fn upload_chunk(
@@ -410,11 +823,58 @@ impl TransferAdapter for TusAdapter {
         lease: &Lease,
         progress: &ProgressReporter,
     ) -> Result<ChunkConfirm, AdapterError> {
-        let location = self.session_for(&spec.endpoint).ok_or_else(|| {
-            AdapterError::SessionLost(
-                "no tus session for endpoint; restore from the journaled probe event".into(),
-            )
-        })?;
+        let token = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&spec.endpoint)
+            .cloned()
+            .ok_or_else(|| {
+                AdapterError::SessionLost(
+                    "no tus session for endpoint; restore from the journaled probe event".into(),
+                )
+            })?;
+
+        // ---- the CONCATENATION lane (issue #50) --------------------------
+        if let SessionToken::Concat { partials, .. } = &token {
+            if lease.end <= lease.resume_from {
+                // The empty `[(0,0)]` chunk on the concat lane: the lease
+                // spans nothing, so no partial is touched; the job's final
+                // POST + final-URL verify are the honest round-trips.
+                return Ok(ChunkConfirm {
+                    idx: lease.idx,
+                    bytes_confirmed: 0,
+                    adapter_token: None,
+                });
+            }
+            let partition = concat_partition(spec.source_size, partials.len() as u32);
+            let locks = self.locks_for(&spec.endpoint, partials.len());
+            let mut confirmed = 0u64;
+            let mut advanced: Vec<usize> = Vec::new();
+            for (i, &(base, pend)) in partition.iter().enumerate() {
+                let rs = lease.resume_from.max(base);
+                let re = lease.end.min(pend);
+                if rs >= re {
+                    continue; // this partial's range is outside the lease
+                }
+                confirmed += self
+                    .push_segment(spec, &partials[i], &locks[i], (rs, re), base, progress)
+                    .await?;
+                advanced.push(i);
+            }
+            return Ok(ChunkConfirm {
+                idx: lease.idx,
+                bytes_confirmed: confirmed,
+                adapter_token: Some(format!("partials {advanced:?} advanced")),
+            });
+        }
+
+        // ---- the CLASSIC lane (pre-#50, unchanged) ------------------------
+        let SessionToken::Classic(location) = token else {
+            return Err(AdapterError::SessionLost(
+                "unreachable: non-classic token fell through the concat arm".into(),
+            ));
+        };
 
         // THE ENTRY HEAD — the alignment point (CI wire-suite finding, #43
         // follow-up): the journal can be BEHIND the server at call entry
@@ -461,7 +921,10 @@ impl TransferAdapter for TusAdapter {
         let mut from = entry_offset;
         let mut realigns: u32 = 0;
         let final_offset = loop {
-            match self.patch(spec, &location, from, lease.end, progress).await {
+            match self
+                .patch(spec, &location, from, from, lease.end, progress)
+                .await
+            {
                 Ok(offset) => break offset,
                 Err(PatchFailure::Adapter(e)) => return Err(e),
                 Err(PatchFailure::Conflict) => {
@@ -519,27 +982,72 @@ impl TransferAdapter for TusAdapter {
     }
 
     async fn verify(&self, spec: &JobSpec) -> Result<VerifyReport, AdapterError> {
-        // Read-only integrity gate: the server holds exactly source_size
-        // bytes. No finalize step exists in TUS (contrast ADR-010).
-        let location = self.session_for(&spec.endpoint).ok_or_else(|| {
-            AdapterError::SessionLost(
-                "no tus session for endpoint; restore from the journaled probe event".into(),
-            )
-        })?;
-        let (length, offset) = self.head(&location).await?;
-        if offset == spec.source_size && length == spec.source_size {
-            Ok(VerifyReport {
-                ok: true,
-                detail: Some(format!("tus offset {offset} == length == source_size")),
-            })
-        } else {
-            Ok(VerifyReport {
+        // Read-only integrity gate. Classic lane: the server holds exactly
+        // source_size bytes on the ONE session. Concat lane (issue #50):
+        // the gate is the FINAL URL (fact 6 — eager materialization; fact
+        // 8b — the final is the immutable resource); before finalize runs
+        // there IS no final, and verify refuses to lie about it.
+        let token = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&spec.endpoint)
+            .cloned()
+            .ok_or_else(|| {
+                AdapterError::SessionLost(
+                    "no tus session for endpoint; restore from the journaled probe event".into(),
+                )
+            })?;
+        match token {
+            SessionToken::Concat {
+                final_url: None, ..
+            } => Ok(VerifyReport {
                 ok: false,
-                detail: Some(format!(
-                    "server holds {offset} of {} bytes (Upload-Length {length})",
-                    spec.source_size
-                )),
-            })
+                detail: Some(
+                    "concat lane not finalized: no final URL yet — finalize must run at the \
+                     all-Confirmed boundary before verify can gate the final resource"
+                        .into(),
+                ),
+            }),
+            SessionToken::Concat {
+                final_url: Some(url),
+                ..
+            } => {
+                let (length, offset) = self.head(&url).await?;
+                if offset == spec.source_size && length == spec.source_size {
+                    Ok(VerifyReport {
+                        ok: true,
+                        detail: Some(format!(
+                            "tus concat final {url}: offset {offset} == length == source_size"
+                        )),
+                    })
+                } else {
+                    Ok(VerifyReport {
+                        ok: false,
+                        detail: Some(format!(
+                            "concat final holds {offset} of {} bytes (Upload-Length {length})",
+                            spec.source_size
+                        )),
+                    })
+                }
+            }
+            SessionToken::Classic(location) => {
+                let (length, offset) = self.head(&location).await?;
+                if offset == spec.source_size && length == spec.source_size {
+                    Ok(VerifyReport {
+                        ok: true,
+                        detail: Some(format!("tus offset {offset} == length == source_size")),
+                    })
+                } else {
+                    Ok(VerifyReport {
+                        ok: false,
+                        detail: Some(format!(
+                            "server holds {offset} of {} bytes (Upload-Length {length})",
+                            spec.source_size
+                        )),
+                    })
+                }
+            }
         }
     }
 }

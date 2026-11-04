@@ -150,6 +150,7 @@ impl TransferAdapter for HttpOneShotAdapter {
             min_chunk_bytes: None,
             max_parallel: None,
             session_token: None,
+            concatenation: false,
         })
     }
 

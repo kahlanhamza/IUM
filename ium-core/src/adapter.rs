@@ -72,6 +72,12 @@ pub struct ProbeReport {
     pub min_chunk_bytes: Option<u64>,
     /// Opaque session descriptor to carry across confirms.
     pub session_token: Option<String>,
+    /// Did the server ADVERTISE the tus concatenation extension (issue #50,
+    /// ADR-011 channel)? Discovered via OPTIONS at probe time and journaled
+    /// in the probe event — resume re-derives, never re-probes. `false` on
+    /// every non-tus adapter and on servers without the declaration: those
+    /// lanes stay exactly as they were (byte-identical behavior).
+    pub concatenation: bool,
 }
 
 /// A chunk that completed with a server acknowledgment.
@@ -286,6 +292,37 @@ pub trait TransferAdapter: Send + Sync {
     /// as an explicit no-op; the manager only calls it when a journaled
     /// probe event actually carries a token.
     async fn reattach(&self, endpoint: &str, token: &str) -> Result<(), AdapterError>;
+
+    /// Probe with a FLEET seed (issue #50, ADR-011 channel): the host
+    /// composes the seed from journal truth (the planned chunk count,
+    /// clamped to `MAX_WORKERS`) and the adapter may create the session
+    /// topology that can actually USE it — the tus concatenation lane
+    /// creates `seed` partial sessions and declares `max_parallel: Some(n)`.
+    /// Default: the classic [`TransferAdapter::probe`] — the hint changes
+    /// nothing for adapters whose protocol has no parallel-session concept.
+    /// Adapters must still obey the server's DECLARATION over the host's
+    /// hint: a seed of 4 against a server without the capability stays a
+    /// declared-1 lane (never guesses, ADR-011).
+    async fn probe_fleet(
+        &self,
+        spec: &JobSpec,
+        fleet_seed: u32,
+    ) -> Result<ProbeReport, AdapterError> {
+        let _ = fleet_seed;
+        self.probe(spec).await
+    }
+
+    /// Materialize a completed transfer, if the protocol has a step beyond
+    /// the last confirmed byte (issue #50: the tus concatenation final
+    /// POST; S3's finalize-if-needed lives inside its own upload path,
+    /// ADR-010; one-shot adapters have no concept). Called ONCE at the
+    /// all-Confirmed boundary, AFTER the manager journaled its intent —
+    /// transitions are journaled before they execute (ADR-002). Returns
+    /// the resource the verify gate should check, or `None` (nothing to
+    /// finalize — verify keeps its read-only semantics).
+    async fn finalize(&self, _spec: &JobSpec) -> Result<Option<String>, AdapterError> {
+        Ok(None)
+    }
 }
 
 /// Registry — the plugin point community contributors use to add protocols
@@ -339,6 +376,7 @@ mod tests {
                 min_chunk_bytes: None,
                 max_parallel: None,
                 session_token: None,
+                concatenation: false,
             })
         }
         async fn upload_chunk(

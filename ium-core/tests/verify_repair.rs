@@ -109,6 +109,7 @@ impl TransferAdapter for RepairMock {
         Ok(ProbeReport {
             resumable: true,
             session_token: Some(format!("tok-{n}")),
+            concatenation: false,
             max_chunk_bytes: None,
             min_chunk_bytes: None,
             max_parallel: None,

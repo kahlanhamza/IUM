@@ -33,8 +33,12 @@ WITH_DIR="${TUS_UPLOAD_DIR:-}"
 # --with-real: also run the real-data drill (tests/real_data.rs, issue #17)
 # — a REAL ffmpeg-generated video through the engine; skipped loud where
 # ffmpeg is absent.
+# --concat: also run the concatenation lane suite (tests/tus_concat.rs,
+# issue #50) — the tusd-only concat vectors + adapter legs; skipped loud on
+# the tus-node lane (@tus/server has no concatenation — recorded delta).
 WITH_DRILL=0
 WITH_REAL=0
+WITH_CONCAT=0
 say() { echo "[tus-test] $*"; }
 die() { echo "[tus-test] FAIL: $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
@@ -48,6 +52,7 @@ while [ $# -gt 0 ]; do
       shift ;;
     --with-drill) WITH_DRILL=1 ;;
     --with-real) WITH_REAL=1 ;;
+    --concat) WITH_CONCAT=1 ;;
     *) die "unknown flag: $1" ;;
   esac
   shift
@@ -55,6 +60,10 @@ done
 
 if [ "$WITH_DRILL" = 1 ] && [ "$SERVER" != "tusd" ]; then
   die "--with-drill is tusd-canonical only (kill-9 drill semantics built vs tusd; see #33)"
+fi
+
+if [ "$WITH_CONCAT" = 1 ] && [ "$SERVER" != "tusd" ]; then
+  die "--concat is tusd-only (@tus/server has no concatenation — the #50 delta)"
 fi
 
 PY=python3
@@ -156,6 +165,11 @@ cargo test -p ium-core --test adapter_tus
 if [ "$WITH_DRILL" = 1 ]; then
   say "running kill-9 drill (tus_drill)"
   cargo test -p ium-core --test tus_drill -- --nocapture
+fi
+
+if [ "$WITH_CONCAT" = 1 ]; then
+  say "running concatenation lane suite (tus_concat, issue #50)"
+  cargo test -p ium-core --test tus_concat
 fi
 
 if [ "$WITH_REAL" = 1 ]; then

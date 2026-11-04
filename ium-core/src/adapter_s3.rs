@@ -749,6 +749,7 @@ impl TransferAdapter for S3MultipartAdapter {
                 min_chunk_bytes: None,
                 max_parallel: None,
                 session_token: None,
+                concatenation: false,
             });
         }
         let target = parse_target(&spec.endpoint, &spec.source_path)?;
@@ -783,6 +784,7 @@ impl TransferAdapter for S3MultipartAdapter {
             // default floor — no lane override (declared None).
             min_chunk_bytes: None,
             session_token: Some(upload_id),
+            concatenation: false,
         })
     }
 

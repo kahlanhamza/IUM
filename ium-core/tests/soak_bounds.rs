@@ -82,6 +82,7 @@ impl TransferAdapter for SoakAdapter {
             min_chunk_bytes: None,
             max_parallel: None,
             session_token: None,
+            concatenation: false,
         })
     }
 
