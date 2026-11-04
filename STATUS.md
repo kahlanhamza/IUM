@@ -4,7 +4,7 @@
 > updated and pushed to GitHub. It is the recovery point for a recycled sandbox. Read it FIRST
 > in every session, before touching any file.
 >
-> Last updated: **2026-11-04 (late)** · Phase: **M7 LANDED — THE SPEED ARCHITECTURE IS IN THE ENGINE (#41–#46 all closed with measured evidence).** The 600 s wall is GONE (idle-progress, #42); own-drift is absorbed by a bounded realign dance with an entry-HEAD alignment point (#43, + the CI-run-78 post-mortem); tus pieces go to 64 KiB on the lane floor while S3 keeps its 5 MiB (#44); the KB/s ladder rides the real engine at 99%+ of wire on 3/8/50/160 KB/s (#45, stress.yml); the prober measures 1-vs-K and classifies per-flow vs bearer with drills proving both (#41); the research track is a verified-sources doc + ADR-012 (#46). Suite: 159 core tests green + 12/12 real-tusd wire. One follow-up DISCOVERED by the drills and filed with full evidence: **#47** (resplit × tus lease race — RED drill `#[ignore]`d in tree, un-ignore when it lands). CI: runs #80/#81 green after the run-78 red was root-caused (see §9).
+> Last updated: **2026-11-04 (late)** · Phase: **M7 LANDED + #47 closed — THE SPEED ARCHITECTURE IS IN THE ENGINE, AND THE DRILL-DISCOVERED RACE IS FIXED.** The 600 s wall is GONE (idle-progress, #42); own-drift is absorbed by a bounded realign dance with an entry-HEAD alignment point (#43, + the CI-run-78 post-mortem); tus pieces go to 64 KiB on the lane floor while S3 keeps its 5 MiB (#44); the KB/s ladder rides the real engine at 99%+ of wire on 3/8/50/160 KB/s (#45, stress.yml); the prober measures 1-vs-K and classifies per-flow vs bearer with drills proving both (#41); the research track is a verified-sources doc + ADR-012 (#46). **#47 (resplit × tus lease race) closed via the full loop**: the #44 drill un-ignored went RED at `cbc578d` (piece 0 stranded `Leased` twice — the driver's never-consumed epoch signal poisoned every post-resplit lease, and the ResplitUnderneath arm journaled nothing for a live lease); fix = epoch consumed at lease time + identity guard in the arm + driver reclaim-then-decide with `drive_pool_snapshot` evidence on every non-clean exit. Suite: **160 core tests green** + 12/12 real-tusd wire. CI: runs #80/#81 green; the #47 push rides the next run.
 
 ---
 
@@ -14,7 +14,7 @@
 cd /home/z/my-project
 git pull                      # remote: github.com/kahlanhamza/IUM (private)
 . scripts/rust-env.sh         # persistent toolchain in .toolchain/ (gitignored)
-cargo test -p ium-core        # expect: 143 passed (65 unit + 23 adapter_s3 + 12 adapter_tus + 5 loopback HTTP + 22 integration + 4 supervisor + 3 real-data drill [HTTP live; TUS/S3 env-gated] + 1 slow-connection eviction drill + 1 adaptive-resplit drill [#27] + 1 s3 kill-9 drill [env-gated] + 1 tus kill-9 drill [env-gated] + 1 compile-fail contract + …)
+cargo test -p ium-core        # expect: 160 passed (66 unit + 23 adapter_s3 + 12 adapter_tus + 5 loopback HTTP + 22 integration + 4 supervisor + 3 real-data drill [HTTP live; TUS/S3 env-gated] + 1 slow-connection eviction drill + 1 adaptive-resplit drill [#27] + 1 lane-floor drill [#44/#47, un-ignored] + 1 s3 kill-9 drill [env-gated] + 1 tus kill-9 drill [env-gated] + 1 compile-fail contract + …)
 bash scripts/gate.sh          # before ANY push: gates on the COMMITTED tree (defect #11 rule)
 bash scripts/s3-test.sh       # live S3 suite vs pinned SeaweedFS 4.51 (downloads ~45 MB per run)
                               #   --with-real: also the real-data drill (#17)
@@ -289,7 +289,8 @@ executed at least once.
     BOTH legs green on CI run #75 through the real shell; issue closed with the full
     seam-shakedown ledger; M6 COMPLETE — see docs/04).
 31. **M7 — SPEED ARCHITECTURE ✅ LANDED 2026-11-04 (owner mandate; milestone 6 + #41–#46 all
-    closed with measured evidence; the drills discovered one follow-up, filed as #47)** — the owner's field measurements turned into the next
+    closed with measured evidence; the drills discovered one follow-up, #47 — CLOSED the
+    same day via the full loop, see item 31.b)** — the owner's field measurements turned into the next
     milestone: (a) same tunnel, one hour apart: ~3 KB/s uplink moment vs 1.29 Mbps up =
     161 KB/s (54× swing) — the engine must MEASURE the link, not assume it; (b) 27.1/1.29 =
     21:1 asymmetry is why an upload manager exists at all. Analysis pass over the real engine
@@ -308,6 +309,29 @@ executed at least once.
     track with measured spikes: multipath aggregation (MPTCP RFC 8684 / part→path scheduling)
     + FASP-style UDP+FEC for the lossy-tunnel regime — honest bounds: nothing beats the sum
     of the summoned bearers; research REACHES the bound and AGGREGATES bearers.
+31.b. ~~**#47 — resplit × tus lease race: a stranded `Leased` row with no resolution fails
+    the job at the verify gate**~~ ✅ (2026-11-04, the full loop on the drill-discovered
+    issue: the #44 lane-floor drill un-ignored → RED at `cbc578d` (Failed;
+    `verify_inconsistent` idx0 leased/0-confirmed, idx1–15 uploaded; exactly one journal
+    event ever names idx 0). Root cause decoded from the RED chronology: the driver's
+    `resplit_rx` never consumes the epoch change and a watch-clone preserves the unseen
+    marker → after ANY resplit, every lease taken in a later round died instantly on its
+    first `select!` poll (a stale epoch signal) and the `Step::ResplitUnderneath` arm
+    journaled nothing — piece 0 died this way TWICE (round 1: the winner's own post-resplit
+    re-lease; round 2: the re-lease after `leases_reclaimed`). Fix, three layers
+    (design note on the issue): (a) the worker marks the current epoch seen before leasing
+    (`borrow_and_update` — a lease is live in the current plan; only a NEW bump aborts it);
+    (b) the ResplitUnderneath arm runs the same identity guard as the confirm/error/eviction
+    arms — a live lease returns to the pool journal-first under the pool lock, a retired
+    identity stays unjournaled; (c) the driver RECLAIMS ownerless Leased rows at round end
+    before any exit decision (reclaim-then-decide: the `pending == 0` exit is unreachable
+    while a reclaimable lease exists), bounded by `MAX_IDLE_RECLAIM_ROUNDS` (3) so a
+    deterministic strand bug fails loudly instead of livelocking, and every break-to-
+    Finishing exit that leaves non-uploaded bytes journals a full `drive_pool_snapshot`
+    (acceptance #3; per-chunk shape matches `verify_inconsistent`). GREEN: Done byte-exact,
+    3/3 stable drill runs; suite 159 → **160 core tests**; gates (fmt/clippy `-D warnings`)
+    clean. CHANGELOG [Unreleased] Fixed entry; design note + RED/GREEN evidence posted on
+    the issue)
 32. **Next tranche (after M7; owner decides the order)** — the four candidate directions from
     the M6 verdict, each filed as its own issue when started:
     a. **Sprint-2 UX** — the shell is proven end-to-end but the UI is Sprint-1 dumb
@@ -470,6 +494,7 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 | 2026-11-04 | **M7 filed — the speed architecture (owner mandate: "the purpose was speed and time … physics are not always right, there is always a solution and paper researches").** Two owner field measurements of the SAME tunnel within one hour — NapsternetV uplink counter ~3 KB/s moment, Google speed test 1.29 Mbps up / 27.1 Mbps down / 50 ms (a 54× swing, 21:1 asymmetry) — are the milestone's motivating evidence. Code-level analysis pass (chunk/eviction/retry/manager/tus/s3/state read in full) established the honest seams: tus 600 s total timeout = structural non-convergence below ~8.7 KB/s; realign's second Conflict = own-drift misclassified as Unknown→Fail terminal; S3 atomic parts confirm nothing when per-part wire time exceeds the 1 h timeout (fleet ≥ 3 at 3 KB/s dies); nothing measures per-flow vs total-bearer — the fork that decides if parallelism multiplies. Filed milestone 6 + **#41 prober / #42 idle-timeout / #43 own-drift absorption / #44 lane floor / #45 throttled ladder drill / #46 multipath+FEC research**; M6 milestone (id 5) closed. Pre-flight verified: tree clean at `09ecb4a`, PR #38 supersession comment on record (the user's "check the PR" — it is closed-unmerged BY DESIGN, superseded by `940ddc9`/#39), 0 open issues | issues #41–#46 filed with RED-first acceptance criteria; math re-derived with code at 1.29 Mbps: 2 GB ≈ 4.1 h through the tunnel TODAY (the 8-day figure belonged to the 3 KB/s moment only) | this commit |
 
 | 2026-11-04 (late) | **M7 EXECUTED END-TO-END — all six issues landed, one follow-up discovered.** (1) **#42** the 600 s wall GONE: no total request timeout; `read_timeout(idle)` is the progress tripwire (30 s default, `with_idle` compresses for drills); MEASURED: a moved()-watchdog cannot work — kernel/hyper buffers absorb MiB before backpressure so a healthy slow wire looks frozen client-side; body-side stalls belong to supervision (#28) per the issue's own design. (2) **#43** the realign dance is a bounded loop (≤4 rounds; beyond → Transient; Unknown reserved — then REMOVED entirely when #44 showed beyond-lease is our own resplit drift); waste reckoning settled once per call. (3) **#44** `ProbeReport.min_chunk_bytes` rides ADR-011; tus declares 64 KiB; planner (plan/resplit/cap-replan) obeys `declared_lane_floor` clamped [1 KiB, CHUNK_MIN]; the drill forced two real fixes: resplit-induced beyond-lease drift confirms-in-full (single-writer lane) and **423 Locked is a WAIT not a failure** (`ErrorKind::Busy` — uncharged, un-evicted; the tus lock outlives any ladder when an abandoned body drains on a slow link). (4) **#45** the 3/8/50/160 KB/s ladder through the real engine: 99%+ of wire at every rung (3070.5/8186/51081/162884 B/s achieved), byte-exact, overhead MEASURED 0.72%→0.05%; wired into stress.yml (`IUM_THROTTLE_LADDER=1`), PR lane keeps compressed drills. (5) **#41** the prober: S1 canary + K independent sessions (canary/K — same wall time both phases), classify PerFlowCap (SK≥2×S1) / BearerCap (<1.5×) / Mixed; piece = 20 s of measured wire clamped lane-floor..max; drills prove both shapes (per-flow SK/S1=4.0× → fleet 4; bearer 1.0× → fleet 1); mock gained per-session state + shared-bearer pacing. (6) **#46** docs/07_Speed_Architecture.md on verified sources (RFC 8684, draft-ietf-quic-multipath-21, RFC 3449, RFC 6330, tus concatenation) + ADR-012. **CI run #78 RED post-mortem**: the tusd wire suite failed on all 3 OS — the #43 reckoning assumed server==resume_from at entry; crash recovery means the journal can be BEHIND; fixed with the ENTRY HEAD (alignment point, exact `moved−wasted`, the doomed blind PATCH disappears) — runs #80/#81 green, real-tusd wire 12/12 locally. **#47 filed with full journal evidence** (resplit × tus: a retired lease row stayed Leased with no resolution → pending==0 exit → verify_inconsistent; RED drill ignored-in-tree). Owner research brief ingested verbatim (docs/07_…_brief.md) + deltas posted on #41/#46. Sandbox ops: disk twice exhausted (two 4 GiB artifact caches under different RUSTFLAGS) → linker flags moved to local CARGO_HOME config, gate.sh shares the default target cache; FUSE-PolarFS + lld mmap bus-errors → GNU ld via `-Clinker-features=-lld` | suite 159/0 + wire 12/12; runs #80/#81 green; #41–#46 closed, #47 open | `803f825`+ |
+| 2026-11-04 (late) | **Issue #47 closed via the full loop — the drill-discovered race, root-caused and fixed in three layers.** Session start: 7th sandbox recycle had wiped `.secrets/` + `.toolchain/` (restored: toolchain via `install-toolchain.sh`, token re-stored chmod 600 — see §10). Loop honored end-to-end: (1) RED — the #44 lane-floor drill un-ignored at HEAD `cbc578d` → Failed in 15.6 s (`verify_inconsistent`: idx0 `leased`/0-confirmed, idx1–15 uploaded; exactly ONE journal event ever names idx 0; evidence posted on the issue). (2) Root cause decoded from the chronology — TWO compounding defects: the driver's `resplit_rx` never consumes the epoch change and a `watch::Receiver` clone preserves the unseen marker, so after ANY resplit every lease taken in a later round died instantly on its first `select!` poll (a STALE epoch signal — piece 0 died this way TWICE: round 1 the winner's own post-resplit re-lease, round 2 the re-lease after `leases_reclaimed`); and the `Step::ResplitUnderneath` arm journaled nothing, which is correct ONLY for leases the winner's rewrite retired. (3) Design note posted on the issue BEFORE the fix. (4) Minimal fix, three layers: epoch consumed at lease time (`borrow_and_update` at the worker loop top); identity guard in the ResplitUnderneath arm (a live lease returns to the pool journal-first under the pool lock — same pattern as the confirm/error/eviction arms); driver reclaim-then-decide at round end (ownerless Leased rows are reclaimed BEFORE any exit decision, `leases_reclaimed {"when":"round_end","idxs":[…]}`, bounded by `MAX_IDLE_RECLAIM_ROUNDS`=3 against livelock) + `drive_pool_snapshot` journaled by every non-clean break-to-Finishing exit (acceptance #3). (5) GREEN: drill Done byte-exact 3/3 stable runs; suite 159 → 160; fmt + clippy `-D warnings` clean. CHANGELOG [Unreleased] Fixed entry same-commit (policy) | drill 2/2 green + suite 160/160 + gates clean; design note (comment 6622559442) + RED evidence (6622559726) on the issue; closes #47 on push | this commit |
 
 ## 10. Security
 
@@ -482,6 +507,14 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
   `mkdir -p .secrets && chmod 700 .secrets && echo 'NEW_TOKEN' > .secrets/gh_token && chmod 600 .secrets/gh_token`
   (never commit this file; scopes needed: repo contents read/write, issues read/write,
   metadata read).
+- **2026-11-04 (late): the recycle wiped `.secrets/` a FOURTH time** — token re-pasted by
+  the owner and restored (7th restore, still gitignored `chmod 600`). **The token has now
+  been pasted into chat 7 times — ROTATE IT at
+  <https://github.com/settings/personal-access-tokens> at the next break**; after
+  rotating: `mkdir -p .secrets && chmod 700 .secrets && echo 'NEW_TOKEN' >
+  .secrets/gh_token && chmod 600 .secrets/gh_token`. The Kaggle token below was ALSO
+  wiped by this recycle and still needs the owner to re-paste it before any
+  `kaggle_push.sh` run.
 - **2026-11-04: the recycle wiped `.secrets/` a third time** — token restored from the
   session record (6th restore, same value, still gitignored `chmod 600`; rotation still
   advised). The owner's **Kaggle API token is now stored as `.secrets/kaggle_token`**
