@@ -227,6 +227,21 @@ pub struct TusAdapter {
     /// partials run concurrently: the SESSION stays sequential, the LANE
     /// is parallel. Lazily sized per endpoint.
     partial_locks: Mutex<HashMap<String, Vec<std::sync::Arc<AsyncMutex<()>>>>>,
+    /// Bonded paths (issue #51): partial *i* rides bond `i % P` — its
+    /// creation POST and every PATCH/HEAD go out that bond's client
+    /// (source-bound; multi-NIC routing) toward that bond's endpoint
+    /// override (the drill rig's per-bearer proxy; production single-
+    /// endpoint hosts leave it `None`). EMPTY = single-path mode:
+    /// everything rides `client` exactly as before (#50 unchanged).
+    bonds: Vec<Bond>,
+}
+
+/// One bonded path's HTTP surface (issue #51).
+struct Bond {
+    client: reqwest::Client,
+    /// Endpoint override for this path's sessions (`None` = the job's
+    /// endpoint — the production shape).
+    endpoint: Option<String>,
 }
 
 impl TusAdapter {
@@ -248,13 +263,69 @@ impl TusAdapter {
     /// observable in seconds (tests/tus_slow_lane.rs).
     pub fn with_idle(idle: Duration) -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(30))
-                .read_timeout(idle)
-                .build()
-                .expect("reqwest client builds"),
+            client: Self::build_client(idle, None),
             sessions: Mutex::new(HashMap::new()),
             partial_locks: Mutex::new(HashMap::new()),
+            bonds: Vec::new(),
+        }
+    }
+
+    fn build_client(idle: Duration, path: Option<&crate::netpath::NetPath>) -> reqwest::Client {
+        let builder = match path {
+            None => Ok(reqwest::Client::builder()),
+            Some(p) => crate::netpath::client_builder(p),
+        };
+        builder
+            .unwrap_or_else(|e| {
+                panic!(
+                    "bonded client for '{}' cannot be declared on this OS: {e}",
+                    path.map(|p| p.name()).unwrap_or_default()
+                )
+            })
+            .connect_timeout(Duration::from_secs(30))
+            .read_timeout(idle)
+            .build()
+            .expect("reqwest client builds")
+    }
+
+    /// A fresh adapter whose CONCAT lane rides bonded paths (issue #51):
+    /// partial *i* is created via bond `i % P` — its `Location` (the
+    /// server's Host echo) pins every later PATCH/HEAD to the same
+    /// bearer, and the source binding routes the packets the same way in
+    /// production (one endpoint, many NICs). The classic lane and the
+    /// final materialization stay on the default client (one session =
+    /// one path; the final POST is a single request on any bearer).
+    ///
+    /// `(NetPath, Option<endpoint>)`: the override exists for drills
+    /// where each bearer is its own proxy in front of one tusd.
+    pub fn with_bonds(
+        bonds: Vec<(crate::netpath::NetPath, Option<String>)>,
+    ) -> Result<Self, crate::netpath::PathError> {
+        let mut built = Vec::with_capacity(bonds.len());
+        for (path, endpoint) in bonds {
+            let client = crate::netpath::client_builder(&path)?
+                .connect_timeout(Duration::from_secs(30))
+                .read_timeout(TUS_IDLE_TIMEOUT)
+                .build()?;
+            built.push(Bond { client, endpoint });
+        }
+        Ok(Self {
+            client: Self::build_client(TUS_IDLE_TIMEOUT, None),
+            sessions: Mutex::new(HashMap::new()),
+            partial_locks: Mutex::new(HashMap::new()),
+            bonds: built,
+        })
+    }
+
+    /// Bond `i`'s HTTP surface: (client, endpoint override). Single-path
+    /// mode (no bonds) = (the default client, None) — byte-for-byte the
+    /// pre-#51 routing.
+    fn bond(&self, i: usize) -> (&reqwest::Client, Option<&str>) {
+        if self.bonds.is_empty() {
+            (&self.client, None)
+        } else {
+            let b = &self.bonds[i % self.bonds.len()];
+            (&b.client, b.endpoint.as_deref())
         }
     }
 
@@ -388,10 +459,21 @@ impl TusAdapter {
 
     /// Create ONE partial session (issue #50 fact 2): `Upload-Concat:
     /// partial` + the range's `Upload-Length` → `201` + `Location`.
-    async fn create_partial(&self, spec: &JobSpec, length: u64) -> Result<String, AdapterError> {
-        let resp = self
-            .client
-            .post(&spec.endpoint)
+    /// Create ONE partial session (issue #50 fact 2): `Upload-Concat:
+    /// partial` + the range's `Upload-Length` → `201` + `Location`.
+    /// Bonded (issue #51): bond `bond_idx`'s client + endpoint override —
+    /// the creation decides the partial's bearer for life (the server's
+    /// Location echoes the Host this POST arrived on).
+    async fn create_partial(
+        &self,
+        spec: &JobSpec,
+        bond_idx: usize,
+        length: u64,
+    ) -> Result<String, AdapterError> {
+        let (client, endpoint_override) = self.bond(bond_idx);
+        let endpoint = endpoint_override.unwrap_or(&spec.endpoint);
+        let resp = client
+            .post(endpoint)
             .header("Tus-Resumable", TUS_VERSION)
             .header("Upload-Concat", "partial")
             .header("Upload-Length", length.to_string())
@@ -408,11 +490,11 @@ impl TusAdapter {
                         AdapterError::Unknown("201 partial creation without a Location".into())
                     })?
                     .to_string();
-                Ok(resolve_location(&spec.endpoint, &raw))
+                Ok(resolve_location(endpoint, &raw))
             }
             404 | 410 => Err(AdapterError::SessionLost(format!(
                 "creation endpoint {} is gone ({})",
-                spec.endpoint,
+                endpoint,
                 resp.status()
             ))),
             412 => Err(AdapterError::Unknown(
@@ -434,8 +516,17 @@ impl TusAdapter {
     /// `HEAD <loc>` → `(Upload-Length, Upload-Offset)`. The offset is the
     /// server's durable truth; the length is what creation declared.
     async fn head(&self, location: &str) -> Result<(u64, u64), AdapterError> {
-        let resp = self
-            .client
+        self.head_via(&self.client, location).await
+    }
+
+    /// `head` over a specific bond's client (issue #51): the partial's
+    /// own path rides its own bearer for the alignment HEAD too.
+    async fn head_via(
+        &self,
+        client: &reqwest::Client,
+        location: &str,
+    ) -> Result<(u64, u64), AdapterError> {
+        let resp = client
             .head(location)
             .header("Tus-Resumable", TUS_VERSION)
             .send()
@@ -480,6 +571,30 @@ impl TusAdapter {
         end: u64,
         progress: &ProgressReporter,
     ) -> Result<u64, PatchFailure> {
+        self.patch_via(
+            &self.client,
+            spec,
+            location,
+            upload_offset,
+            source_offset,
+            end,
+            progress,
+        )
+        .await
+    }
+
+    /// `patch` over a specific bond's client (issue #51).
+    #[allow(clippy::too_many_arguments)]
+    async fn patch_via(
+        &self,
+        client: &reqwest::Client,
+        spec: &JobSpec,
+        location: &str,
+        upload_offset: u64,
+        source_offset: u64,
+        end: u64,
+        progress: &ProgressReporter,
+    ) -> Result<u64, PatchFailure> {
         let span = end - upload_offset;
         let mut file = tokio::fs::File::open(&spec.source_path)
             .await
@@ -498,8 +613,7 @@ impl TusAdapter {
             BytesCodec::new(),
         ));
 
-        let resp = match self
-            .client
+        let resp = match client
             .patch(location)
             .header("Tus-Resumable", TUS_VERSION)
             .header("Upload-Offset", upload_offset.to_string())
@@ -532,7 +646,7 @@ impl TusAdapter {
                 //   — the PATCH took nothing — or HEAD failing too) →
                 //   Transient: a genuine wire problem, retries counted.
                 let msg = e.to_string();
-                return Err(match self.head(location).await {
+                return Err(match self.head_via(client, location).await {
                     Err(AdapterError::SessionLost(_)) => {
                         PatchFailure::Adapter(AdapterError::SessionLost(format!(
                             "PATCH transport-failed and HEAD confirms the session is gone: {msg}"
@@ -595,21 +709,27 @@ impl TusAdapter {
     /// exactly once, and the confirm counts ONLY this segment's span —
     /// the accounting stays per-call honest (issue #37's arithmetic,
     /// scoped per segment).
+    #[allow(clippy::too_many_arguments)] // (spec, partial, lock, span, base) — the concat shape
     async fn push_segment(
         &self,
         spec: &JobSpec,
+        partial_idx: usize,
         partial_url: &str,
         lock: &AsyncMutex<()>,
         seg: (u64, u64),
         base: u64,
         progress: &ProgressReporter,
     ) -> Result<u64, AdapterError> {
+        // The partial's OWN bond (issue #51): its HEADs and PATCHes ride
+        // the bearer its creation chose (Location echo) via the same
+        // source-bound client.
+        let (client, _) = self.bond(partial_idx);
         let _guard = lock.lock().await;
         let local_end = seg.1 - base;
 
         // THE ENTRY HEAD — per session (the #43 discipline, concat edition):
         // the journal can be behind THIS partial's server truth.
-        let (_, entry) = self.head(partial_url).await?;
+        let (_, entry) = self.head_via(client, partial_url).await?;
         // Confirm-before-send: this partial already holds the whole segment.
         if entry >= local_end {
             return Ok(seg.1 - seg.0);
@@ -620,7 +740,15 @@ impl TusAdapter {
         let mut realigns: u32 = 0;
         let final_local = loop {
             match self
-                .patch(spec, partial_url, from, base + from, local_end, progress)
+                .patch_via(
+                    client,
+                    spec,
+                    partial_url,
+                    from,
+                    base + from,
+                    local_end,
+                    progress,
+                )
                 .await
             {
                 Ok(offset) => break offset,
@@ -722,8 +850,10 @@ impl TransferAdapter for TusAdapter {
         let n = fleet_seed.clamp(1, max_useful);
         let partition = concat_partition(spec.source_size, n);
         let mut partials = Vec::with_capacity(partition.len());
-        for (start, end) in &partition {
-            partials.push(self.create_partial(spec, end - start).await?);
+        for (i, (start, end)) in partition.iter().enumerate() {
+            // Bonded lane (issue #51): partial i rides bond i % P — the
+            // creation POST decides the bearer for the session's life.
+            partials.push(self.create_partial(spec, i, end - start).await?);
         }
         let token = encode_concat_token(&partials, None);
         self.sessions
@@ -858,7 +988,7 @@ impl TransferAdapter for TusAdapter {
                     continue; // this partial's range is outside the lease
                 }
                 confirmed += self
-                    .push_segment(spec, &partials[i], &locks[i], (rs, re), base, progress)
+                    .push_segment(spec, i, &partials[i], &locks[i], (rs, re), base, progress)
                     .await?;
                 advanced.push(i);
             }

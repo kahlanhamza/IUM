@@ -48,6 +48,7 @@ pub mod eviction;
 pub mod fleet;
 pub mod journal;
 pub mod manager;
+pub mod netpath;
 pub mod prober;
 pub mod retry;
 pub mod state;

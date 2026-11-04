@@ -99,10 +99,7 @@ pub async fn probe_link(
         .expect("prober client builds");
 
     // -- Phase 1: single stream ------------------------------------------------
-    let t0 = Instant::now();
-    let session = create_session(&client, endpoint, canary).await?;
-    patch_canary(&client, &session, source, 0, canary).await?;
-    let s1 = canary as f64 / t0.elapsed().as_secs_f64().max(1e-9);
+    let s1 = probe_single_with(&client, source, endpoint, canary).await?;
 
     // -- Phase 2: K independent sessions, concurrently -------------------------
     // Each session carries canary/K: the AGGREGATE phase moves the same
@@ -151,6 +148,47 @@ pub async fn probe_link(
         recommended_piece_bytes: piece,
         recommended_fleet: fleet,
     })
+}
+
+/// The K=1 phase against a READY client: one canary session, one PATCH,
+/// the single-stream goodput (bytes/second). Shared by `probe_link`'s
+/// phase 1 and the per-path prober — the same canary honesty (ADR-009:
+/// the payload's own prefix, never synthetic zeros).
+async fn probe_single_with(
+    client: &reqwest::Client,
+    source: &Path,
+    endpoint: &str,
+    canary: u64,
+) -> std::io::Result<f64> {
+    let t0 = Instant::now();
+    let session = create_session(client, endpoint, canary).await?;
+    patch_canary(client, &session, source, 0, canary).await?;
+    Ok(canary as f64 / t0.elapsed().as_secs_f64().max(1e-9))
+}
+
+/// The per-path prober (issue #51): `probe_link`'s K=1 phase over ONE
+/// bound path. A path that cannot carry the canary returns `Err` — the
+/// planner maps that to 0 bps, excludes it, and journals
+/// `path_excluded`; a live path returns its measured single-stream bps.
+///
+/// Canary sizing: the same ~10 s-of-wire default as `probe_link` (no
+/// hint — the paths are probed before any aggregate knowledge exists).
+pub async fn probe_path(
+    path: &crate::netpath::NetPath,
+    source: &Path,
+    source_size: u64,
+    endpoint: &str,
+) -> std::io::Result<f64> {
+    let canary = (64 * 1024)
+        .clamp(CANARY_MIN, CANARY_MAX)
+        .min(source_size.max(1));
+    let client = crate::netpath::client_builder(path)
+        .map_err(|e| std::io::Error::other(format!("path client: {e}")))?
+        .connect_timeout(Duration::from_secs(30))
+        .read_timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| std::io::Error::other(format!("prober client: {e}")))?;
+    probe_single_with(&client, source, endpoint, canary).await
 }
 
 async fn create_session(

@@ -670,6 +670,57 @@ impl JobManager {
                         );
                     }
                 }
+                // Issue #51 (M8 rung 4): the multi-path plan — the same
+                // deliberate instrument as the link prober above (every
+                // probe byte is sacred), driven by the operator's path
+                // list (IUM_PATHS: comma-separated specs — "auto"
+                // discovers from /sys/class/net, "addr:IP"/IP literal,
+                // "iface:NAME"/bare name, "default"). Each declared path
+                // is probed K=1 with its OWN canary bytes (ADR-009); a
+                // path that cannot carry the canary is EXCLUDED and
+                // journaled (`path_excluded`, 0 bps in the plan); the
+                // weights are the plan the bonded lanes ride. A probe
+                // failure is a lost MEASUREMENT, never a lost job — and
+                // with no paths declared this block does not exist:
+                // degradation IS today's behavior.
+                if probe.resumable {
+                    let paths = Self::declared_paths();
+                    if !paths.is_empty() {
+                        let mut bps = Vec::with_capacity(paths.len());
+                        for p in &paths {
+                            match crate::prober::probe_path(
+                                p,
+                                std::path::Path::new(&spec.source_path),
+                                spec.source_size,
+                                &spec.endpoint,
+                            )
+                            .await
+                            {
+                                Ok(b) => bps.push(b),
+                                Err(e) => {
+                                    let _ = self.j().append_event(
+                                        job_id,
+                                        "path_excluded",
+                                        &serde_json::json!({
+                                            "path": p.name(),
+                                            "why": e.to_string(),
+                                        }),
+                                    );
+                                    bps.push(0.0);
+                                }
+                            }
+                        }
+                        let plan = crate::netpath::plan_weights(&paths, &bps)
+                            .unwrap_or_else(|i| match i {});
+                        self.j()
+                            .append_event(
+                                job_id,
+                                "path_plan",
+                                &crate::netpath::journal_payload(&plan, &bps),
+                            )
+                            .map_err(EngineError::from)?;
+                    }
+                }
             }
             // Tolerate a cancel that raced the probe: the journal is the
             // truth, and Canceled → Running is not a legal arrow.
@@ -857,16 +908,42 @@ impl JobManager {
     /// of how many concurrent streams the link actually multiplies to. The
     /// seed composes at `AdaptiveFleet::seeded` time; live adaptation
     /// happens inside the adaptive value afterwards (#49).
+    ///
+    /// Issue #51: a journaled `path_plan` COMPOSES the seed — each live
+    /// path is its own bearer (independently probed bps), so the system's
+    /// stream count is per-path fleet × live paths. The single-link
+    /// profile alone would understate a bonded lane (its measurement rode
+    /// one bearer) and park the lane the bonding exists to un-park. The
+    /// AIMD still governs live: a fake second bearer fails to double the
+    /// progress and the adaptive value falls back on its own.
     fn measured_fleet(&self, job_id: &str) -> Option<u32> {
-        self.j()
-            .events_for(job_id)
-            .ok()?
-            .into_iter()
+        let events = self.j().events_for(job_id).ok()?;
+        let fleet = events
+            .iter()
             .rev()
             .find(|(_, kind, _)| kind == crate::prober::LINK_PROFILE_EVENT)
-            .and_then(|(_, _, payload)| serde_json::from_str::<serde_json::Value>(&payload).ok())
+            .and_then(|(_, _, payload)| serde_json::from_str::<serde_json::Value>(payload).ok())
             .and_then(|v| v.get("recommended_fleet").cloned())
-            .and_then(|v| v.as_u64().map(|n| n as u32))
+            .and_then(|v| v.as_u64().map(|n| n as u32))?;
+        let plan = events
+            .iter()
+            .rev()
+            .find(|(_, kind, _)| kind == "path_plan")
+            .and_then(|(_, _, payload)| serde_json::from_str::<serde_json::Value>(payload).ok());
+        let live = plan
+            .as_ref()
+            .and_then(|p| p.get("paths").and_then(|v| v.as_array()))
+            .map(|paths| {
+                paths
+                    .iter()
+                    .filter(|p| !p.get("excluded").and_then(|e| e.as_bool()).unwrap_or(false))
+                    .count()
+            })
+            .unwrap_or(0);
+        Some(crate::netpath::compose_tus_partials(
+            fleet,
+            live.max(1) as u32,
+        ))
     }
 
     /// Issue #50: run the adapter's finalize EXACTLY once per job —
@@ -988,6 +1065,30 @@ impl JobManager {
         std::env::var_os("IUM_LINK_PROBE")
             .map(|v| v == "1")
             .unwrap_or(false)
+    }
+
+    /// The operator's declared upload paths (issue #51): `IUM_PATHS`,
+    /// comma-separated `netpath::parse_spec` entries — "auto" discovers
+    /// from `/sys/class/net` (UP ifaces, loopback excluded). Empty or an
+    /// unset variable = no bonding: the plan block never runs and the
+    /// job proceeds exactly as before (the degradation rule).
+    fn declared_paths() -> Vec<crate::netpath::NetPath> {
+        let raw = std::env::var("IUM_PATHS").unwrap_or_default();
+        let specs: Vec<&str> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if specs.is_empty() {
+            return Vec::new();
+        }
+        if specs.iter().any(|s| s.eq_ignore_ascii_case("auto")) {
+            return crate::netpath::discover(None);
+        }
+        specs
+            .iter()
+            .map(|s| crate::netpath::parse_spec(s))
+            .collect()
     }
 
     /// The transfer loop (Sprint 1: concurrent workers over one shared pool).

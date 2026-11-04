@@ -40,10 +40,14 @@ WITH_DIR="${TUS_UPLOAD_DIR:-}"
 # (tests/concat_measurement.rs, issue #55) — the managed drive loop through
 # the throttling proxy: prober classification + the lane's aggregate, three
 # legs (~90 s at the drill's 64 KiB/s rates); tusd-canonical like --concat.
+# --multipath: also run the bonding drill (tests/netpath_drill.rs, issue
+# #51) — two source-bound paths through per-bearer throttling proxies,
+# the M8 sum measurement (~75 s); tusd-canonical like --measure.
 WITH_DRILL=0
 WITH_REAL=0
 WITH_CONCAT=0
 WITH_MEASURE=0
+WITH_MULTIPATH=0
 say() { echo "[tus-test] $*"; }
 die() { echo "[tus-test] FAIL: $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
@@ -59,6 +63,7 @@ while [ $# -gt 0 ]; do
     --with-real) WITH_REAL=1 ;;
     --concat) WITH_CONCAT=1 ;;
     --measure) WITH_MEASURE=1 ;;
+    --multipath) WITH_MULTIPATH=1 ;;
     *) die "unknown flag: $1" ;;
   esac
   shift
@@ -74,6 +79,10 @@ fi
 
 if [ "$WITH_MEASURE" = 1 ] && [ "$SERVER" != "tusd" ]; then
   die "--measure is tusd-canonical (the concatenation lane is what's measured, #55)"
+fi
+
+if [ "$WITH_MULTIPATH" = 1 ] && [ "$SERVER" != "tusd" ]; then
+  die "--multipath is tusd-canonical (the bonded concat lane is what's summed, #51)"
 fi
 
 PY=python3
@@ -185,6 +194,11 @@ fi
 if [ "$WITH_MEASURE" = 1 ]; then
   say "running aggregate-vs-single measurement drill (concat_measurement, issue #55)"
   IUM_CONCAT_MEASURE=1 cargo test -p ium-core --test concat_measurement -- --nocapture
+fi
+
+if [ "$WITH_MULTIPATH" = 1 ]; then
+  say "running bonding drill (netpath_drill, issue #51) — the M8 sum measurement"
+  IUM_MULTIPATH=1 cargo test -p ium-core --test netpath_drill -- --nocapture
 fi
 
 if [ "$WITH_REAL" = 1 ]; then

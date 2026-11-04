@@ -1,0 +1,13 @@
+[package]
+name = "wirefacts51"
+version = "0.1.0"
+edition = "2021"
+
+# standalone probe — deliberately NOT a workspace member
+[workspace]
+
+[dependencies]
+socket2 = { version = "0.6", features = ["all"] }
+
+[profile.dev]
+opt-level = 1
