@@ -11,6 +11,9 @@
 //! * [`supervisor::Supervisor`] — spawn/pause/resume/cancel over one manager
 //! * [`retry::RetryPolicy`] — per-error-class retry decisions
 //! * [`eviction::EvictionPolicy`] — slow-connection eviction tuning (spec §4.2)
+//! * [`fleet`] — the fleet decision algebra: measured seed (M8 #48) + live
+//!   AIMD adaptation (M8 #49) — the engine answers the link's swings in BOTH
+//!   directions
 //!
 //! ## Invariants (ADR-pinned, enforced by the test suite)
 //!
@@ -42,6 +45,7 @@ pub mod adapter_s3;
 pub mod adapter_tus;
 pub mod chunk;
 pub mod eviction;
+pub mod fleet;
 pub mod journal;
 pub mod manager;
 pub mod prober;
@@ -58,6 +62,7 @@ pub use adapter_s3::{S3MultipartAdapter, S3MultipartConfig};
 pub use adapter_tus::TusAdapter;
 pub use chunk::{Chunk, ChunkPool, ChunkState, Lease};
 pub use eviction::EvictionPolicy;
+pub use fleet::{AdaptiveFleet, FleetChange, FleetReason};
 pub use ids::new_id;
 pub use journal::{ChunkRow, JobRecord, SessionJournal};
 pub use manager::{JobManager, JobSnapshot};

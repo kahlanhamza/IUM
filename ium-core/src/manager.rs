@@ -52,6 +52,17 @@ const MAX_WORKERS: usize = 32;
 /// snapshot the pool and break to the loud verify gate instead of spinning.
 const MAX_IDLE_RECLAIM_ROUNDS: u32 = 3;
 
+/// Issue #49: the evidence window — how often the driver's ticker folds
+/// completed-call evidence into a fleet decision. 1 s: long enough to
+/// collect several calls on any real link, short enough to follow the
+/// owner's 54x swing within seconds.
+const EVIDENCE_WINDOW: Duration = Duration::from_secs(1);
+
+/// Issue #49: how often a PARKED worker re-checks the pool on its own (the
+/// growth watch is push-driven; the poll only guarantees that a parked
+/// worker notices pool exhaustion and exits through the normal path).
+const PARK_POLL: Duration = Duration::from_millis(250);
+
 /// UI-facing snapshot of a job (spec §8 transparency): the journal's job
 /// row, its chunk rows and its event trail, read fresh — the UI NEVER
 /// computes transfer state itself (spec §2.3).
@@ -156,6 +167,16 @@ struct DriveShared {
     /// 41571828134 — resetting the clock each retry); the JOB is the unit
     /// that starves.
     first_lease_started: Arc<Mutex<Option<Instant>>>,
+    /// Issue #49 (M8 rung 2): the LIVE fleet waterline. Workers at or above
+    /// it park at their lease boundary and wake when it rises — shrink and
+    /// growth both take effect MID-round. Seeded journal-first (#48), moved
+    /// by the driver's evidence ticker.
+    fleet_rx: watch::Receiver<u32>,
+    /// Issue #49: completed-call evidence — (Instant, server-confirmed
+    /// bytes, counted error) per finished upload call. The ticker drains it
+    /// once per window; Busy waits and stale drops record nothing (a wait
+    /// is not a completed call, a stranger's error is not ours).
+    evidence: Arc<Mutex<Vec<(Instant, u64, bool)>>>,
 }
 
 impl JobManager {
@@ -573,6 +594,50 @@ impl JobManager {
             if let Some(cap) = probe.max_chunk_bytes.filter(|_| probe.resumable) {
                 self.apply_chunk_cap(job_id, cap)?;
             }
+            // Issue #48 (M8 rung 1): the link prober, WIRED. Opt-in via
+            // IUM_LINK_PROBE=1 — every byte is sacred on a metered bearer,
+            // so the prober is a deliberate instrument (the drill and the
+            // shell enable it explicitly). tus-shaped resumable lanes only:
+            // the prober speaks the tus wire. A failed probe is a lost
+            // MEASUREMENT, never a lost job — the skip is journaled and the
+            // job proceeds exactly as before.
+            if spec.adapter == "tus" && probe.resumable && Self::link_probe_requested() {
+                match crate::prober::probe_link(
+                    std::path::Path::new(&spec.source_path),
+                    spec.source_size,
+                    &spec.endpoint,
+                    4,
+                    None,
+                )
+                .await
+                {
+                    Ok(profile) => {
+                        self.j()
+                            .append_event(
+                                job_id,
+                                crate::prober::LINK_PROFILE_EVENT,
+                                &crate::prober::journal_payload(&profile),
+                            )
+                            .map_err(EngineError::from)?;
+                        // The planner OBEYS the measurement — the same
+                        // all-Pending journal-verified boundary as #8's cap
+                        // replan, composed with the adapter's per-call cap
+                        // (ADR-011 wins ties).
+                        self.apply_measured_piece(
+                            job_id,
+                            profile.recommended_piece_bytes,
+                            probe.max_chunk_bytes,
+                        )?;
+                    }
+                    Err(e) => {
+                        let _ = self.j().append_event(
+                            job_id,
+                            "link_profile_skipped",
+                            &serde_json::json!({ "reason": e.to_string() }),
+                        );
+                    }
+                }
+            }
             // Tolerate a cancel that raced the probe: the journal is the
             // truth, and Canceled → Running is not a legal arrow.
             record.state = self
@@ -648,6 +713,67 @@ impl JobManager {
         Ok(())
     }
 
+    /// Consume the prober's measured piece (issue #48, M8 rung 1): re-plan
+    /// the pool so pieces match ~20 s of the MEASURED wire. Shrink AND grow
+    /// bind here — this is the PLAN phase (nothing confirmed, nothing to
+    /// lose); #27's grow rejection is about MID-FLIGHT resplits, a different
+    /// regime with live leases and abandoned prefixes. Composed with the
+    /// adapter's per-call cap (ADR-011 wins): the measured piece never
+    /// overrides a tighter protocol ceiling. Same journal-verified
+    /// all-Pending boundary as `apply_chunk_cap`; a measurement that agrees
+    /// with the plan is a byte-identical no-op.
+    fn apply_measured_piece(
+        &self,
+        job_id: &str,
+        recommended: u64,
+        adapter_cap: Option<u64>,
+    ) -> Result<()> {
+        let job = self.require_job(job_id)?;
+        if job.source_size == 0 {
+            return Ok(()); // the [(0,0)] plan has no piece to re-shape
+        }
+        let target = adapter_cap.map_or(recommended, |cap| recommended.min(cap));
+        if target == 0 {
+            return Ok(());
+        }
+        let chunks = self.j().load_chunks(job_id).map_err(EngineError::from)?;
+        let untouched = chunks
+            .iter()
+            .all(|c| c.state == ChunkState::Pending && c.bytes_confirmed == 0);
+        if !untouched {
+            return Ok(());
+        }
+        let before = chunks.len() as u64;
+        let n_target = job.source_size.div_ceil(target);
+        if n_target == before {
+            return Ok(()); // the measurement agrees with the plan
+        }
+        let direction = if n_target < before { "grow" } else { "shrink" };
+        let pool = ChunkPool::new_capped_floor(
+            job.source_size,
+            n_target.min(u32::MAX as u64) as u32,
+            self.declared_lane_floor(job_id),
+            None,
+        );
+        self.j()
+            .replace_chunks(job_id, &pool.rows())
+            .map_err(EngineError::from)?;
+        self.j()
+            .append_event(
+                job_id,
+                "replan_measured",
+                &serde_json::json!({
+                    "recommended_piece": recommended,
+                    "applied_piece": target,
+                    "direction": direction,
+                    "before": before,
+                    "after": pool.chunks().len(),
+                }),
+            )
+            .map_err(EngineError::from)?;
+        Ok(())
+    }
+
     /// Consume `ProbeReport.max_parallel` (issue #13, ADR-011 channel):
     /// read the LAST journaled probe event for this job and return the
     /// adapter-declared concurrency ceiling, if any. The clamp is re-derived
@@ -693,6 +819,48 @@ impl JobManager {
             .unwrap_or(crate::chunk::CHUNK_MIN)
     }
 
+    /// Consume the journaled link profile (issue #48, M8 rung 1): the LAST
+    /// `link_profile` event's `recommended_fleet` — the prober's measurement
+    /// of how many concurrent streams the link actually multiplies to. The
+    /// seed composes at `AdaptiveFleet::seeded` time; live adaptation
+    /// happens inside the adaptive value afterwards (#49).
+    fn measured_fleet(&self, job_id: &str) -> Option<u32> {
+        self.j()
+            .events_for(job_id)
+            .ok()?
+            .into_iter()
+            .rev()
+            .find(|(_, kind, _)| kind == crate::prober::LINK_PROFILE_EVENT)
+            .and_then(|(_, _, payload)| serde_json::from_str::<serde_json::Value>(&payload).ok())
+            .and_then(|v| v.get("recommended_fleet").cloned())
+            .and_then(|v| v.as_u64().map(|n| n as u32))
+    }
+
+    /// Consume the LAST journaled fleet decision (issue #49): a fresh
+    /// manager seeds its AIMD where the crashed one left off — the journal
+    /// is the only truth (ADR-002), no process memory survives a restart.
+    fn last_fleet_adjusted(&self, job_id: &str) -> Option<u32> {
+        self.j()
+            .events_for(job_id)
+            .ok()?
+            .into_iter()
+            .rev()
+            .find(|(_, kind, _)| kind == "fleet_adjusted")
+            .and_then(|(_, _, payload)| serde_json::from_str::<serde_json::Value>(&payload).ok())
+            .and_then(|v| v.get("to").cloned())
+            .and_then(|v| v.as_u64().map(|n| n as u32))
+    }
+
+    /// The prober's opt-in switch (issue #48): `IUM_LINK_PROBE=1`. Every
+    /// byte is sacred on a metered bearer — the prober is a deliberate
+    /// instrument (the drill and the shell enable it explicitly), not
+    /// ambient traffic.
+    fn link_probe_requested() -> bool {
+        std::env::var_os("IUM_LINK_PROBE")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+    }
+
     /// The transfer loop (Sprint 1: concurrent workers over one shared pool).
     ///
     /// Each round: reload the pool from the journal (reclaiming leases left
@@ -721,6 +889,29 @@ impl JobManager {
         let best_live_bps = Arc::new(AtomicU64::new(0));
         let failed = Arc::new(AtomicBool::new(false));
         let paused_seen = Arc::new(AtomicBool::new(false));
+        // Issues #48+#49 (M8 rungs 1–2): the adaptive fleet. SEEDED from the
+        // journal — the last decision, else the prober's measurement, else
+        // the ceiling — clamped to what THIS job can use (a 3-piece job has
+        // no business carrying a 32-wide waterline), and stepped once per
+        // evidence window by the round's ticker. Resume-safe (ADR-002).
+        let seed_ceiling = (MAX_WORKERS as u32).min(
+            self.declared_max_parallel(job_id)
+                .unwrap_or(MAX_WORKERS as u32)
+                .max(1),
+        );
+        let initial_pending = self
+            .load_pool(job_id)?
+            .chunks()
+            .iter()
+            .filter(|c| c.state == ChunkState::Pending)
+            .count() as u32;
+        let aimd = Arc::new(Mutex::new(crate::fleet::AdaptiveFleet::seeded(
+            self.last_fleet_adjusted(job_id)
+                .or_else(|| self.measured_fleet(job_id))
+                .unwrap_or(seed_ceiling)
+                .min(seed_ceiling)
+                .min(initial_pending.max(1)),
+        )));
 
         let mut idle_reclaims: u32 = 0;
         loop {
@@ -786,11 +977,57 @@ impl JobManager {
             // probe event each round. A declared 0 is nonsense and clamps to
             // 1 — a violated floor costs requests, a violated limit fails
             // uploads, so a nonsensical declaration cannot spin the fleet.
+            // Issue #49: the round spawns the full ceiling-worth of workers;
+            // the LIVE waterline (`fleet_rx`, seeded from the measured
+            // profile #48) parks the surplus at their lease boundaries and
+            // grows them back — adaptation happens MID-round.
             let declared = self
                 .declared_max_parallel(job_id)
                 .unwrap_or(MAX_WORKERS as u32)
                 .max(1) as usize;
-            let fleet = pending.min(MAX_WORKERS).min(declared);
+            let ceiling = declared.min(MAX_WORKERS);
+            let fleet = pending.min(ceiling).max(1);
+            // Issue #49: the evidence window + the live waterline. The
+            // ticker evaluates one window per tick and moves the waterline;
+            // every decision lands in `changes` and is journaled by the
+            // driver at round end (the ticker holds no journal handle — a
+            // crash mid-round loses at most that round's decisions, and the
+            // seed re-derives from the last durable one).
+            let evidence: Arc<Mutex<Vec<(Instant, u64, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+            let (fleet_tx, fleet_rx) =
+                watch::channel(aimd.lock().expect("aimd poisoned").current());
+            let changes: Arc<Mutex<Vec<crate::fleet::FleetChange>>> =
+                Arc::new(Mutex::new(Vec::new()));
+            let ticker = {
+                let evidence = evidence.clone();
+                let changes = changes.clone();
+                let fleet_tx = fleet_tx.clone();
+                let aimd = aimd.clone();
+                let ceiling_u32 = ceiling as u32;
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(EVIDENCE_WINDOW).await;
+                        let entries: Vec<(Instant, u64, bool)> = {
+                            let mut ev = evidence.lock().expect("evidence poisoned");
+                            std::mem::take(&mut *ev)
+                        };
+                        let calls = entries.len() as u32;
+                        let errors = entries.iter().filter(|(_, _, err)| *err).count() as u32;
+                        let bytes: u64 = entries.iter().map(|(_, b, _)| *b).sum();
+                        let mut aimd = aimd.lock().expect("aimd poisoned");
+                        if let Some(change) = aimd.step(
+                            bytes,
+                            EVIDENCE_WINDOW.as_secs_f64(),
+                            calls,
+                            errors,
+                            ceiling_u32,
+                        ) {
+                            let _ = fleet_tx.send(aimd.current());
+                            changes.lock().expect("changes poisoned").push(change);
+                        }
+                    }
+                })
+            };
 
             let shared = DriveShared {
                 pool: Arc::new(Mutex::new(pool)),
@@ -808,6 +1045,8 @@ impl JobManager {
                 resplit_rx: resplit_rx.clone(),
                 resplit_tx: resplit_tx.clone(),
                 resplit_in_flight: Arc::new(AtomicBool::new(false)),
+                fleet_rx: fleet_rx.clone(),
+                evidence: evidence.clone(),
             };
             let futs: Vec<_> = (0..fleet)
                 .map(|w| {
@@ -816,12 +1055,14 @@ impl JobManager {
                     let shared: &DriveShared = &shared;
                     let adapter: &Arc<dyn TransferAdapter> = &adapter;
                     async move {
-                        self.run_worker(shared, job_id, spec, adapter, &worker_id)
+                        self.run_worker(shared, job_id, spec, adapter, &worker_id, w)
                             .await
                     }
                 })
                 .collect();
             let results = join_all(futs).await;
+            // Issue #49: the ticker's watch term ends with the round.
+            ticker.abort();
 
             if let Some(err) = results.into_iter().find_map(|r| r.err()) {
                 return Err(err);
@@ -842,6 +1083,24 @@ impl JobManager {
             // MAX_IDLE_RECLAIM_ROUNDS so a deterministic strand bug fails
             // loudly instead of livelocking.
             let end_pool = self.load_pool(job_id)?;
+            // Issue #49: journal EVERY decision the ticker made this round
+            // (ADR-002: the journal is the truth a fresh manager re-derives
+            // the seed from). The worker-waterline already enforced each
+            // decision live — this is the durable record.
+            for change in changes.lock().expect("changes poisoned").drain(..) {
+                self.j()
+                    .append_event(
+                        job_id,
+                        "fleet_adjusted",
+                        &serde_json::json!({
+                            "from": change.from,
+                            "to": change.to,
+                            "reason": change.reason,
+                            "goodput_bps": change.goodput_bps,
+                        }),
+                    )
+                    .map_err(EngineError::from)?;
+            }
             let stranded: Vec<(u32, u64, Option<String>)> = end_pool
                 .chunks()
                 .iter()
@@ -921,7 +1180,12 @@ impl JobManager {
     /// One cooperative worker of a drive round. Leases from the shared pool,
     /// uploads one chunk at a time, journals every state change. Exits when
     /// the pool is exhausted, on pause, on fleet abort, or on a fatal error
-    /// (after flagging the fleet).
+    /// (after flagging the fleet). Issue #49: a worker ABOVE the live fleet
+    /// waterline parks at this boundary — it neither exits (growth would
+    /// want it back) nor leases (the shrink must bind) — and wakes on the
+    /// waterline moving, the abort, the pause, or a bounded poll (which
+    /// re-checks the pool: once it is exhausted the parked worker exits
+    /// through the normal `lease() → None` path).
     async fn run_worker(
         &self,
         shared: &DriveShared,
@@ -929,12 +1193,14 @@ impl JobManager {
         spec: &JobSpec,
         adapter: &Arc<dyn TransferAdapter>,
         worker_id: &str,
+        worker_index: usize,
     ) -> Result<()> {
         // watch receivers need `&mut` for `changed()`; every worker owns its
         // clone (watch is multi-consumer by design).
         let mut abort_rx = shared.abort_rx.clone();
         let mut resplit_rx = shared.resplit_rx.clone();
         let paused_rx = shared.paused_rx.clone();
+        let mut fleet_rx = shared.fleet_rx.clone();
         loop {
             if *abort_rx.borrow() {
                 return Ok(());
@@ -942,6 +1208,33 @@ impl JobManager {
             if *paused_rx.borrow() {
                 shared.paused_seen.store(true, Ordering::SeqCst);
                 return Ok(());
+            }
+            // Issue #49: over the waterline → park. A ≥ 1 waterline keeps
+            // worker 0 alive, so SOMEONE always drains the pool; a parked
+            // worker exits as soon as nothing leasable remains (all chunks
+            // Done or held by under-waterline peers) — the poll bound makes
+            // that exit bounded even without a waterline change.
+            if worker_index as u32 >= *fleet_rx.borrow() {
+                let nothing_leasable = shared
+                    .pool
+                    .lock()
+                    .expect("pool mutex poisoned")
+                    .chunks()
+                    .iter()
+                    .all(|c| c.state != ChunkState::Pending);
+                if nothing_leasable {
+                    return Ok(());
+                }
+                tokio::select! {
+                    changed = fleet_rx.changed() => {
+                        if changed.is_err() {
+                            return Ok(()); // the round's sender is gone
+                        }
+                    }
+                    _ = abort_rx.changed() => {}
+                    _ = tokio::time::sleep(PARK_POLL) => {}
+                }
+                continue;
             }
             // Issue #47 (the stale-epoch poison): mark the CURRENT resplit
             // epoch as seen BEFORE leasing. The driver never consumes the
@@ -1152,6 +1445,14 @@ impl JobManager {
                     if full {
                         pool.complete(confirm.idx);
                     }
+                    drop(pool);
+                    // Issue #49: THIS call's server-confirmed bytes are the
+                    // evidence window's goodput input.
+                    shared.evidence.lock().expect("evidence poisoned").push((
+                        Instant::now(),
+                        confirm.bytes_confirmed,
+                        false,
+                    ));
                 }
                 Step::Errored(err) => {
                     // Issue #44 drill finding: tus 423 Locked is a WAIT, not a
@@ -1260,6 +1561,17 @@ impl JobManager {
                                 None,
                             )
                             .map_err(EngineError::from)?;
+                        // Issue #49: a COUNTED error is the AIMD error
+                        // signal (Retry/Reattach charges only — Busy waits
+                        // and stale drops are not errors; the fatal Fail
+                        // path never reaches a window boundary).
+                        if charge_budget {
+                            shared.evidence.lock().expect("evidence poisoned").push((
+                                Instant::now(),
+                                0,
+                                true,
+                            ));
+                        }
                         pool.evict(lease.idx, worker_id);
                         // Retry-budget charge under the same lock: a resplit
                         // clears this map when it rebuilds the plan; a stale

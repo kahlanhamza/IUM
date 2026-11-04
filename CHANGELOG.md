@@ -11,6 +11,29 @@ prose. An entry without verifiable issue numbers does not belong here.
 ## [Unreleased]
 
 ### Added
+- #48 — the link prober, WIRED (M8 rung 1): `probe_link` (#41) had zero
+  production callers — the engine never measured, never journaled
+  `link_profile`, never obeyed a recommendation. Now a managed tus job with
+  `IUM_LINK_PROBE=1` measures its link at the probe boundary (paced canaries,
+  real payload bytes, ~10 s of wire per phase), journals the profile exactly
+  once, and the planner OBEYS the measured piece (`replan_measured`, shrink
+  AND grow — plan phase, both directions legal; composed with the adapter's
+  per-call cap, ADR-011 wins). Opt-in by env: every byte is sacred on a
+  metered bearer; a failed probe is a lost measurement (`link_profile_skipped`),
+  never a lost job.
+- #49 — AIMD fleet control (M8 rung 2): the drive waterline is SEEDED from
+  the journal (last `fleet_adjusted` | measured `recommended_fleet` | ceiling,
+  clamped to the job's pending count) and ADAPTED live — a driver-side ticker
+  folds each second's completed-call evidence (server-confirmed bytes, counted
+  errors) into a pure `AdaptiveFleet::step`: multiplicative decrease (×0.7) on
+  an error rate > 0.3, additive increase (+2) while goodput clears the best by
+  8%, −1 on a >10% regression, hard hold at the plateau, feedback gates
+  (≥ 64 KiB AND ≥ 0.5 s for goodput verdicts, ≥ 4 calls for error verdicts).
+  Workers above the waterline PARK at their lease boundary and wake on growth
+  — both directions bind MID-round; every decision is journaled
+  (`fleet_adjusted`) so a fresh manager resumes exactly there (ADR-002). The
+  54×-in-an-hour link swing is finally answered in BOTH directions: shrink
+  was eviction/resplit's job, growth had no owner until now.
 - #32 — real-network impairment models in the stress bench: `throttle_proxy.py`
   gains `--loss PCT` (RTO-scale stalls U(0.2,2.0) s per relayed segment — the
   application-observable of packet loss; a userspace relay cannot drop
