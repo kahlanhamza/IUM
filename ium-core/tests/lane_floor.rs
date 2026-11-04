@@ -68,7 +68,6 @@ async fn tus_probe_declares_the_lane_floor() {
 ///    Busy-wait — is proven by the flow that DID complete (pieces 1-15,
 ///    byte-exact store) and by tus_probe_declares_the_lane_floor.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "RED for #47 — resplit x tus: piece 0's lease row never resolves after the resplit"]
 async fn slow_tus_lane_resplits_below_the_s3_minimum() {
     let span: u64 = 1024 * KIB;
     let mock = TusMock::spawn(vec![], span);

@@ -45,6 +45,13 @@ use crate::{EngineError, JobSpec, Result};
 /// plans one chunk per configured connection, spec §4.1) normally binds first.
 const MAX_WORKERS: usize = 32;
 
+/// Issue #47: bound on consecutive round-end strand reclaims that make ZERO
+/// unconfirmed-byte progress. One reclaim round is the honest self-heal (the
+/// drill's shape: a stranded lease returns to the pool and completes); three
+/// in a row means a driver bug is stranding leases deterministically —
+/// snapshot the pool and break to the loud verify gate instead of spinning.
+const MAX_IDLE_RECLAIM_ROUNDS: u32 = 3;
+
 /// UI-facing snapshot of a job (spec §8 transparency): the journal's job
 /// row, its chunk rows and its event trail, read fresh — the UI NEVER
 /// computes transfer state itself (spec §2.3).
@@ -715,6 +722,7 @@ impl JobManager {
         let failed = Arc::new(AtomicBool::new(false));
         let paused_seen = Arc::new(AtomicBool::new(false));
 
+        let mut idle_reclaims: u32 = 0;
         loop {
             // Cancel is checked FIRST: if the journal says Canceled, the
             // journal is the truth — no new leases, no further transitions.
@@ -763,7 +771,12 @@ impl JobManager {
             if pending == 0 {
                 // Not all uploaded, nothing leasable, nothing reclaimed: an
                 // inconsistent pool. The Finishing gate fails loudly instead
-                // of declaring a lie — do not spin here.
+                // of declaring a lie — do not spin here. Issue #47 acceptance:
+                // the exit leaves EVIDENCE first — the full pool snapshot
+                // lands in the journal ahead of the loud verify gate.
+                if !pool.all_uploaded() {
+                    self.journal_pool_snapshot(job_id, "no_pending_no_leased")?;
+                }
                 break;
             }
             let before = pool.remaining_unconfirmed();
@@ -819,11 +832,63 @@ impl JobManager {
             if paused_seen.load(Ordering::SeqCst) {
                 continue; // loop top journals Paused
             }
+            // Issue #47: reclaim-then-decide. Every worker of the round has
+            // EXITED — any `Leased` row in the journal is definitionally
+            // ownerless within this driver (the round-start reclaim only
+            // sees the state BEFORE the round ran). No exit to Finishing
+            // while a reclaimable lease exists: return the rows to `Pending`
+            // (keeping their confirmed bytes, the same rule the round-start
+            // reclaim applies) and re-arm a fresh round. Bounded by
+            // MAX_IDLE_RECLAIM_ROUNDS so a deterministic strand bug fails
+            // loudly instead of livelocking.
+            let end_pool = self.load_pool(job_id)?;
+            let stranded: Vec<(u32, u64, Option<String>)> = end_pool
+                .chunks()
+                .iter()
+                .filter(|c| c.state == ChunkState::Leased)
+                .map(|c| (c.idx, c.bytes_confirmed, c.adapter_token.clone()))
+                .collect();
+            if !stranded.is_empty() {
+                if idle_reclaims >= MAX_IDLE_RECLAIM_ROUNDS {
+                    self.journal_pool_snapshot(job_id, "round_end_reclaim_bound")?;
+                    break;
+                }
+                idle_reclaims = idle_reclaims.saturating_add(1);
+                for (idx, confirmed, token) in &stranded {
+                    self.j()
+                        .update_chunk(
+                            job_id,
+                            *idx,
+                            ChunkState::Pending,
+                            *confirmed,
+                            token.as_deref(),
+                        )
+                        .map_err(EngineError::from)?;
+                }
+                self.j()
+                    .append_event(
+                        job_id,
+                        "leases_reclaimed",
+                        &serde_json::json!({
+                            "when": "round_end",
+                            "idxs": stranded.iter().map(|(idx, _, _)| idx).collect::<Vec<_>>(),
+                        }),
+                    )
+                    .map_err(EngineError::from)?;
+                continue;
+            }
             // Spin guard: a round that moved nothing would loop forever.
-            let after = self.load_pool(job_id)?.remaining_unconfirmed();
+            let after = end_pool.remaining_unconfirmed();
             if after == before {
+                // Issue #47 acceptance: an exit that leaves non-uploaded
+                // bytes must leave EVIDENCE — the full pool snapshot goes
+                // to the journal ahead of the loud verify gate.
+                if !end_pool.all_uploaded() {
+                    self.journal_pool_snapshot(job_id, "spin_guard")?;
+                }
                 break;
             }
+            idle_reclaims = 0;
         }
         // Cancel may have landed while the last round ran: the journal is
         // the truth — a Canceled job never enters Finishing.
@@ -878,6 +943,16 @@ impl JobManager {
                 shared.paused_seen.store(true, Ordering::SeqCst);
                 return Ok(());
             }
+            // Issue #47 (the stale-epoch poison): mark the CURRENT resplit
+            // epoch as seen BEFORE leasing. The driver never consumes the
+            // epoch change and a receiver clone preserves the unseen marker,
+            // so after any resplit every lease taken in a later round died
+            // instantly on its first `select!` poll — a STALE signal — and
+            // stranded the just-journaled lease silently (the drill's piece
+            // 0 died this way twice). A lease taken now is live in the
+            // current plan; only a NEW bump (a real resplit under THIS
+            // upload) may abort it.
+            resplit_rx.borrow_and_update();
 
             // -- lease: the in-memory pool decides, the journal mirrors it --
             // The pool lock is held across the journal mirror: a resplit
@@ -1310,12 +1385,35 @@ impl JobManager {
                 }
                 Step::ResplitUnderneath => {
                     // Issue #27: the plan was reshaped under this lease.
-                    // resplit_pending retired every lease (including this
-                    // one) and the journal table was rewritten wholesale —
-                    // there is nothing to journal or evict by idx. Charge
-                    // no retry budget (a resplit is not a failure; the
-                    // winner cleared the budgets with the rebuild) and just
-                    // re-lease from the new plan.
+                    // Issue #47: "there is nothing to journal" is true ONLY
+                    // for leases the winner's rewrite retired. A lease taken
+                    // AFTER the rewrite is LIVE in the current plan — and
+                    // before the loop-top epoch sync, every post-resplit
+                    // lease was one. Same identity guard as the confirm/
+                    // error/eviction arms: a live lease returns to the pool
+                    // (journal first, then the in-memory evict, under the
+                    // same pool lock the resplit rewrite holds — the lease
+                    // block's atomicity invariant); a retired identity stays
+                    // unjournaled (the rewrite already reset its row). Charge
+                    // no retry budget either way (a resplit is not a failure;
+                    // the winner cleared the budgets with the rebuild).
+                    let mut pool = shared.pool.lock().expect("pool mutex poisoned");
+                    let live = match pool.chunks().iter().find(|c| c.idx == lease.idx) {
+                        Some(c) => c.begin == lease.begin && c.end == lease.end,
+                        None => false,
+                    };
+                    if live {
+                        self.j()
+                            .update_chunk(
+                                job_id,
+                                lease.idx,
+                                ChunkState::Pending,
+                                confirmed_at_lease,
+                                None,
+                            )
+                            .map_err(EngineError::from)?;
+                        pool.evict(lease.idx, worker_id);
+                    }
                 }
                 Step::Aborted => return Ok(()),
             }
@@ -1654,6 +1752,34 @@ impl JobManager {
         let record = self.require_job(job_id)?;
         let rows = self.j().load_chunks(job_id).map_err(EngineError::from)?;
         Ok(ChunkPool::from_rows(record.source_size, rows))
+    }
+
+    /// Issue #47 acceptance: every drive-loop exit that leaves non-uploaded
+    /// bytes journals the FULL pool snapshot first — the loud verify gate
+    /// then fails with evidence, and the journal alone explains the shape
+    /// (which row, which state, how many confirmed bytes) without a live
+    /// process to interrogate. Per-chunk shape matches the verify gate's
+    /// `verify_inconsistent` payload.
+    fn journal_pool_snapshot(&self, job_id: &str, why: &str) -> Result<()> {
+        let pool = self.load_pool(job_id)?;
+        let chunks: Vec<serde_json::Value> = pool
+            .chunks()
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "idx": c.idx, "state": c.state,
+                    "confirmed": c.bytes_confirmed, "len": c.len(),
+                })
+            })
+            .collect();
+        self.j()
+            .append_event(
+                job_id,
+                "drive_pool_snapshot",
+                &serde_json::json!({ "why": why, "chunks": [chunks] }),
+            )
+            .map_err(EngineError::from)?;
+        Ok(())
     }
 
     /// Apply a server acknowledgment. `confirm.bytes_confirmed` is

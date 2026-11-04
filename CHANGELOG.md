@@ -98,6 +98,27 @@ prose. An entry without verifiable issue numbers does not belong here.
   drills and the real-data drill stay canonical on SeaweedFS/tusd.
 
 ### Fixed
+- #47 — resplit × in-flight tus lease: the drive loop stranded a `Leased` row
+  with no owner and no journaled resolution, then walked to Finishing and the
+  verify gate failed the job (`verify_inconsistent` — honest, but the job was
+  lost). Two compounding defects: the driver's `resplit_rx` never consumed the
+  epoch change and a receiver clone preserves the unseen marker, so after any
+  resplit EVERY lease taken in a later round died instantly on its first
+  `select!` poll (a stale epoch signal — the RED drill's piece 0 died this way
+  twice); and the `Step::ResplitUnderneath` arm journaled nothing, which is
+  correct only for leases the winner's rewrite retired. Three layers: the
+  worker marks the current epoch seen before leasing (`borrow_and_update`);
+  the `ResplitUnderneath` arm runs the same identity guard as the confirm/
+  error/eviction arms (a live lease returns to the pool journal-first under
+  the pool lock; a retired identity stays unjournaled); and the driver now
+  reclaims ownerless `Leased` rows at ROUND END before any exit decision
+  (reclaim-then-decide — `pending == 0` is unreachable while a reclaimable
+  lease exists), bounded by `MAX_IDLE_RECLAIM_ROUNDS` so a deterministic
+  strand bug fails loudly instead of livelocking, and every break-to-Finishing
+  exit that leaves non-uploaded bytes journals a full `drive_pool_snapshot`
+  ahead of the verify gate. RED: the #44 lane-floor drill un-ignored
+  (`slow_tus_lane_resplits_below_the_s3_minimum`) — Failed at HEAD `cbc578d`;
+  GREEN: Done, byte-exact, 3/3 stable runs; suite 159 → 160 core tests.
 - #39 — the shell aborted on its first-ever Upload click: `create_job` and
   `resume_signal` are SYNC tauri commands (tauri v2 runs them on the GTK
   main thread, per docs) and `Supervisor::drive` spawned with a raw
