@@ -47,3 +47,6 @@ tmp-verify/
 
 # --- long-horizon lab (#34): same rule as realworld (ADR-009) ---
 rea-lab/longhaul/
+
+# Kaggle kernel staging (built artifacts; the push script re-creates them)
+.kaggle-stage/
