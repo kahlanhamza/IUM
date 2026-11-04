@@ -100,9 +100,39 @@ pub fn client_builder(path: &NetPath) -> Result<reqwest::ClientBuilder, PathErro
         NetPath::Default => Ok(reqwest::Client::builder()),
         NetPath::SourceAddr(ip) => Ok(reqwest::Client::builder().local_address(*ip)),
         NetPath::BindDevice(iface) => {
-            if INTERFACE_OS_SUPPORTED {
+            // COMPILE-TIME cfg at the CALL SITE: on Windows (and the other
+            // non-listed targets) `interface` does not EXIST — the method
+            // itself is cfg-gated away in reqwest, so a runtime bool
+            // cannot hide the call from the compiler (run #98,
+            // core windows-latest: E0599 no method named `interface`).
+            #[cfg(any(
+                target_os = "android",
+                target_os = "fuchsia",
+                target_os = "illumos",
+                target_os = "ios",
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "solaris",
+                target_os = "tvos",
+                target_os = "visionos",
+                target_os = "watchos",
+            ))]
+            {
                 Ok(reqwest::Client::builder().interface(iface))
-            } else {
+            }
+            #[cfg(not(any(
+                target_os = "android",
+                target_os = "fuchsia",
+                target_os = "illumos",
+                target_os = "ios",
+                target_os = "linux",
+                target_os = "macos",
+                target_os = "solaris",
+                target_os = "tvos",
+                target_os = "visionos",
+                target_os = "watchos",
+            )))]
+            {
                 Err(PathError::BindUnavailable {
                     os: std::env::consts::OS.to_string(),
                     iface: iface.clone(),
