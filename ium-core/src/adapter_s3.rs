@@ -471,6 +471,61 @@ impl S3MultipartAdapter {
         self.sessions.lock().unwrap().get(endpoint).cloned()
     }
 
+    /// Best-effort `AbortMultipartUpload` for the probe's own upload (W5):
+    /// the no-orphan cleanup on both pinned servers. An abort failure is
+    /// swallowed — a server-side leftover is the operator's cleanup, the
+    /// same semantics as the tus prober's abandoned sessions.
+    async fn abort_probe_upload(&self, probe_target: &S3Target, upload_id: &str) {
+        let empty = PayloadHash::Sha256Hex(EMPTY_SHA.into());
+        let req = S3Request {
+            ctx: ErrorCtx::Finalize,
+            what: "AbortMultipartUpload(probe)",
+            method: "DELETE",
+            target: probe_target,
+            query: &[("uploadId", upload_id)],
+            payload: &empty,
+            extra: &[],
+        };
+        let _ = self.call(req, Body::from(Vec::new())).await;
+    }
+
+    /// One canary UploadPart for the link probe (issue #57): streams `len`
+    /// bytes from `offset` of the source (the payload's own bytes, ADR-009
+    /// applies to probes too) to `part_number` of the probe upload. Same
+    /// signing/streaming shape as `upload_chunk`, no session-map traffic.
+    async fn put_probe_part(
+        &self,
+        probe_target: &S3Target,
+        upload_id: &str,
+        part_number: u32,
+        source: &str,
+        offset: u64,
+        len: u64,
+    ) -> Result<(), AdapterError> {
+        let mut file = tokio::fs::File::open(source).await.map_err(io_err)?;
+        file.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(io_err)?;
+        let reader = file.take(len);
+        let body = Body::wrap_stream(FramedRead::new(reader, BytesCodec::new()));
+
+        let payload = PayloadHash::Unsigned;
+        let extra = [("content-length", len.to_string())];
+        let extra_refs: Vec<(&str, &str)> = extra.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let part = part_number.to_string();
+        let query = [("partNumber", part.as_str()), ("uploadId", upload_id)];
+        let req = S3Request {
+            ctx: ErrorCtx::Probe,
+            what: "UploadPart(probe)",
+            method: "PUT",
+            target: probe_target,
+            query: &query,
+            payload: &payload,
+            extra: &extra_refs,
+        };
+        self.call(req, body).await.map(|_| ())
+    }
+
     /// Sign one request and send it. `req` carries everything that
     /// participates in the signature; `body` is the request body itself.
     async fn send(&self, req: &S3Request<'_>, body: Body) -> Result<Response, AdapterError> {
@@ -897,6 +952,124 @@ impl TransferAdapter for S3MultipartAdapter {
             bytes_confirmed: span,
             adapter_token: Some(part_token(lease.idx, &etag)),
         })
+    }
+
+    /// The S3-shaped link probe (issue #57, M9#2): small multipart
+    /// transactions against the lane's own wire — create, one canary part
+    /// (phase 1), K concurrent canary parts on the SAME upload (phase K,
+    /// wire fact W2: parts are independent resources), then ABORT — never
+    /// complete (W4: the 5 MiB floor is server-dependent — gofakes3 accepts
+    /// small-part completes, SeaweedFS rejects them with EntityTooSmall;
+    /// completing a probe would materialize junk on lax servers and fail
+    /// on strict ones). W5: the abort is the no-orphan cleanup on BOTH
+    /// pinned servers; W6: the transaction itself costs ~20 ms on
+    /// localhost — the probe's budget is the canary bytes, not the
+    /// round-trips. Classification is the SHARED pure core
+    /// (`prober::classify`) — the same arithmetic the tus leg pins.
+    ///
+    /// The probe upload id lives OUTSIDE `self.sessions`: a side
+    /// instrument must never disturb the lane's session map (the real
+    /// upload's UploadId is untouched). A process death mid-probe
+    /// abandons the upload exactly like the tus prober's abandoned
+    /// sessions (documented since #41).
+    ///
+    /// A failed leg is a failed MEASUREMENT (`link_profile_skipped` by
+    /// the host) — never a lost job (#48's rule, now lane-wide).
+    async fn probe_link(
+        &self,
+        spec: &JobSpec,
+        k: u32,
+        sample_hint_bps: Option<f64>,
+    ) -> Result<Option<crate::prober::LinkProfile>, AdapterError> {
+        // 0-byte sources open no multipart anything (same face as `probe`).
+        if spec.source_size == 0 {
+            return Ok(None);
+        }
+        let k = k.clamp(2, 8);
+        let canary = sample_hint_bps
+            .map(|bps| (10.0 * bps) as u64)
+            .unwrap_or(64 * 1024)
+            .clamp(crate::prober::CANARY_MIN, crate::prober::CANARY_MAX)
+            .min(spec.source_size.max(1));
+
+        // The probe rides its OWN key — never the real object's.
+        let target = parse_target(&spec.endpoint, &spec.source_path)?;
+        let probe_key = format!("{}.ium-probe", target.key);
+        let probe_target = S3Target {
+            host: target.host.clone(),
+            https: target.https,
+            bucket: target.bucket.clone(),
+            key: probe_key,
+        };
+
+        // -- create the probe upload -------------------------------------------
+        let empty = PayloadHash::Sha256Hex(EMPTY_SHA.into());
+        let req = S3Request {
+            ctx: ErrorCtx::Probe,
+            what: "CreateMultipartUpload(probe)",
+            method: "POST",
+            target: &probe_target,
+            query: &[("uploads", "")],
+            payload: &empty,
+            extra: &[],
+        };
+        let resp = self.call(req, Body::from(Vec::new())).await?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| AdapterError::Transient(format!("probe read: {e}")))?;
+        let upload_id = xml_text(&body, "UploadId").ok_or_else(|| {
+            AdapterError::Unknown("probe CreateMultipartUpload: no UploadId".into())
+        })?;
+
+        // The abort runs on success AND on every failure path (W5).
+
+        // -- phase 1: one canary part, sequentially ----------------------------
+        let probe = async {
+            let k_canary = (canary / k as u64).max(1024);
+            let t0 = std::time::Instant::now();
+            self.put_probe_part(&probe_target, &upload_id, 1, &spec.source_path, 0, canary)
+                .await?;
+            let s1 = canary as f64 / t0.elapsed().as_secs_f64().max(1e-9);
+
+            // -- phase K: K concurrent parts on the SAME upload (W2) -----------
+            // The aggregate phase moves the same bytes as phase 1.
+            let t1 = std::time::Instant::now();
+            let mut futs = Vec::with_capacity(k as usize);
+            for i in 0..k {
+                let offset = i as u64 * k_canary;
+                futs.push(self.put_probe_part(
+                    &probe_target,
+                    &upload_id,
+                    i + 2,
+                    &spec.source_path,
+                    offset,
+                    k_canary,
+                ));
+            }
+            let results = futures_util::future::join_all(futs).await;
+            for r in results {
+                r.map_err(|e| AdapterError::Transient(format!("probe part: {e}")))?;
+            }
+            let sk = (k_canary * k as u64) as f64 / t1.elapsed().as_secs_f64().max(1e-9);
+            Ok::<crate::prober::LinkProfile, AdapterError>(crate::prober::classify(
+                s1,
+                sk,
+                k,
+                spec.source_size,
+            ))
+        };
+
+        match probe.await {
+            Ok(profile) => {
+                self.abort_probe_upload(&probe_target, &upload_id).await;
+                Ok(Some(profile))
+            }
+            Err(e) => {
+                self.abort_probe_upload(&probe_target, &upload_id).await;
+                Err(e)
+            }
+        }
     }
 
     /// Reattach (issue #12): replay the journaled probe event's UploadId

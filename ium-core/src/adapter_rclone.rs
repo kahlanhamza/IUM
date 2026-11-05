@@ -409,6 +409,20 @@ impl TransferAdapter for RcloneBridgeAdapter {
         self.inner.upload_chunk(&inner, lease, progress).await
     }
 
+    /// The link probe over the bridge (issue #57): the inner S3 lane's
+    /// multipart transactions ride the same loopback serve the transfers
+    /// ride — the bridge measures ITS OWN wire, which is what the planner
+    /// wants (the #63 shape: one adapter, 74 backends, one prober).
+    async fn probe_link(
+        &self,
+        spec: &JobSpec,
+        k: u32,
+        sample_hint_bps: Option<f64>,
+    ) -> Result<Option<crate::prober::LinkProfile>, AdapterError> {
+        let inner = self.inner_spec(spec)?;
+        self.inner.probe_link(&inner, k, sample_hint_bps).await
+    }
+
     async fn verify(&self, spec: &JobSpec) -> Result<VerifyReport, AdapterError> {
         let inner = self.inner_spec(spec)?;
         self.inner.verify(&inner).await

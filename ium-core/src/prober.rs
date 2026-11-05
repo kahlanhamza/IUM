@@ -39,8 +39,10 @@ const TUS_VERSION: &str = "1.0.0";
 const TUS_CONTENT_TYPE: &str = "application/offset+octet-stream";
 /// A canary is ~10 s of measured wire, clamped to [16 KiB, 1 MiB] — big
 /// enough to ride through TCP slow-start, small enough to probe fast.
-const CANARY_MIN: u64 = 16 * 1024;
-const CANARY_MAX: u64 = 1024 * 1024;
+pub const CANARY_MIN: u64 = 16 * 1024;
+/// The canary ceiling: a probe must never move megabytes on a metered
+/// bearer (issue #48's "every byte is sacred", shared by the S3 leg).
+pub const CANARY_MAX: u64 = 1024 * 1024;
 
 /// How the link answered the 1-vs-K question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -127,6 +129,20 @@ pub async fn probe_link(
     let sk = (k_canary * k as u64) as f64 / k_elapsed;
 
     // -- Classify + recommend ---------------------------------------------------
+    Ok(classify(s1, sk, k, source_size))
+}
+
+/// The pure classification core (issue #57): the 1-vs-K question answered
+/// from two measurements, shared by BOTH shaped legs — the tus sessions
+/// leg and the S3 multipart leg pin the SAME arithmetic. Pure so the
+/// contract tests pin the boundaries exactly: ≥ 2× is per-flow (inclusive),
+/// < 1.5× is one bearer (exclusive), between is mixed.
+/// The piece rule: ~20 s of the measured single-stream wire, clamped to
+/// [64 KiB, `CHUNK_MIN`] — and never above the source itself. The lane's
+/// own floor (e.g. S3's 5 MiB multipart minimum) applies DOWNSTREAM, in
+/// the pool planner (`apply_measured_piece` → `new_capped_floor`): the
+/// profile is DATA, not policy.
+pub fn classify(s1: f64, sk: f64, k: u32, source_size: u64) -> LinkProfile {
     let (class, fleet) = if sk >= 2.0 * s1 {
         (LinkClass::PerFlowCap, k)
     } else if sk < 1.5 * s1 {
@@ -134,20 +150,17 @@ pub async fn probe_link(
     } else {
         (LinkClass::Mixed, 2)
     };
-    // Piece target: ~20 s of measured wire (inside the #42 idle window with
-    // margin), clamped to the tus lane floor and the engine max.
     let piece = ((20.0 * s1) as u64)
         .clamp(64 * 1024, crate::chunk::CHUNK_MIN)
         .min(source_size.max(1));
-
-    Ok(LinkProfile {
+    LinkProfile {
         single_bps: s1,
         k_bps: sk,
         k,
         class,
         recommended_piece_bytes: piece,
         recommended_fleet: fleet,
-    })
+    }
 }
 
 /// The K=1 phase against a READY client: one canary session, one PATCH,

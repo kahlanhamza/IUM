@@ -637,24 +637,20 @@ impl JobManager {
             if let Some(cap) = probe.max_chunk_bytes.filter(|_| probe.resumable) {
                 self.apply_chunk_cap(job_id, cap)?;
             }
-            // Issue #48 (M8 rung 1): the link prober, WIRED. Opt-in via
-            // IUM_LINK_PROBE=1 — every byte is sacred on a metered bearer,
-            // so the prober is a deliberate instrument (the drill and the
-            // shell enable it explicitly). tus-shaped resumable lanes only:
-            // the prober speaks the tus wire. A failed probe is a lost
-            // MEASUREMENT, never a lost job — the skip is journaled and the
-            // job proceeds exactly as before.
-            if spec.adapter == "tus" && probe.resumable && Self::link_probe_requested() {
-                match crate::prober::probe_link(
-                    std::path::Path::new(&spec.source_path),
-                    spec.source_size,
-                    &spec.endpoint,
-                    4,
-                    None,
-                )
-                .await
-                {
-                    Ok(profile) => {
+            // Issue #48 (M8 rung 1) + #57 (M9 rung 2): the link prober,
+            // WIRED lane-wide. Opt-in via IUM_LINK_PROBE=1 — every byte is
+            // sacred on a metered bearer, so the prober is a deliberate
+            // instrument (the drill and the shell enable it explicitly).
+            // Issue #57: the ADAPTER owns its wire, so the ADAPTER owns
+            // its probe — the host asks the adapter it already holds
+            // (ADR-011's shape, no adapter-name string matching). Lanes
+            // without a shaped prober answer Ok(None) and stay
+            // pre-#57 silent; a failed probe is a lost MEASUREMENT,
+            // never a lost job — the skip is journaled and the job
+            // proceeds exactly as before.
+            if probe.resumable && Self::link_probe_requested() {
+                match adapter.probe_link(&spec, 4, None).await {
+                    Ok(Some(profile)) => {
                         self.j()
                             .append_event(
                                 job_id,
@@ -665,12 +661,17 @@ impl JobManager {
                         // The planner OBEYS the measurement — the same
                         // all-Pending journal-verified boundary as #8's cap
                         // replan, composed with the adapter's per-call cap
-                        // (ADR-011 wins ties).
+                        // (ADR-011 wins ties). The lane's own floor (S3's
+                        // 5 MiB multipart minimum) applies inside the pool
+                        // planner: the profile is DATA, not policy.
                         self.apply_measured_piece(
                             job_id,
                             profile.recommended_piece_bytes,
                             probe.max_chunk_bytes,
                         )?;
+                    }
+                    Ok(None) => {
+                        // The lane has no shaped prober: pre-#57 silence.
                     }
                     Err(e) => {
                         let _ = self.j().append_event(
@@ -693,7 +694,10 @@ impl JobManager {
                 // failure is a lost MEASUREMENT, never a lost job — and
                 // with no paths declared this block does not exist:
                 // degradation IS today's behavior.
-                if probe.resumable {
+                // tus-shaped lanes only (#57 kept this gate): the path
+                // prober speaks the tus wire (PATCH canaries), which is
+                // exactly what a bonded tus lane rides.
+                if probe.resumable && spec.adapter == "tus" {
                     let paths = Self::declared_paths();
                     if !paths.is_empty() {
                         let mut bps = Vec::with_capacity(paths.len());

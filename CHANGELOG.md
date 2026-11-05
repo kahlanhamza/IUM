@@ -11,6 +11,35 @@ prose. An entry without verifiable issue numbers does not belong here.
 ## [Unreleased]
 
 ### Added
+- #57 — the prober covers the S3 lane (M9 rung 2): the measured-profile
+  architecture is now LANE-WIDE. The adapter owns its wire, so the adapter
+  owns its probe — `TransferAdapter::probe_link` (ADR-011's shape extended
+  from #50's `probe_fleet`; default `Ok(None)` = pre-#57 silence, no
+  adapter-name string matching in the host). The tus lane delegates to the
+  unchanged free-standing prober; the S3 lane measures multipart
+  transactions (create → one canary part → K concurrent parts on the SAME
+  upload → ABORT — never complete: the 5 MiB floor is server-dependent,
+  gofakes3 accepts small-part completes while SeaweedFS rejects them with
+  EntityTooSmall, and the abort is the no-orphan cleanup on both pinned
+  servers); the rclone bridge (#63) inherits the prober through its inner
+  lane. Classification is ONE shared pure fn (`prober::classify`) — the
+  same ≥2×/<1.5× arithmetic both legs pin. The S3 lane's 5 MiB multipart
+  floor applies DOWNSTREAM in the pool planner (the profile is DATA, not
+  policy — an aggressive recommendation is floored structurally); the #51
+  path plan keeps its tus-wire gate. Journal contract unchanged:
+  `link_profile` once, `link_profile_skipped` on failure, planner obeys
+  `replan_measured`. Live drill (`IUM_S3_PROBE_DRILL=1`): per-conn 64 KiB/s
+  classifies PerFlowCap (fleet 4), a shared 64 KiB/s bearer classifies
+  BearerCap (fleet 1), and every leg leaves the bucket's
+  ListMultipartUploads EMPTY — the probe aborts its own upload.
+- #63 — the rclone bridge lane (M10 rung 1): one adapter = 74 backends day
+  one (`RcloneBridgeAdapter` owns/attaches `rclone serve s3` and delegates
+  every transfer to the proven `S3MultipartAdapter` — SigV4, ETag
+  journaling, the ADR-010 verify gate all inherited). Zero credentials
+  needed to run: anonymous serve bound to 127.0.0.1 (the throwaway-SigV4
+  workaround for the upstream `--auth-key` defect), env-injected remotes,
+  spawned serve reaped on drop. Byte-level resume across bridge restarts
+  from the journaled token (the kill-9 shape, drilled live).
 - #48 — the link prober, WIRED (M8 rung 1): `probe_link` (#41) had zero
   production callers — the engine never measured, never journaled
   `link_profile`, never obeyed a recommendation. Now a managed tus job with

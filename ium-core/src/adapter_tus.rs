@@ -949,6 +949,25 @@ impl TransferAdapter for TusAdapter {
         }
     }
 
+    /// The link probe, lane-shaped (issue #57): the ADAPTER owns its wire,
+    /// so the host's probing boundary asks the adapter it already holds.
+    /// The tus lane delegates to the free-standing `prober::probe_link`
+    /// (unchanged measurement: the payload's own prefix, one canary session
+    /// then K concurrent ones) — the manager's `spec.adapter == "tus"`
+    /// string match is dead.
+    async fn probe_link(
+        &self,
+        spec: &JobSpec,
+        k: u32,
+        sample_hint_bps: Option<f64>,
+    ) -> Result<Option<crate::prober::LinkProfile>, AdapterError> {
+        let path = std::path::Path::new(&spec.source_path);
+        crate::prober::probe_link(path, spec.source_size, &spec.endpoint, k, sample_hint_bps)
+            .await
+            .map(Some)
+            .map_err(|e| AdapterError::Transient(format!("tus link probe: {e}")))
+    }
+
     async fn upload_chunk(
         &self,
         spec: &JobSpec,

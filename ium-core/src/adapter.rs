@@ -320,6 +320,26 @@ pub trait TransferAdapter: Send + Sync {
         self.probe(spec).await
     }
 
+    /// The lane-shaped link probe (issue #57, M9#2): the ADAPTER owns its
+    /// wire, so the ADAPTER owns its probe — tus sessions for the tus lane,
+    /// multipart transactions (create → parts → abort) for the S3 lane.
+    /// ADR-011's shape, extended from #50's `probe_fleet`: the host never
+    /// string-matches adapter names; it asks the adapter it already holds.
+    ///
+    /// Default `Ok(None)`: the lane has no shaped prober — the host's
+    /// probing boundary treats that as pre-#57 silence (no journal noise,
+    /// byte-identical behavior). The profile is DATA (journaled once as
+    /// `link_profile`, consumed by the planner); the S3 lane's 5 MiB
+    /// multipart floor applies DOWNSTREAM in the pool planner, never here.
+    async fn probe_link(
+        &self,
+        _spec: &JobSpec,
+        _k: u32,
+        _sample_hint_bps: Option<f64>,
+    ) -> Result<Option<crate::prober::LinkProfile>, AdapterError> {
+        Ok(None)
+    }
+
     /// The lane's prescribed uniform chunk size, when STATIC (issue #56):
     /// consulted at CREATE time — before any probe exists — so the initial
     /// plan is born in the prescribed shape (the probe later re-declares
