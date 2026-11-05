@@ -1,0 +1,13 @@
+[package]
+name = "wirefacts53"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone probe crate — excluded from the workspace ([workspace] empty
+# table), same pattern as wirefacts51/52. Exists only to pin wire facts for
+# issue #53 (entropy-gated zstd transfer mode) BEFORE any implementation.
+[workspace]
+
+[dependencies]
+zstd = "0.13"
+libc = "0.2"

@@ -40,11 +40,13 @@
 #![deny(missing_docs)]
 
 pub mod adapter;
+pub mod adapter_compress;
 pub mod adapter_fec;
 pub mod adapter_http;
 pub mod adapter_s3;
 pub mod adapter_tus;
 pub mod chunk;
+pub mod compress;
 pub mod eviction;
 pub mod fec;
 pub mod fleet;
@@ -60,6 +62,7 @@ mod ids;
 mod sigv4;
 
 pub use adapter::{AdapterRegistry, Capability, ChunkConfirm, ProbeReport, TransferAdapter};
+pub use adapter_compress::CompressAdapter;
 pub use adapter_fec::FecAdapter;
 pub use adapter_http::HttpOneShotAdapter;
 pub use adapter_s3::{S3MultipartAdapter, S3MultipartConfig};

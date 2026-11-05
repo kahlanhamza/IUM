@@ -34,12 +34,15 @@ hex = "0.4"
 # reference implementation class. Client-side symbolization + the decoder the
 # relay calls; wire facts pinned live in scripts/wirefacts52.
 raptorq = "1.8"
+# Entropy-gated zstd transfer mode (issue #53): the Cause-D byte lever for
+# the 3 KB/s regime. checksummed frames are the verify gate (W4).
+zstd = "0.13"
+# statvfs for the #34 disk-space check (unix; cfg'd out loudly elsewhere).
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
 trybuild = "1.0.122"
-# ENOSPC drill (#34): real-OS disk-full via RLIMIT_FSIZE + SIGXFSZ.
-libc = "0.2"
 
 [lib]
 name = "ium_core"
