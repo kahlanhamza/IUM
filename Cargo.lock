@@ -1678,6 +1678,7 @@ dependencies = [
  "hex",
  "hmac",
  "libc",
+ "raptorq",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",
@@ -2692,6 +2693,12 @@ checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
 dependencies = [
  "rand_core",
 ]
+
+[[package]]
+name = "raptorq"
+version = "1.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cc8cd0bcb2d520fff368264b5a6295e064c60955349517d09b14473afae4856"
 
 [[package]]
 name = "raw-window-handle"

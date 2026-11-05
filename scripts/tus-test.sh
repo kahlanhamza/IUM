@@ -43,11 +43,15 @@ WITH_DIR="${TUS_UPLOAD_DIR:-}"
 # --multipath: also run the bonding drill (tests/netpath_drill.rs, issue
 # #51) — two source-bound paths through per-bearer throttling proxies,
 # the M8 sum measurement (~75 s); tusd-canonical like --measure.
+# --fec: also run the FEC loss-ladder drill (tests/fec_drill.rs, issue
+# #52) — plain vs fec lanes through --loss proxies at 0/3/5%, the honest
+# crossover measurement + the R-erasure rebuild proof (~90 s); tusd-canonical.
 WITH_DRILL=0
 WITH_REAL=0
 WITH_CONCAT=0
 WITH_MEASURE=0
 WITH_MULTIPATH=0
+WITH_FEC=0
 say() { echo "[tus-test] $*"; }
 die() { echo "[tus-test] FAIL: $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
@@ -64,6 +68,7 @@ while [ $# -gt 0 ]; do
     --concat) WITH_CONCAT=1 ;;
     --measure) WITH_MEASURE=1 ;;
     --multipath) WITH_MULTIPATH=1 ;;
+    --fec) WITH_FEC=1 ;;
     *) die "unknown flag: $1" ;;
   esac
   shift
@@ -83,6 +88,10 @@ fi
 
 if [ "$WITH_MULTIPATH" = 1 ] && [ "$SERVER" != "tusd" ]; then
   die "--multipath is tusd-canonical (the bonded concat lane is what's summed, #51)"
+fi
+
+if [ "$WITH_FEC" = 1 ] && [ "$SERVER" != "tusd" ]; then
+  die "--fec is tusd-canonical (the drill reads groups back via tusd's GET extension, #52)"
 fi
 
 PY=python3
@@ -199,6 +208,11 @@ fi
 if [ "$WITH_MULTIPATH" = 1 ]; then
   say "running bonding drill (netpath_drill, issue #51) — the M8 sum measurement"
   IUM_MULTIPATH=1 cargo test -p ium-core --test netpath_drill -- --nocapture
+fi
+
+if [ "$WITH_FEC" = 1 ]; then
+  say "running FEC loss-ladder drill (fec_drill, issue #52) — the honest crossover"
+  IUM_FEC=1 cargo test -p ium-core --test fec_drill -- --nocapture
 fi
 
 if [ "$WITH_REAL" = 1 ]; then

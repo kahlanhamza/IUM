@@ -30,6 +30,10 @@ futures-util = { version = "0.3", default-features = false }
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
+# FEC lane (issue #52): RFC 6330 RaptorQ erasure coding — pure Rust, the
+# reference implementation class. Client-side symbolization + the decoder the
+# relay calls; wire facts pinned live in scripts/wirefacts52.
+raptorq = "1.8"
 
 [dev-dependencies]
 tempfile = "3"
