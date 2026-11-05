@@ -6,7 +6,18 @@
 set -euo pipefail
 
 OUT="dist_release"
-BUNDLE="src-tauri/target/release/bundle"
+
+# The bundle dir follows the cargo workspace layout: with a workspace root
+# target/ it is ../target/release/bundle (what CI proved on the first run —
+# "no installer artifacts found under src-tauri/target/release/bundle");
+# without one, the tauri-local path applies. Locate, never assume.
+BUNDLE="$(ls -d ../target/release/bundle 2>/dev/null || ls -d src-tauri/target/release/bundle 2>/dev/null || true)"
+if [ -z "${BUNDLE:-}" ]; then
+  echo "ERROR: no release bundle dir found (looked at ../target and src-tauri/target)" >&2
+  exit 1
+fi
+echo "bundle dir: $BUNDLE"
+
 rm -rf "$OUT"
 mkdir -p "$OUT"
 

@@ -77,7 +77,7 @@ export function InspectorDrawer({ snapshot, onClose }: InspectorDrawerProps) {
                       {c.state}
                     </span>
                   </td>
-                  <td>{humanBytes(c.bytes_confirmed)}</td>
+                  <td>{c.bytes_confirmed}</td>
                   <td>{c.adapter_token ?? "—"}</td>
                 </tr>
               ))}
