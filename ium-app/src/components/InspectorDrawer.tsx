@@ -1,9 +1,12 @@
 /**
- * Per-chunk inspector drawer (spec §8: aria2-style transparency, issue #16).
- * Renders `inspect_chunks`/`job_updated` snapshots verbatim — the engine's
- * journal is the only truth on display.
+ * Per-chunk inspector drawer (spec §8: aria2-style transparency, #16;
+ * #65 Lane 1 visual pass). Renders `inspect_chunks`/`job_updated` snapshots
+ * verbatim — the engine's journal is the only truth on display.
  */
+import { useEffect } from "react";
 import type { JobSnapshot } from "../api";
+import { friendlyAdapter, humanBytes, hostOf } from "../logic";
+import { IconX } from "./icons";
 
 export interface InspectorDrawerProps {
   snapshot: JobSnapshot | null;
@@ -11,75 +14,97 @@ export interface InspectorDrawerProps {
 }
 
 export function InspectorDrawer({ snapshot, onClose }: InspectorDrawerProps) {
+  // Escape closes — a desktop-app reflex, not a web-page one.
+  useEffect(() => {
+    if (!snapshot) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [snapshot, onClose]);
+
   if (!snapshot) return null;
   const { job, chunks, events } = snapshot;
   return (
-    <aside style={drawer}>
-      <div style={head}>
-        <strong>Job inspector</strong>
-        <button onClick={onClose}>Close</button>
-      </div>
-      <div style={mono}>
-        id: {job.id}
-        <br />
-        file: {job.source_path}
-        <br />
-        endpoint: {job.endpoint}
-      </div>
-      <h3 style={h3}>Chunks</h3>
-      <table cellPadding={4} style={{ borderCollapse: "collapse", width: "100%" }}>
-        <thead>
-          <tr>
-            <th style={th}>#</th>
-            <th style={th}>Span</th>
-            <th style={th}>State</th>
-            <th style={th}>Confirmed</th>
-            <th style={th}>Token</th>
-          </tr>
-        </thead>
-        <tbody>
-          {chunks.map((c) => (
-            <tr key={c.idx}>
-              <td style={td}>{c.idx}</td>
-              <td style={td}>
-                {c.begin}–{c.end}
-              </td>
-              <td style={td}>{c.state}</td>
-              <td style={td}>{c.bytes_confirmed}</td>
-              <td style={{ ...td, fontFamily: "ui-monospace, monospace", fontSize: 11 }}>
-                {c.adapter_token ?? "—"}
-              </td>
-            </tr>
+    <>
+      <div className="drawer-backdrop" onClick={onClose} aria-hidden="true" />
+      <aside className="drawer" role="dialog" aria-label={`Inspector for job ${job.id}`}>
+        <div className="drawer-head">
+          <div style={{ minWidth: 0 }}>
+            <h2 className="drawer-title">{fileName(job.source_path)}</h2>
+            <div className="drawer-sub">{hostOf(job.endpoint)}</div>
+          </div>
+          <button className="btn btn--ghost btn--icon" aria-label="Close inspector" onClick={onClose}>
+            <IconX size={14} />
+          </button>
+        </div>
+
+        <div className="meta-grid">
+          <span className="meta-key">Job</span>
+          <span className="meta-val">{job.id}</span>
+          <span className="meta-key">Size</span>
+          <span className="meta-val">{humanBytes(job.source_size)}</span>
+          <span className="meta-key">Lane</span>
+          <span className="meta-val">
+            {friendlyAdapter(job.adapter)} · {job.capability_badge}
+          </span>
+          <span className="meta-key">Endpoint</span>
+          <span className="meta-val">{job.endpoint}</span>
+        </div>
+
+        <h3 className="drawer-h3">Chunks</h3>
+        <div className="table-wrap">
+          <table className="chunk-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Span</th>
+                <th>State</th>
+                <th>Confirmed</th>
+                <th>Token</th>
+              </tr>
+            </thead>
+            <tbody>
+              {chunks.map((c) => (
+                <tr key={c.idx}>
+                  <td>{c.idx}</td>
+                  <td>
+                    {c.begin}–{c.end}
+                  </td>
+                  <td>
+                    <span className="chip" data-state={chunkState(c.state)}>
+                      {c.state}
+                    </span>
+                  </td>
+                  <td>{humanBytes(c.bytes_confirmed)}</td>
+                  <td>{c.adapter_token ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <h3 className="drawer-h3">Journal events</h3>
+        <ol className="journal">
+          {events.map(([seq, kind, payload]) => (
+            <li key={seq}>
+              <span className="seq">#{seq}</span> <span className="kind">{kind}</span>{" "}
+              <span className="payload">{payload}</span>
+            </li>
           ))}
-        </tbody>
-      </table>
-      <h3 style={h3}>Journal events</h3>
-      <ol style={{ margin: 0, paddingLeft: 20, maxHeight: 200, overflowY: "auto" }}>
-        {events.map(([seq, kind, payload]) => (
-          <li key={seq} style={{ fontFamily: "ui-monospace, monospace", fontSize: 11 }}>
-            #{seq} {kind} <span style={{ color: "#666" }}>{payload}</span>
-          </li>
-        ))}
-      </ol>
-    </aside>
+        </ol>
+      </aside>
+    </>
   );
 }
 
-const drawer: React.CSSProperties = {
-  position: "fixed",
-  top: 0,
-  right: 0,
-  bottom: 0,
-  width: 420,
-  background: "#fff",
-  borderLeft: "2px solid #d0d4cf",
-  boxShadow: "-4px 0 16px rgba(0,0,0,0.08)",
-  padding: 16,
-  overflowY: "auto",
-};
+/** Chunk states map onto the chip palette; unknown stays neutral. */
+function chunkState(state: string): string {
+  return ["verified", "uploaded", "leased", "pending"].includes(state) ? state : "";
+}
 
-const head: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center" };
-const h3: React.CSSProperties = { margin: "14px 0 6px" };
-const th: React.CSSProperties = { textAlign: "left", borderBottom: "1px solid #d0d4cf" };
-const td: React.CSSProperties = { borderBottom: "1px solid #eceff1", fontSize: 12 };
-const mono: React.CSSProperties = { fontFamily: "ui-monospace, monospace", fontSize: 11, color: "#444" };
+function fileName(path: string): string {
+  const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return i >= 0 ? path.slice(i + 1) : path;
+}

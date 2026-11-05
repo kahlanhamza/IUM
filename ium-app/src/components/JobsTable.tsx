@@ -1,11 +1,27 @@
 /**
- * Jobs table (spec §8 first deliverable, issue #16): file, destination +
- * honest badge, state chip, progress bar fed by `job_updated` snapshots,
- * live speed as Δconfirmed/Δt, and action buttons gated by the engine's
- * legal transitions (mirrored in logic.ts, tested in logic.test.ts).
+ * Jobs table (#16 first deliverable; #65 Lane 1 visual pass).
+ *
+ * The semantic structure is LOAD-BEARING for the app-e2e lane and pinned on
+ * issue #65: rows are located via `table tbody tr:nth-child(i)`, the file
+ * name lives in the FIRST td, the FIFTH td's text starts with `NN%`, and
+ * every row carries a `[data-state]` chip. Restyle anything except that.
+ *
+ * Progress bar + speed are presentation math over journal snapshots; the
+ * buttons mirror the engine's legal transitions (tested in logic.test.ts).
  */
 import type { JobRecord } from "../api";
-import { badgeFor, canCancel, canPause, canResume, hostOf, humanBytes, percentDone } from "../logic";
+import {
+  badgeFor,
+  canCancel,
+  canPause,
+  canResume,
+  friendlyAdapter,
+  hostOf,
+  humanBytes,
+  isTerminal,
+  percentDone,
+} from "../logic";
+import { IconAlert, IconInfinite, IconPause, IconPlay, IconFile, IconX } from "./icons";
 
 export interface JobView {
   record: JobRecord;
@@ -25,94 +41,137 @@ export interface JobsTableProps {
 }
 
 export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCancel }: JobsTableProps) {
-  if (jobs.length === 0) {
-    return <p style={{ color: "#666" }}>No jobs yet — create one above.</p>;
-  }
   return (
-    <table cellPadding={6} style={{ borderCollapse: "collapse", width: "100%" }}>
-      <thead>
-        <tr style={headRow}>
-          <th style={th}>File</th>
-          <th style={th}>Destination</th>
-          <th style={th}>Badge</th>
-          <th style={th}>State</th>
-          <th style={th}>Progress</th>
-          <th style={th}>Speed</th>
-          <th style={th}>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {jobs.map((j) => {
-          const { record } = j;
-          const pct = percentDone(j.confirmed, record.source_size, record.state);
-          return (
-            <tr
-              key={record.id}
-              onClick={() => onSelect(record.id)}
-              style={{ cursor: "pointer", background: selected === record.id ? "#eef4f2" : undefined }}
-            >
-              <td style={td}>
-                {fileName(record.source_path)}
-                <div style={dim}>{humanBytes(record.source_size)}</div>
-              </td>
-              <td style={td}>
-                {record.adapter}
-                <div style={dim}>{hostOf(record.endpoint)}</div>
-              </td>
-              <td style={td}>{badgeFor(record.capability_badge)}</td>
-              <td style={td}>
-                {/* data-state: the journal's truth as a WebDriver-readable
-                    attribute (#35) — the chip's text stays human-facing. */}
-                <span data-state={record.state} style={stateChip(record.state)}>
-                  {record.state}
-                </span>
-              </td>
-              <td style={{ ...td, minWidth: 180 }}>
-                <div style={barTrack}>
-                  <div style={{ ...barFill, width: `${pct}%` }} />
-                </div>
-                <div style={dim}>
-                  {pct}% · {humanBytes(j.confirmed)} / {humanBytes(record.source_size)}
-                </div>
-              </td>
-              <td style={td}>{j.speed > 0 ? `${humanBytes(j.speed)}/s` : "—"}</td>
-              <td style={td}>
-                <button
-                  aria-label={`pause job ${record.id}`}
-                  disabled={!canPause(record.state)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onPause(record.id);
-                  }}
-                >
-                  Pause
-                </button>{" "}
-                <button
-                  aria-label={`resume job ${record.id}`}
-                  disabled={!canResume(record.state)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onResume(record.id);
-                  }}
-                >
-                  Resume
-                </button>{" "}
-                <button
-                  aria-label={`cancel job ${record.id}`}
-                  disabled={!canCancel(record.state)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onCancel(record.id);
-                  }}
-                >
-                  Cancel
-                </button>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+    <div className="table-wrap">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Destination</th>
+            <th>Mode</th>
+            <th>State</th>
+            <th>Progress</th>
+            <th>Speed</th>
+            <th>
+              <span className="sr-only">Actions</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {jobs.map((j) => {
+            const { record } = j;
+            const pct = percentDone(j.confirmed, record.source_size, record.state);
+            const badge = badgeFor(record.capability_badge);
+            return (
+              <tr
+                key={record.id}
+                data-active={!isTerminal(record.state)}
+                onClick={() => onSelect(record.id)}
+                className={selected === record.id ? "row--selected" : undefined}
+              >
+                <td>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    <IconFile size={15} style={{ flex: "none", color: "var(--text-3)" }} />
+                    <div style={{ minWidth: 0 }}>
+                      <div className="cell-main">{fileName(record.source_path)}</div>
+                      <div className="cell-dim">{humanBytes(record.source_size)}</div>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <div className="cell-main">{friendlyAdapter(record.adapter)}</div>
+                  <div className="cell-dim">{hostOf(record.endpoint)}</div>
+                </td>
+                <td>
+                  <span
+                    className={`badge${badge.kind === "resumable" ? " badge--resumable" : ""}`}
+                    title={
+                      badge.kind === "resumable"
+                        ? "This destination accepts resumable uploads — interruptions heal."
+                        : badge.kind === "one_shot"
+                          ? "One-shot destination: an interruption restarts from zero."
+                          : undefined
+                    }
+                  >
+                    {badge.kind === "resumable" ? (
+                      <IconInfinite size={11} />
+                    ) : badge.kind === "one_shot" ? (
+                      <IconAlert size={11} />
+                    ) : null}
+                    {badge.label}
+                  </span>
+                </td>
+                <td>
+                  {/* data-state: the journal's truth as a WebDriver-readable
+                      attribute (#35) — the chip's text stays human-facing. */}
+                  <span data-state={record.state} className="chip">
+                    {record.state}
+                  </span>
+                </td>
+                <td>
+                  <div
+                    className="progress"
+                    role="progressbar"
+                    aria-valuenow={pct}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                  >
+                    <div className="progress-fill" style={{ width: `${pct}%` }} />
+                  </div>
+                  <div className="cell-dim">
+                    {pct}% · {humanBytes(j.confirmed)} / {humanBytes(record.source_size)}
+                  </div>
+                </td>
+                <td>{j.speed > 0 ? `${humanBytes(j.speed)}/s` : "—"}</td>
+                <td>
+                  <div className="cell-actions">
+                    {canResume(record.state) ? (
+                      <button
+                        className="btn btn--ghost btn--icon"
+                        aria-label={`resume job ${record.id}`}
+                        title="Resume"
+                        disabled={!canResume(record.state)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onResume(record.id);
+                        }}
+                      >
+                        <IconPlay size={13} />
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn--ghost btn--icon"
+                        aria-label={`pause job ${record.id}`}
+                        title="Pause"
+                        disabled={!canPause(record.state)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onPause(record.id);
+                        }}
+                      >
+                        <IconPause size={13} />
+                      </button>
+                    )}
+                    <button
+                      className="btn btn--danger-ghost btn--icon"
+                      aria-label={`cancel job ${record.id}`}
+                      title="Cancel"
+                      disabled={!canCancel(record.state)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCancel(record.id);
+                      }}
+                    >
+                      <IconX size={13} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -120,30 +179,3 @@ function fileName(path: string): string {
   const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return i >= 0 ? path.slice(i + 1) : path;
 }
-
-function stateChip(state: string): React.CSSProperties {
-  const bg =
-    state === "done"
-      ? "#e3f2e3"
-      : state === "failed" || state === "unresumable"
-        ? "#fbe4e2"
-        : state === "canceled"
-          ? "#efe7f6"
-          : state === "paused"
-            ? "#fff3d6"
-            : "#e8f0fe";
-  return {
-    background: bg,
-    borderRadius: 10,
-    padding: "2px 8px",
-    fontSize: 12,
-    fontFamily: "ui-monospace, monospace",
-  };
-}
-
-const headRow: React.CSSProperties = { textAlign: "left", borderBottom: "2px solid #d0d4cf" };
-const th: React.CSSProperties = { textAlign: "left", padding: "6px 8px" };
-const td: React.CSSProperties = { borderTop: "1px solid #eceff1", padding: "6px 8px", verticalAlign: "top" };
-const dim: React.CSSProperties = { color: "#666", fontSize: 12 };
-const barTrack: React.CSSProperties = { height: 8, background: "#eceff1", borderRadius: 4, overflow: "hidden" };
-const barFill: React.CSSProperties = { height: "100%", background: "#2ec4b6" };

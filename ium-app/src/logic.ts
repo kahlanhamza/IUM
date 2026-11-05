@@ -22,11 +22,53 @@ export type JobStateStr =
 const TERMINAL: readonly string[] = ["done", "failed", "canceled", "unresumable"];
 const CANCELABLE: readonly string[] = ["created", "probing", "running", "paused"];
 
-/** Honest badges: rendered verbatim from the engine, unknown stays unknown. */
-export function badgeFor(capability: string): string {
-  if (capability === "resumable") return "Resumable ✅";
-  if (capability === "one_shot") return "One-shot ⚠️";
-  return "unknown";
+/**
+ * Honest badges: rendered verbatim from the engine, unknown stays unknown.
+ * Structured view (#65 Lane 1): the chip's color/icon live in the component
+ * layer; the label text stays the engine's own vocabulary.
+ */
+export interface BadgeView {
+  kind: "resumable" | "one_shot" | "unknown";
+  label: string;
+}
+
+export function badgeFor(capability: string): BadgeView {
+  if (capability === "resumable") return { kind: "resumable", label: "Resumable" };
+  if (capability === "one_shot") return { kind: "one_shot", label: "One-shot" };
+  return { kind: "unknown", label: "unknown" };
+}
+
+/**
+ * Friendly adapter display names (#65 Lane 1): presentation-only mapping —
+ * the SELECT's option values stay the engine registry names (the e2e seam
+ * sets `.value` directly), an unknown registry name passes through untouched
+ * because the UI reflects the engine, it never invents lanes.
+ */
+const ADAPTER_LABELS: Record<string, string> = {
+  http_oneshot: "HTTP one-shot",
+  tus: "TUS resumable",
+  s3_multipart: "S3 multipart",
+  feishu_drive: "Feishu Drive",
+  terabox: "TeraBox",
+  mega: "MEGA",
+};
+
+export function friendlyAdapter(name: string): string {
+  return ADAPTER_LABELS[name] ?? name;
+}
+
+/**
+ * Recent destinations for the endpoint datalist (#65 Lane 1 zero-touch):
+ * newest job first, deduped, empty strings dropped, capped. Presentation
+ * math over journal records — no transfer truth.
+ */
+export function recentEndpoints(jobs: { endpoint: string }[], max = 8): string[] {
+  const seen: string[] = [];
+  for (let i = jobs.length - 1; i >= 0 && seen.length < max; i--) {
+    const ep = jobs[i].endpoint;
+    if (ep && !seen.includes(ep)) seen.push(ep);
+  }
+  return seen;
 }
 
 export function isTerminal(state: string): boolean {

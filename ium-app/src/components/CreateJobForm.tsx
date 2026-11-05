@@ -1,19 +1,32 @@
 /**
- * Create-job dialog (spec §8, issue #16). The file picker is the official
- * dialog plugin; the size comes from the shell's `stat_file` command — the
- * shell stats, the engine plans. The adapter select reflects the engine's
- * registry (`list_adapters`), never a hard-coded protocol list.
+ * Create-job intake (#16, #65 Lane 1): the zero-touch front door.
+ *
+ * Three ways in, one code path: drop a file (Tauri drag-drop), browse
+ * (official dialog plugin), or paste a path (#35 seam — the WebDriver
+ * keyboard lane; a GTK file dialog is not scriptable, a text field is).
+ * The shell stats whatever lands, the engine plans — the UI never computes
+ * transfer truth.
+ *
+ * e2e contract (pinned on #65): ids `upload-path` / `upload-endpoint` /
+ * `upload-adapter` / `upload-connections` / `upload-submit`; the adapter
+ * select's option VALUES stay the engine registry names.
  */
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "../api";
-import { humanBytes } from "../logic";
+import { friendlyAdapter, humanBytes } from "../logic";
+import { IconAlert, IconCheck, IconFile, IconUpload, IconX } from "./icons";
 
 export interface CreateJobFormProps {
   onCreated: () => void;
+  /** Journal-derived recent destinations for the datalist (presentation math). */
+  recents: string[];
+  /** Surface async failures as toasts — silent failures are a dev-tool habit. */
+  onError: (message: string) => void;
 }
 
-export function CreateJobForm({ onCreated }: CreateJobFormProps) {
+export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProps) {
   const [adapters, setAdapters] = useState<string[]>([]);
   const [adapter, setAdapter] = useState("");
   const [sourcePath, setSourcePath] = useState("");
@@ -22,6 +35,7 @@ export function CreateJobForm({ onCreated }: CreateJobFormProps) {
   const [maxConns, setMaxConns] = useState(3);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => {
     api
@@ -30,20 +44,84 @@ export function CreateJobForm({ onCreated }: CreateJobFormProps) {
         setAdapters(names);
         setAdapter((cur) => cur || names[0] || "");
       })
-      .catch((e) => setError(`registry unavailable: ${e}`));
+      .catch((e) => {
+        const msg = `registry unavailable: ${e}`;
+        setError(msg);
+        onError(msg);
+      });
+  }, [onError]);
+
+  // Zero-touch intake (#65): the OS drag-drop lands here and rides the same
+  // stat-and-plan path as every other entry. Outside a Tauri runtime (vite
+  // dev in a plain browser) getCurrentWebview() THROWS synchronously — guard
+  // so the form degrades to picker + paste-a-path instead of blanking.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let alive = true;
+    let cleanup: (() => void) | undefined;
+    try {
+      getCurrentWebview()
+        .onDragDropEvent((event) => {
+          if (event.payload.type === "enter" || event.payload.type === "over") {
+            setDragOver(true);
+          } else if (event.payload.type === "leave") {
+            setDragOver(false);
+          } else if (event.payload.type === "drop") {
+            setDragOver(false);
+            const path = event.payload.paths[0];
+            if (typeof path === "string") void onPathTyped(path);
+          }
+        })
+        .then((fn) => {
+          if (alive) unlisten = fn;
+          else fn();
+        })
+        .catch(() => {
+          /* no Tauri runtime — degrade quietly */
+        });
+      cleanup = () => {
+        alive = false;
+        unlisten?.();
+      };
+    } catch {
+      /* no Tauri runtime — degrade quietly */
+    }
+    return () => cleanup?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function pickFile() {
-    const path = await open({ multiple: false, directory: false });
-    if (typeof path !== "string") return;
-    setSourcePath(path);
-    setError(null);
     try {
-      setSourceSize(await api.statFile(path));
+      const path = await open({ multiple: false, directory: false });
+      if (typeof path !== "string") return;
+      await onPathTyped(path);
+    } catch (e) {
+      setError(`file picker failed: ${e}`);
+    }
+  }
+
+  async function stat(path: string): Promise<number | null> {
+    try {
+      const size = await api.statFile(path);
+      setSourceSize(size);
+      return size;
     } catch (e) {
       setSourceSize(null);
-      setError(`cannot stat file: ${e}`);
+      const msg = `cannot stat file: ${e}`;
+      setError(msg);
+      return null;
     }
+  }
+
+  /** Paste-a-path entry (#35): the keyboard is a first-class way in. */
+  async function onPathTyped(path: string) {
+    setSourcePath(path);
+    setError(null);
+    if (!path.trim()) {
+      setSourceSize(null);
+      return;
+    }
+    await stat(path);
   }
 
   async function submit() {
@@ -65,102 +143,155 @@ export function CreateJobForm({ onCreated }: CreateJobFormProps) {
       setEndpoint("");
       onCreated();
     } catch (e) {
-      setError(String(e));
+      const msg = String(e);
+      setError(msg);
+      onError(msg);
     } finally {
       setBusy(false);
     }
   }
 
-  /** Paste-a-path entry (issue #35): the picker is one way in, the keyboard
-   * is the other — the shell stats whatever lands here, the engine plans.
-   * The same input is the WebDriver seam: a GTK file dialog is not
-   * scriptable, a text field is. */
-  async function onPathTyped(path: string) {
-    setSourcePath(path);
-    if (!path.trim()) {
-      setSourceSize(null);
-      setError(null);
-      return;
-    }
-    setError(null);
-    try {
-      setSourceSize(await api.statFile(path));
-    } catch (e) {
-      setSourceSize(null);
-      setError(`cannot stat file: ${e}`);
-    }
-  }
-
   const ready = Boolean(adapter && sourcePath && sourceSize !== null && endpoint.trim() && !busy);
+  const filled = Boolean(sourcePath && sourceSize !== null);
 
   return (
-    <fieldset style={fieldset}>
-      <legend>New upload</legend>
-      <div style={row}>
-        <button onClick={pickFile}>Choose file…</button>
-        <input
-          id="upload-path"
-          style={input}
-          placeholder="or type/paste a source path"
-          value={sourcePath}
-          onChange={(e) => onPathTyped(e.target.value)}
-        />
-        {sourceSize !== null && <span>({humanBytes(sourceSize)})</span>}
+    <section className="card" aria-label="New upload">
+      {/* The drop zone: click = browse, drag = OS intake. Not a form control,
+          so it never intersects the e2e send_keys seams. */}
+      <div
+        className={`dropzone${dragOver ? " dropzone--over" : ""}${filled ? " dropzone--filled" : ""}`}
+        role="button"
+        tabIndex={0}
+        aria-label="Choose a file to upload — drop it here, browse, or paste a path below"
+        onClick={() => {
+          if (!filled) void pickFile();
+        }}
+        onKeyDown={(e) => {
+          if ((e.key === "Enter" || e.key === " ") && !filled) {
+            e.preventDefault();
+            void pickFile();
+          }
+        }}
+      >
+        {filled ? (
+          <div className="file-row">
+            <IconFile className="file-icon" size={20} />
+            <div style={{ minWidth: 0 }}>
+              <div className="file-name">{fileName(sourcePath)}</div>
+              <div className="file-meta">
+                {humanBytes(sourceSize ?? 0)} · ready
+              </div>
+            </div>
+            <IconCheck size={18} style={{ marginLeft: "auto", color: "var(--ok)" }} />
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm file-clear"
+              aria-label="Clear selected file"
+              onClick={(e) => {
+                e.stopPropagation();
+                setSourcePath("");
+                setSourceSize(null);
+                setError(null);
+              }}
+            >
+              <IconX size={13} />
+            </button>
+          </div>
+        ) : (
+          <>
+            <IconUpload className="dropzone-icon" size={26} />
+            <div className="dropzone-title">Drop a file here</div>
+            <div className="dropzone-hint">
+              or click to browse — any destination, any size, resumable by design
+            </div>
+          </>
+        )}
       </div>
-      <div style={row}>
-        <label>
-          Destination{" "}
+
+      <div className="form-grid">
+        <div className="field field--full">
+          <label className="field-label" htmlFor="upload-path">
+            Path
+          </label>
+          <input
+            id="upload-path"
+            className="input mono"
+            placeholder="or paste a source path…"
+            value={sourcePath}
+            onChange={(e) => void onPathTyped(e.target.value)}
+            spellCheck={false}
+          />
+        </div>
+
+        <div className="field">
+          <label className="field-label" htmlFor="upload-endpoint">
+            Destination
+          </label>
           <input
             id="upload-endpoint"
-            style={input}
-            placeholder="endpoint URL (bucket URL / tus endpoint / upload URL)"
+            className="input mono"
+            placeholder="endpoint URL"
             value={endpoint}
+            list="endpoint-recents"
             onChange={(e) => setEndpoint(e.target.value)}
+            spellCheck={false}
           />
-        </label>
-        <label>
-          Adapter{" "}
-          <select id="upload-adapter" value={adapter} onChange={(e) => setAdapter(e.target.value)}>
+          <datalist id="endpoint-recents">
+            {recents.map((ep) => (
+              <option key={ep} value={ep} />
+            ))}
+          </datalist>
+        </div>
+
+        <div className="field">
+          <label className="field-label" htmlFor="upload-adapter">
+            Protocol
+          </label>
+          <select
+            id="upload-adapter"
+            className="select"
+            value={adapter}
+            onChange={(e) => setAdapter(e.target.value)}
+          >
             {adapters.map((a) => (
               <option key={a} value={a}>
-                {a}
+                {friendlyAdapter(a)}
               </option>
             ))}
           </select>
-        </label>
-        <label>
-          Connections{" "}
+        </div>
+
+        <div className="field">
+          <label className="field-label" htmlFor="upload-connections">
+            Connections
+          </label>
           <input
             id="upload-connections"
+            className="input"
             type="number"
             min={1}
             max={32}
             value={maxConns}
             onChange={(e) => setMaxConns(Math.max(1, Number(e.target.value) || 1))}
           />
-        </label>
-        <button id="upload-submit" onClick={submit} disabled={!ready}>
-          Upload
+        </div>
+
+        <button id="upload-submit" className="btn btn--primary" onClick={submit} disabled={!ready}>
+          {busy ? "Creating…" : "Upload"}
         </button>
       </div>
-      {error && <p style={{ color: "#b3261e", margin: "4px 0 0" }}>{error}</p>}
-    </fieldset>
+
+      {error && (
+        <p className="alert" role="alert">
+          <IconAlert size={14} />
+          <span>{error}</span>
+        </p>
+      )}
+    </section>
   );
 }
 
-const fieldset: React.CSSProperties = {
-  border: "1px solid #d0d4cf",
-  borderRadius: 8,
-  padding: "8px 12px",
-  marginBottom: 16,
-};
-
-const row: React.CSSProperties = {
-  display: "flex",
-  gap: 12,
-  alignItems: "center",
-  flexWrap: "wrap",
-  margin: "6px 0",
-};
-
-const input: React.CSSProperties = { width: 380 };
+function fileName(path: string): string {
+  const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return i >= 0 ? path.slice(i + 1) : path;
+}

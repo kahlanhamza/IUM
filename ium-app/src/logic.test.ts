@@ -6,18 +6,54 @@ import {
   canPause,
   canResume,
   confirmedTotal,
+  friendlyAdapter,
   hostOf,
   percentDone,
+  recentEndpoints,
   speedBetween,
 } from "./logic";
 
-describe("honest badge mapping (#16)", () => {
+describe("honest badge mapping (#16, #65 Lane 1 structured badge)", () => {
   it("maps the engine's capability badge verbatim, never recomputed", () => {
-    expect(badgeFor("resumable")).toBe("Resumable ✅");
-    expect(badgeFor("one_shot")).toBe("One-shot ⚠️");
+    expect(badgeFor("resumable")).toEqual({ kind: "resumable", label: "Resumable" });
+    expect(badgeFor("one_shot")).toEqual({ kind: "one_shot", label: "One-shot" });
   });
   it("refuses to invent a badge for an unknown capability", () => {
-    expect(badgeFor("warp_drive" as never)).toBe("unknown");
+    expect(badgeFor("warp_drive" as never)).toEqual({ kind: "unknown", label: "unknown" });
+  });
+});
+
+describe("adapter display names (#65 Lane 1)", () => {
+  it("maps known registry names to friendly labels — values stay registry names", () => {
+    expect(friendlyAdapter("http_oneshot")).toBe("HTTP one-shot");
+    expect(friendlyAdapter("tus")).toBe("TUS resumable");
+    expect(friendlyAdapter("s3_multipart")).toBe("S3 multipart");
+    expect(friendlyAdapter("feishu_drive")).toBe("Feishu Drive");
+    expect(friendlyAdapter("terabox")).toBe("TeraBox");
+    expect(friendlyAdapter("mega")).toBe("MEGA");
+  });
+  it("an unknown registry name passes through untouched — the UI reflects the engine", () => {
+    expect(friendlyAdapter("future_adapter")).toBe("future_adapter");
+  });
+});
+
+describe("recent destinations (#65 Lane 1 zero-touch)", () => {
+  it("most recent first, deduped, capped", () => {
+    const jobs = [
+      { endpoint: "http://a:1/files" },
+      { endpoint: "http://b:2/files" },
+      { endpoint: "http://a:1/files" },
+      { endpoint: "" },
+      { endpoint: "http://c:3/files" },
+    ];
+    expect(recentEndpoints(jobs as never, 3)).toEqual([
+      "http://c:3/files",
+      "http://a:1/files",
+      "http://b:2/files",
+    ]);
+  });
+  it("no jobs, no recents", () => {
+    expect(recentEndpoints([], 8)).toEqual([]);
   });
 });
 
