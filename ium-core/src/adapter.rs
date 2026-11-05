@@ -72,7 +72,7 @@ pub struct ProbeReport {
     pub min_chunk_bytes: Option<u64>,
     /// The lane's PRESCRIBED uniform chunk size, when the protocol fixes the
     /// geometry (issue #56, M9#1). `Some(block)` = the plan MUST be the
-    /// uniform-tail grid ([`ChunkPool::plan_uniform_tail`]) and NO reshape
+    /// uniform-tail grid ([`crate::chunk::ChunkPool::plan_uniform_tail`]) and NO reshape
     /// path (resplit, cap replans) may touch it — the wire rejects every
     /// other shape (Feishu drive-v1 answers 1062009 to any non-tail part
     /// that is not exactly `block_size`, probed live 2026-11-05). `None` =
