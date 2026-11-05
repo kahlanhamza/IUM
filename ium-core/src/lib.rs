@@ -42,6 +42,7 @@
 pub mod adapter;
 pub mod adapter_compress;
 pub mod adapter_fec;
+pub mod adapter_feishu;
 pub mod adapter_http;
 pub mod adapter_s3;
 pub mod adapter_tus;

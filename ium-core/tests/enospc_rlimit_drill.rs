@@ -113,6 +113,7 @@ impl TransferAdapter for RlimitAdapter {
             max_parallel: None,
             session_token: None,
             concatenation: false,
+            uniform_block: None,
         })
     }
 

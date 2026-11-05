@@ -155,6 +155,26 @@ prose. An entry without verifiable issue numbers does not belong here.
   socket-buffer-sized body cross at 4× its cap (the relay now pays its
   schedule debt before returning), and a silent death on an upstream
   early-409 (now `UPSTREAM-GONE` + honest teardown).
+- #56 — the Feishu Drive lane (M9 rung 1): `adapter_feishu` over the
+  drive-v1 resumable multipart API (the owner's own storage; tenant
+  credentials from env, no secrets in the repo). Wire facts rehearsed
+  LIVE (W0–W11, probed 2026-11-05): platform-fixed 4 MiB blocks
+  (`block_num = ceil(size/4 MiB)`, 24 h transaction), parts as
+  multipart/form-data with the binary field named `file` and an Adler-32
+  checksum, out-of-order parts accepted, even_split shapes REJECTED
+  (1062009) — hence the new prescribed-geometry channel:
+  `ProbeReport::uniform_block` + the trait twin, `ChunkPool::
+  plan_uniform_tail`/`new_uniform` (remainder concentrated in the tail),
+  and the manager refusing every reshape (resplit, cap replans) on such
+  lanes. Session = the upload transaction (`upload_id` journaled as the
+  JSON session token; `reattach` restores; the manager's finalize-once
+  machinery (#50) journals `upload_finish` and its crash-window repair).
+  Verify = streamed download + sha256 (the wire exposes NO size metadata —
+  W4). Error mapping is loud: 1061021 → ExpiredSession, 1061045 → Busy,
+  1062009 → Corruption, 1061073 → AuthRequired. The env-gated live drill
+  (`feishu_drive_live_drill`): 9 MiB / 3 blocks, out-of-order parts,
+  journal-truth resume on a FRESH adapter, finish, byte-exact verify,
+  cleanup — green in 11 s with vault credentials. Suite 226 → 236.
 
 ### Fixed
 - #47 — resplit × in-flight tus lease: the drive loop stranded a `Leased` row

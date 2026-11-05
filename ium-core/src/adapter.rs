@@ -70,6 +70,14 @@ pub struct ProbeReport {
     /// directly with piece size, and the resplit can only help below the
     /// floor if the floor itself is lane-aware.
     pub min_chunk_bytes: Option<u64>,
+    /// The lane's PRESCRIBED uniform chunk size, when the protocol fixes the
+    /// geometry (issue #56, M9#1). `Some(block)` = the plan MUST be the
+    /// uniform-tail grid ([`ChunkPool::plan_uniform_tail`]) and NO reshape
+    /// path (resplit, cap replans) may touch it — the wire rejects every
+    /// other shape (Feishu drive-v1 answers 1062009 to any non-tail part
+    /// that is not exactly `block_size`, probed live 2026-11-05). `None` =
+    /// the even_split planner as before (every pre-#56 lane).
+    pub uniform_block: Option<u64>,
     /// Opaque session descriptor to carry across confirms.
     pub session_token: Option<String>,
     /// Did the server ADVERTISE the tus concatenation extension (issue #50,
@@ -312,6 +320,15 @@ pub trait TransferAdapter: Send + Sync {
         self.probe(spec).await
     }
 
+    /// The lane's prescribed uniform chunk size, when STATIC (issue #56):
+    /// consulted at CREATE time — before any probe exists — so the initial
+    /// plan is born in the prescribed shape (the probe later re-declares
+    /// the same value into the journal; resume re-derives from the journal,
+    /// ADR-002). `None` = the lane has no prescribed geometry.
+    fn uniform_block(&self) -> Option<u64> {
+        None
+    }
+
     /// Materialize a completed transfer, if the protocol has a step beyond
     /// the last confirmed byte (issue #50: the tus concatenation final
     /// POST; S3's finalize-if-needed lives inside its own upload path,
@@ -371,6 +388,7 @@ mod tests {
         }
         async fn probe(&self, _spec: &JobSpec) -> Result<ProbeReport, AdapterError> {
             Ok(ProbeReport {
+                uniform_block: None,
                 resumable: false,
                 max_chunk_bytes: None,
                 min_chunk_bytes: None,

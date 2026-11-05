@@ -196,6 +196,7 @@ impl TransferAdapter for FecAdapter {
         let mut plan = geo.journal_payload();
         plan["groups"] = json!(tokens);
         Ok(ProbeReport {
+            uniform_block: None,
             resumable,
             max_chunk_bytes: Some(geo.group_bytes),
             min_chunk_bytes: Some(geo.group_bytes),

@@ -91,6 +91,7 @@ impl TransferAdapter for RecordingAdapter {
             // Server-like: every creation yields a UNIQUE session id (tusd's
             // Locations do; the fec lane's groups are told apart by these).
             session_token: Some(format!("sess-{}-{n}", spec.endpoint.trim_end_matches('/'))),
+            uniform_block: None,
             concatenation: false,
         })
     }

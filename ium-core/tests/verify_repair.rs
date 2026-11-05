@@ -113,6 +113,7 @@ impl TransferAdapter for RepairMock {
             max_chunk_bytes: None,
             min_chunk_bytes: None,
             max_parallel: None,
+            uniform_block: None,
         })
     }
     async fn upload_chunk(

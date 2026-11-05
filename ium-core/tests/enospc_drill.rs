@@ -135,6 +135,7 @@ impl TransferAdapter for DrillAdapter {
             max_parallel: None,
             session_token: None,
             concatenation: false,
+            uniform_block: None,
         })
     }
 

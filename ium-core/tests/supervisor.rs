@@ -62,6 +62,7 @@ impl TransferAdapter for WedgeMock {
             max_parallel: None,
             session_token: Some("wedge-mock".into()),
             concatenation: false,
+            uniform_block: None,
         })
     }
     async fn upload_chunk(

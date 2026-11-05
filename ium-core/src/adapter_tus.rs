@@ -422,6 +422,7 @@ impl TusAdapter {
                 let location = resolve_location(&spec.endpoint, &raw);
                 self.restore_session(&spec.endpoint, location.clone());
                 Ok(ProbeReport {
+                    uniform_block: None,
                     resumable: true,
                     max_chunk_bytes: None,
                     // Issue #13: TUS is ONE sequential-offset resource.
@@ -862,6 +863,7 @@ impl TransferAdapter for TusAdapter {
             .insert(spec.endpoint.clone(), parse_session_token(&token));
         self.locks_for(&spec.endpoint, partials.len());
         Ok(ProbeReport {
+            uniform_block: None,
             resumable: true,
             max_chunk_bytes: None,
             max_parallel: Some(partials.len() as u32),

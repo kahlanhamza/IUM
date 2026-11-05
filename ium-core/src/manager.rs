@@ -264,7 +264,13 @@ impl JobManager {
         } else {
             1
         };
-        let pool = ChunkPool::new(spec.source_size, workers);
+        let pool = match adapter.uniform_block() {
+            // Issue #56: a prescribed-geometry lane is BORN uniform-tail —
+            // the wire rejects every other shape (Feishu 1062009), so the
+            // create-time plan must already be the prescribed grid.
+            Some(block) => ChunkPool::new_uniform(spec.source_size, block),
+            None => ChunkPool::new(spec.source_size, workers),
+        };
         let record = self
             .j()
             .insert_job(crate::journal::NewJob {
@@ -603,6 +609,10 @@ impl JobManager {
                         // journaled so resume re-derives without re-probing
                         // (ADR-002). Absent in pre-#50 journals = false.
                         "concatenation": probe.concatenation,
+                        // Issue #56: the PRESCRIBED uniform geometry, when
+                        // the lane declares one — the reshape paths read it
+                        // from the journal and never touch the shape.
+                        "uniform_block": probe.uniform_block,
                     }),
                 )
                 .map_err(EngineError::from)?;
@@ -761,6 +771,13 @@ impl JobManager {
     /// assumed. A cap that does not bind is a no-op: byte-identical
     /// behavior for adapters that never declare a binding ceiling.
     fn apply_chunk_cap(&self, job_id: &str, cap: u64) -> Result<()> {
+        // Issue #56: a prescribed-geometry lane refuses EVERY reshape — the
+        // wire (not a policy) dictates the shape, and the declaration was
+        // journaled at probe. The cap is already honored by construction
+        // (uniform_block == the wire's own block size).
+        if self.declared_uniform_block(job_id).is_some() {
+            return Ok(());
+        }
         let chunks = self.j().load_chunks(job_id).map_err(EngineError::from)?;
         let untouched = chunks
             .iter()
@@ -815,6 +832,12 @@ impl JobManager {
         let job = self.require_job(job_id)?;
         if job.source_size == 0 {
             return Ok(()); // the [(0,0)] plan has no piece to re-shape
+        }
+        // Issue #56: the measured piece cannot reshape a prescribed-geometry
+        // lane — the uniform-tail grid IS the wire's arithmetic (ADR-011:
+        // the adapter declaration wins over every host hint).
+        if self.declared_uniform_block(job_id).is_some() {
+            return Ok(());
         }
         let target = adapter_cap.map_or(recommended, |cap| recommended.min(cap));
         if target == 0 {
@@ -901,6 +924,25 @@ impl JobManager {
             .and_then(|v| v.as_u64())
             .map(|floor| floor.clamp(1024, crate::chunk::CHUNK_MIN))
             .unwrap_or(crate::chunk::CHUNK_MIN)
+    }
+
+    /// Consume `ProbeReport.uniform_block` (issue #56, ADR-011 channel):
+    /// read the LAST journaled probe event and return the lane's PRESCRIBED
+    /// uniform chunk size, when it declared one. On such lanes the plan
+    /// shape is the WIRE's arithmetic — resplit and cap replans are refused
+    /// (they would break the protocol's geometry, Feishu 1062009) — and the
+    /// shape survives resume/crash recovery unchanged (the journal re-derives,
+    /// ADR-002). Journals without the key (pre-#56) declare nothing.
+    fn declared_uniform_block(&self, job_id: &str) -> Option<u64> {
+        self.j()
+            .events_for(job_id)
+            .ok()?
+            .into_iter()
+            .rev()
+            .find(|(_, kind, _)| kind == "probe")
+            .and_then(|(_, _, payload)| serde_json::from_str::<serde_json::Value>(&payload).ok())
+            .and_then(|v| v.get("uniform_block").cloned())
+            .and_then(|v| v.as_u64())
     }
 
     /// Consume the journaled link profile (issue #48, M8 rung 1): the LAST
@@ -1977,6 +2019,12 @@ impl JobManager {
         median_bps: Option<f64>,
         job_elapsed: Option<Duration>,
     ) -> bool {
+        // Issue #56: no resplit on prescribed-geometry lanes — the shape is
+        // the wire's arithmetic, and a resplit would produce parts the
+        // server rejects (1062009). The candidate is never even computed.
+        if self.declared_uniform_block(job_id).is_some() {
+            return false;
+        }
         let candidate = {
             let pool = shared.pool.lock().expect("pool mutex poisoned");
             let current = pool.outstanding_target();
@@ -2151,6 +2199,7 @@ impl JobManager {
                         "session_token": probe.session_token,
                         "max_parallel": probe.max_parallel,
                         "min_chunk_bytes": probe.min_chunk_bytes,
+                        "uniform_block": probe.uniform_block,
                     }),
                 )
                 .map_err(EngineError::from)?;

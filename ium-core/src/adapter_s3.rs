@@ -748,6 +748,7 @@ impl TransferAdapter for S3MultipartAdapter {
                 max_chunk_bytes: None,
                 min_chunk_bytes: None,
                 max_parallel: None,
+                uniform_block: None,
                 session_token: None,
                 concatenation: false,
             });
@@ -776,6 +777,7 @@ impl TransferAdapter for S3MultipartAdapter {
             .unwrap()
             .insert(spec.endpoint.clone(), upload_id.clone());
         Ok(ProbeReport {
+            uniform_block: None,
             resumable: true,
             max_chunk_bytes: Some(S3_MAX_PART_BYTES),
             // Parts are independent resources — no parallelism constraint.

@@ -124,6 +124,7 @@ impl TransferAdapter for RecordingAdapter {
             min_chunk_bytes: None,
             max_parallel: Some(1),
             session_token: Some(format!("sess-{}", spec.source_size)),
+            uniform_block: None,
             concatenation: false,
         })
     }

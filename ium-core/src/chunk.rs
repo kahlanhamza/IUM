@@ -210,6 +210,58 @@ impl ChunkPool {
         }
     }
 
+    /// The PRESCRIBED-geometry plan (issue #56, M9#1): uniform `block`-sized
+    /// chunks with the whole remainder concentrated in the LAST chunk. This
+    /// is the shape fixed-block protocols demand — the Feishu drive-v1 wire
+    /// REJECTS even_split shapes (any non-tail part ≠ the prepare-returned
+    /// `block_size` fails with 1062009, probed live 2026-11-05: a 9 MiB file
+    /// as 3+3+3 MiB was refused, 4+4+1 accepted). Chunk *i* rides part
+    /// `seq` *i* one-to-one, so the planned count equals the prepare
+    /// arithmetic `ceil(total / block)` exactly.
+    pub fn plan_uniform_tail(total_len: u64, block: u64) -> Vec<(u64, u64)> {
+        if total_len == 0 {
+            // Issue #5 invariant (see `plan`).
+            return vec![(0, 0)];
+        }
+        let block = block.max(1);
+        let n = total_len.div_ceil(block) as usize;
+        let mut ranges = Vec::with_capacity(n);
+        let mut offset = 0u64;
+        for i in 0..n {
+            let end = ((i as u64 + 1) * block).min(total_len);
+            ranges.push((offset, end));
+            offset = end;
+        }
+        ranges
+    }
+
+    /// A pool over the prescribed uniform-tail grid (issue #56) — the
+    /// constructor twin of [`ChunkPool::new_capped_floor`] for lanes whose
+    /// geometry the protocol fixes (the adapter declares `uniform_block`;
+    /// reshape paths — resplit and cap replans — are gated off on such
+    /// lanes: the wire, not a policy, dictates the shape).
+    pub fn new_uniform(total_len: u64, block: u64) -> Self {
+        let ranges = Self::plan_uniform_tail(total_len, block);
+        let chunks = ranges
+            .into_iter()
+            .enumerate()
+            .map(|(i, (b, e))| Chunk {
+                idx: i as u32,
+                begin: b,
+                end: e,
+                state: ChunkState::Pending,
+                bytes_confirmed: 0,
+                adapter_token: None,
+            })
+            .collect();
+        Self {
+            total_len,
+            chunks,
+            leases: std::collections::HashMap::new(),
+            next_attempt: 0,
+        }
+    }
+
     /// Rebuild a pool from persisted rows (journal replay after a crash).
     pub fn from_rows(total_len: u64, rows: Vec<ChunkRow>) -> Self {
         let mut chunks: Vec<Chunk> = rows

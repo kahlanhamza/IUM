@@ -132,6 +132,7 @@ impl CompressAdapter {
         });
         *self.mode.lock().unwrap() = Some(Mode::Declined);
         Ok(ProbeReport {
+            uniform_block: None,
             resumable: rep.resumable,
             max_chunk_bytes: None,
             min_chunk_bytes: None,
@@ -231,6 +232,7 @@ impl TransferAdapter for CompressAdapter {
             source_sha256,
         });
         Ok(ProbeReport {
+            uniform_block: None,
             resumable: rep.resumable,
             max_chunk_bytes: None,
             min_chunk_bytes: Some(source_size),

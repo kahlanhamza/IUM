@@ -145,6 +145,7 @@ impl TransferAdapter for HttpOneShotAdapter {
     async fn probe(&self, _spec: &JobSpec) -> Result<ProbeReport, AdapterError> {
         // Nothing to discover for a blind PUT; honesty over ceremony.
         Ok(ProbeReport {
+            uniform_block: None,
             resumable: false,
             max_chunk_bytes: None,
             min_chunk_bytes: None,

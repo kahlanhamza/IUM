@@ -211,6 +211,7 @@ impl TransferAdapter for AimdAdapter {
             min_chunk_bytes: None,
             session_token: Some("aimd-session".into()),
             concatenation: false,
+            uniform_block: None,
         })
     }
     async fn upload_chunk(

@@ -204,6 +204,7 @@ impl TransferAdapter for MockAdapter {
             max_parallel: self.probe_max_parallel,
             session_token: Some("mock-session".into()),
             concatenation: false,
+            uniform_block: None,
         })
     }
     async fn upload_chunk(
@@ -1224,6 +1225,7 @@ impl TransferAdapter for ScriptedAdapter {
             max_parallel: None,
             session_token: Some("mock-scripted".into()),
             concatenation: false,
+            uniform_block: None,
         })
     }
     async fn upload_chunk(
