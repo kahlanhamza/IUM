@@ -56,6 +56,11 @@ use crate::JobSpec;
 /// the journaled endpoint must be self-contained for reattach).
 pub const BRIDGE_SCHEME: &str = "rclone-bridge://";
 
+/// The MEGA lane's registry key (#61): a named bridge instance over the
+/// `mega` backend, so the UI select shows `mega` (the owner-facing name)
+/// next to the generic operator-configured `rclone_bridge`.
+pub const MEGA_LANE: &str = "mega";
+
 /// How the serve process is owned (D1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RcloneBridgeMode {
@@ -87,6 +92,11 @@ pub struct RcloneBridgeConfig {
     /// Extra environment for the rclone child (real backends: the
     /// `RCLONE_CONFIG_*` credential variables — env-only, never a conf file).
     pub extra_env: Vec<(String, String)>,
+    /// The registry key this instance answers to (`TransferAdapter::name` —
+    /// #61 D2). `'static` because registry keys are compile-time names; the
+    /// default is the generic `rclone_bridge`, the MEGA constructor sets
+    /// [`MEGA_LANE`]. Two bridge instances can coexist in one registry.
+    pub lane_name: &'static str,
 }
 
 impl RcloneBridgeConfig {
@@ -112,7 +122,16 @@ impl RcloneBridgeConfig {
             remote,
             bucket: "ium".into(),
             extra_env: Vec::new(),
+            lane_name: "rclone_bridge",
         })
+    }
+
+    /// Name-override builder (D2): keeps every other field, retags the
+    /// registry key. `name` must be `'static` (registry keys are
+    /// compile-time names).
+    pub fn with_lane_name(mut self, name: &'static str) -> Self {
+        self.lane_name = name;
+        self
     }
 
     /// Harness/production constructor from the `IUM_RCLONE_*` environment:
@@ -152,6 +171,65 @@ impl RcloneBridgeConfig {
             cfg.bucket = b;
         }
         Ok(cfg)
+    }
+
+    /// The MEGA lane constructor (#61 D1): `IUM_MEGA_USER` + `IUM_MEGA_PASS`
+    /// (required — [`AdapterError::AuthRequired`] when missing), optional
+    /// `IUM_MEGA_2FA`, `IUM_MEGA_BUCKET` (default `ium`),
+    /// `IUM_MEGA_RCLONE_BIN` (default `rclone`). The remote is the BACKEND
+    /// ROOT (`mega:` — the topology wire fact: a bucket-less backend must be
+    /// served from its root with a top-level folder as the bucket); the pass
+    /// rides `RCLONE_CONFIG_MEGA_PASS` **rclone-obscured** (the subprocess
+    /// argv exposure is rclone's own standard practice and is never logged
+    /// or journaled). Everything downstream is #63's, inherited unchanged.
+    pub async fn mega_from_env() -> Result<Self, AdapterError> {
+        let user = std::env::var("IUM_MEGA_USER")
+            .map_err(|_| AdapterError::AuthRequired("IUM_MEGA_USER not set".into()))?;
+        let pass = std::env::var("IUM_MEGA_PASS")
+            .map_err(|_| AdapterError::AuthRequired("IUM_MEGA_PASS not set".into()))?;
+        let bucket = std::env::var("IUM_MEGA_BUCKET").unwrap_or_else(|_| "ium".to_string());
+        let bin = std::env::var("IUM_MEGA_RCLONE_BIN").unwrap_or_else(|_| "rclone".to_string());
+        let obscured = Self::rclone_obscure(&PathBuf::from(&bin), &pass).await?;
+        let mut cfg = Self::new(RcloneBridgeMode::Spawn, "mega:")?;
+        cfg.rclone_bin = PathBuf::from(bin);
+        cfg.bucket = bucket;
+        cfg.lane_name = MEGA_LANE;
+        cfg.extra_env = vec![
+            ("RCLONE_CONFIG_MEGA_TYPE".to_string(), "mega".to_string()),
+            ("RCLONE_CONFIG_MEGA_USER".to_string(), user),
+            ("RCLONE_CONFIG_MEGA_PASS".to_string(), obscured),
+        ];
+        if let Ok(code) = std::env::var("IUM_MEGA_2FA") {
+            cfg.extra_env
+                .push(("RCLONE_CONFIG_MEGA_2FA".to_string(), code));
+        }
+        Ok(cfg)
+    }
+
+    /// `rclone obscure <pass>` — the wire's credential preprocessing. The
+    /// output is the obscured form; BOTH the argument and the output stay
+    /// out of every log and journal (errors carry the stderr only).
+    async fn rclone_obscure(bin: &PathBuf, pass: &str) -> Result<String, AdapterError> {
+        let out = tokio::process::Command::new(bin)
+            .args(["obscure", pass])
+            .output()
+            .await
+            .map_err(|e| {
+                AdapterError::Unknown(format!("mega lane: cannot run rclone obscure: {e}"))
+            })?;
+        if !out.status.success() {
+            return Err(AdapterError::Unknown(format!(
+                "mega lane: rclone obscure failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        let obscured = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if obscured.is_empty() {
+            return Err(AdapterError::Unknown(
+                "mega lane: rclone obscure answered empty".into(),
+            ));
+        }
+        Ok(obscured)
     }
 }
 
@@ -218,6 +296,9 @@ pub struct RcloneBridgeAdapter {
     inner: S3MultipartAdapter,
     host: String,
     bucket: String,
+    /// The registry key this instance answers to (the config's choice —
+    /// #61 D2: `mega` for the MEGA lane, `rclone_bridge` for the generic).
+    lane_name: &'static str,
     /// `Some` only in Spawn mode; killed on drop (D1 — no orphans). `Child`
     /// is not `Sync`, so the mutex both grants interior kill access and
     /// makes the adapter `Sync` (the manager shares it across workers).
@@ -233,7 +314,26 @@ impl RcloneBridgeAdapter {
             RcloneBridgeMode::Connect { port } => (format!("127.0.0.1:{port}"), None),
             RcloneBridgeMode::Spawn => {
                 let mut child = Self::spawn_serve(&cfg).await?;
-                let port = Self::wait_ready(&cfg, &mut child).await?;
+                let (port, stderr) = Self::wait_ready(&cfg, &mut child).await?;
+                // Keep DRAINING the serve's stderr for the child's whole
+                // life (the #61 drill caught this against the LIVE MEGA
+                // backend: dropping the read end after readiness turns
+                // every later rclone stderr write into EPIPE → SIGPIPE —
+                // and Go's default for SIGPIPE on fd 2 KILLS the process
+                // mid-transfer; the quiet local-fs drill never saw it).
+                // The kill-safety net (kill_on_drop + Drop) is unaffected:
+                // the child handle stays in the adapter.
+                tokio::spawn(async move {
+                    use tokio::io::AsyncReadExt;
+                    let mut stderr = stderr;
+                    let mut buf = vec![0u8; 4096];
+                    loop {
+                        match stderr.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {} // post-listen stderr is diagnostics only
+                        }
+                    }
+                });
                 (format!("127.0.0.1:{port}"), Some(child))
             }
         };
@@ -252,6 +352,7 @@ impl RcloneBridgeAdapter {
             inner,
             host,
             bucket: cfg.bucket.clone(),
+            lane_name: cfg.lane_name,
             child: Mutex::new(child),
         })
     }
@@ -279,7 +380,13 @@ impl RcloneBridgeAdapter {
             })
     }
 
-    async fn wait_ready(_cfg: &RcloneBridgeConfig, child: &mut Child) -> Result<u16, AdapterError> {
+    /// Returns the parsed port AND the stderr reader — the caller owns the
+    /// drain from readiness on (the #61 SIGPIPE lesson: the read end must
+    /// never be dropped while the serve lives).
+    async fn wait_ready(
+        _cfg: &RcloneBridgeConfig,
+        child: &mut Child,
+    ) -> Result<(u16, tokio::process::ChildStderr), AdapterError> {
         use tokio::io::AsyncReadExt;
         let mut stderr = child
             .stderr
@@ -327,7 +434,7 @@ impl RcloneBridgeAdapter {
                     }
                     for line in complete.lines() {
                         if let Some(port) = parse_listen_port(line) {
-                            return Ok(port);
+                            return Ok((port, stderr));
                         }
                     }
                     if complete.len() > 8192 {
@@ -385,7 +492,7 @@ impl Drop for RcloneBridgeAdapter {
 #[async_trait]
 impl TransferAdapter for RcloneBridgeAdapter {
     fn name(&self) -> &'static str {
-        "rclone_bridge"
+        self.lane_name
     }
 
     fn capabilities(&self) -> Capability {
@@ -645,6 +752,132 @@ mod tests {
             .expect("registry instance");
         reg.register(std::sync::Arc::new(c));
         assert_eq!(reg.get("rclone_bridge").unwrap().name(), "rclone_bridge");
+
+        // Kill-safety (D1): dropping the SPAWN adapter reaps the serve.
+        drop(b);
+        drop(a);
+        let mut reaped = false;
+        for _ in 0..40 {
+            if std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+                reaped = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(reaped, "serve must be reaped after the spawn adapter drops");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The MEGA live drill (#61 D4) — the REAL backend, the owner's
+    /// credentials from the environment. Shape: spawn the bridge against
+    /// `mega:` (the ROOT topology fact) → probe a 9 MiB job → two
+    /// OUT-OF-ORDER parts → a FRESH Connect adapter resumes from the
+    /// JOURNALED token (the same-serve byte-level resume shape; serve death
+    /// stays #63's honest `ExpiredSession`, inherited) → the ADR-010 verify
+    /// gate → `rclone deletefile` + `rmdir` cleanup (the account left
+    /// clean). Skips loud without `IUM_MEGA_USER`/`IUM_MEGA_PASS`.
+    #[tokio::test]
+    async fn mega_live_drill() {
+        let mut cfg = match RcloneBridgeConfig::mega_from_env().await {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!("mega drill: IUM_MEGA_USER/IUM_MEGA_PASS not set — skip");
+                return;
+            }
+        };
+        // The drill pins the binary to the same one the wirefacts probes
+        // used when the env asks for it (the .toolchain/bin pin).
+        if let Ok(bin) = std::env::var("IUM_MEGA_RCLONE_BIN") {
+            cfg.rclone_bin = PathBuf::from(bin);
+        }
+        let bucket = cfg.bucket.clone();
+        let mib = 1024u64 * 1024;
+        // 12 MiB = 2 × 6 MiB — the PLANNER-TRUE 2-part shape (the S3 5 MiB
+        // floor refuses a 4 MiB tail; the #63 drill uses the same shape).
+        let size: u64 = 12 * mib;
+        let dir = std::env::temp_dir().join(format!("ium-mega-drill-{}", crate::ids::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (path, _src) = write_source(&dir, size);
+
+        let a = RcloneBridgeAdapter::start(cfg.clone())
+            .await
+            .expect("spawn mega bridge");
+        assert_eq!(a.name(), MEGA_LANE);
+        let port: u16 = a
+            .serve_host()
+            .rsplit_once(':')
+            .and_then(|(_, p)| p.parse().ok())
+            .expect("host:port");
+
+        let spec = JobSpec {
+            source_path: path.to_string_lossy().into(),
+            source_size: size,
+            adapter: MEGA_LANE.into(),
+            endpoint: "rclone-bridge://ium-mega-drill.bin".into(),
+        };
+
+        let report = a.probe(&spec).await.expect("probe");
+        assert!(report.resumable);
+        let token = report.session_token.clone().expect("UploadId token");
+
+        // 6 MiB + 6 MiB (the planner-true shapes above), OUT-OF-ORDER:
+        // part 1 rides adapter A (the spawn owner), part 0 is the resume.
+        let plan = ChunkPool::plan(size, 2, 5 * mib);
+        assert_eq!(plan.len(), 2);
+        assert_eq!(
+            plan[0],
+            (0, 6 * mib),
+            "both body parts carry the 5 MiB floor"
+        );
+        let lease_of = |i: u32| Lease {
+            idx: i,
+            begin: plan[i as usize].0,
+            end: plan[i as usize].1,
+            resume_from: plan[i as usize].0,
+            attempt: 0,
+        };
+        let confirm = a
+            .upload_chunk(&spec, &lease_of(1), &ProgressReporter::new())
+            .await
+            .unwrap_or_else(|e| panic!("part 1: {e}"));
+        assert_eq!(confirm.bytes_confirmed, plan[1].1 - plan[1].0);
+
+        // The crash-window shape: a FRESH adapter in CONNECT mode (same
+        // serve) reattaches from the JOURNALED token and finishes part 0.
+        let bcfg = RcloneBridgeConfig::new(RcloneBridgeMode::Connect { port }, "mega:")
+            .expect("connect config")
+            .with_lane_name(MEGA_LANE);
+        let b = RcloneBridgeAdapter::start(bcfg)
+            .await
+            .expect("connect mega bridge");
+        assert_eq!(b.serve_host(), a.serve_host(), "same serve, same session");
+        b.reattach(&spec.endpoint, &token).await.expect("reattach");
+        let confirm = b
+            .upload_chunk(&spec, &lease_of(0), &ProgressReporter::new())
+            .await
+            .unwrap_or_else(|e| panic!("resume part 0: {e}"));
+        assert_eq!(confirm.bytes_confirmed, plan[0].1 - plan[0].0);
+        let vr = b.verify(&spec).await.expect("verify");
+        assert!(vr.ok, "ADR-010 gate must pass: {:?}", vr.detail);
+
+        // Cleanup: `rclone purge` the drill bucket folder (the rehearsal's
+        // exact shape) — it removes the drill object AND any orphaned
+        // `.rclone_temp_multipart_*` staging dirs left by killed serves
+        // (the #63 W-fact: rclone stages multipart parts inside the bucket;
+        // a crashed round must not leave them on the owner's account).
+        let remote_root = cfg.remote.trim_end_matches('/').to_string();
+        let out = tokio::process::Command::new(&cfg.rclone_bin)
+            .args(["purge", &format!("{remote_root}/{bucket}")])
+            .envs(cfg.extra_env.iter().cloned())
+            .output()
+            .await
+            .expect("rclone purge");
+        assert!(
+            out.status.success(),
+            "purge failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
 
         // Kill-safety (D1): dropping the SPAWN adapter reaps the serve.
         drop(b);

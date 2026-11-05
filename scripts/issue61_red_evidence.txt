@@ -1,0 +1,16 @@
+error[E0432]: unresolved import `ium_core::adapter_rclone::MEGA_LANE`
+error[E0609]: no field `lane_name` on type `RcloneBridgeConfig`
+error[E0599]: no method named `with_lane_name` found for struct `RcloneBridgeConfig` in the current scope
+error[E0599]: no associated function or constant named `mega_from_env` found for struct `RcloneBridgeConfig` in the current scope
+error[E0599]: no associated function or constant named `mega_from_env` found for struct `RcloneBridgeConfig` in the current scope
+error[E0599]: no associated function or constant named `mega_from_env` found for struct `RcloneBridgeConfig` in the current scope
+
+#61 RED evidence — the MEGA lane contract fails to compile at HEAD `c542350`
+
+error[E0432]: unresolved import `ium_core::adapter_rclone::MEGA_LANE`
+(error[E0560]/E0609 for `lane_name`, E0599 for `mega_from_env` follow)
+
+The contract file pins the public surface the design note declares (D1 the
+credential-shaped constructor with the obscured pass, D2 the lane-name override
+defaulting rclone_bridge). After implementation the assertions move into the
+module suite and this file is removed (the #52/#56/#64 pattern).
