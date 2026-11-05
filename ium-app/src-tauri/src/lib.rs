@@ -66,20 +66,23 @@ fn register_adapters(manager: &mut JobManager) {
         Ok(config) => manager.register_adapter(Arc::new(TeraboxAdapter::new(config))),
         Err(e) => tracing::warn!("terabox not configured (no ndus cookie): {e}"),
     }
-    // The MEGA lane (#61) rides the rclone bridge: the start is async (serve
-    // spawn + readiness + mkdir, bounded ~15 s) and setup is sync — the
-    // env-gated lane starts under the app runtime. A machine without the
+    // The MEGA lane (#61) rides the rclone bridge: the constructor AND the
+    // start are async (serve spawn + readiness + mkdir, bounded ~15 s) and
+    // setup is sync — both run under the app runtime. A machine without the
     // env vars pays one env check and has no `mega` in its registry.
-    match ium_core::adapter_rclone::RcloneBridgeConfig::mega_from_env() {
-        Ok(cfg) => {
-            match tauri::async_runtime::block_on(
-                ium_core::adapter_rclone::RcloneBridgeAdapter::start(cfg),
-            ) {
-                Ok(adapter) => manager.register_adapter(Arc::new(adapter)),
-                Err(e) => tracing::warn!("mega lane unavailable: {e}"),
-            }
+    let mega = tauri::async_runtime::block_on(async {
+        match ium_core::adapter_rclone::RcloneBridgeConfig::mega_from_env().await {
+            Ok(cfg) => ium_core::adapter_rclone::RcloneBridgeAdapter::start(cfg)
+                .await
+                .map(Some)
+                .map_err(|e| e.to_string()),
+            Err(_) => Ok(None), // no env credentials — no lane, honestly
         }
-        Err(e) => tracing::warn!("mega not configured (no env credentials): {e}"),
+    });
+    match mega {
+        Ok(Some(adapter)) => manager.register_adapter(Arc::new(adapter)),
+        Ok(None) => tracing::warn!("mega not configured (no env credentials)"),
+        Err(e) => tracing::warn!("mega lane unavailable: {e}"),
     }
 }
 
