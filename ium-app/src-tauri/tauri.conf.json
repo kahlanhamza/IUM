@@ -32,6 +32,19 @@
       "icons/128x128@2x.png",
       "icons/icon.ico",
       "icons/icon.png"
-    ]
+    ],
+    "category": "Productivity",
+    "copyright": "© 2026 the IUM community — MIT",
+    "shortDescription": "Reliability-engineered uploads",
+    "longDescription": "IUM applies download-manager reliability engineering to uploads: a dynamic chunk pool, a crash-safe SQLite WAL journal, counted retries with backoff, slow-connection eviction, and verify-before-declare — with honest badges for every destination.",
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English"]
+      }
+    }
   }
 }

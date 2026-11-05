@@ -1,0 +1,196 @@
+# The release pipeline (#65 Lane 2): one installer artifact set per OS,
+# produced in CI on a tag push, checksummed, sized, and SMOKE-INSTALLED
+# silently on the runner before anything ships.
+#
+# The bar (issue #65):
+#   1. per-OS installers, tag-triggered          → this workflow
+#   2. lightweight + fast, MEASURED              → release_collect.sh sizes + SHA256SUMS
+#   3. zero-touch OS setup                       → webview downloadBootstrapper
+#      (Windows), NSIS currentUser (no UAC), deb/AppImage self-contained,
+#      and every smoke leg below installs + launches WITHOUT user intervention
+#   4. seamless UX                               → the app itself (Lane 1) +
+#      clean uninstall asserted here (no service registration, no PATH edits,
+#      journal lives in the OS data dir and survives reinstalls by design)
+#   5. release notes "The installers" section    → the publish job
+#
+# Honest signing status (pinned on the issue): installers ship UNSIGNED with
+# sha256 sidecars until the owner provides the signing credentials (Apple
+# Developer Program; Windows code-signing cert). The smoke legs still prove
+# silent install + boot + clean uninstall end-to-end.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  installers:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bundles: "deb,appimage,rpm"
+          - os: macos-latest
+            bundles: "dmg,app"
+          - os: windows-latest
+            bundles: "msi,nsis"
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux system deps (WebKitGTK)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            librsvg2-dev libxdo-dev libssl-dev build-essential
+      - name: Build the installers (per-OS bundle list)
+        working-directory: ium-app
+        run: |
+          npm ci --no-audit --no-fund
+          npm run tauri build -- --bundles "${{ matrix.bundles }}"
+      - name: Collect artifacts + sha256 + measured sizes
+        working-directory: ium-app
+        run: bash ../scripts/release_collect.sh
+      # ---- the zero-touch proof: silent install, real boot, clean uninstall ----
+      - name: Smoke — deb (silent install, xvfb boot, clean uninstall)
+        if: runner.os == 'Linux'
+        run: |
+          set -eux
+          sudo apt-get install -y xvfb
+          DEB=$(ls ium-app/dist_release/*.deb)
+          PKG=$(dpkg-deb -f "$DEB" Package)
+          sudo dpkg -i "$DEB"
+          BIN=$(dpkg -L "$PKG" | grep -m1 '/bin/' | head -n1)
+          test -x "$BIN"
+          xvfb-run -a timeout 12 "$BIN" &
+          sleep 8
+          pgrep -f "$BIN" >/dev/null && echo "booted: yes" || { echo "PROCESS DIED"; exit 1; }
+          pkill -f "$BIN" || true
+          sudo dpkg -r "$PKG"
+          if test -e "$BIN"; then echo "uninstall left files behind"; exit 1; fi
+          echo "uninstalled: clean"
+      - name: Smoke — MSI (silent install, boot, clean uninstall)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem ium-app/dist_release/*.msi).FullName
+          Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/qn","/norestart" -Wait
+          $exe = (Get-ChildItem "C:\Program Files\IUM\*.exe" | Select-Object -First 1).FullName
+          if (-not $exe) { throw "MSI binary not found after silent install" }
+          $p = Start-Process $exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) { throw "PROCESS DIED during smoke boot" }
+          Stop-Process -Id $p.Id -Force
+          Start-Process msiexec.exe -ArgumentList "/x","`"$msi`"","/qn","/norestart" -Wait
+          if (Test-Path "C:\Program Files\IUM") { throw "uninstall left files behind" }
+      - name: Smoke — NSIS (silent /S, currentUser, boot, clean uninstall)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = (Get-ChildItem ium-app/dist_release/*-setup.exe | Select-Object -First 1).FullName
+          if (-not $exe) { throw "NSIS setup not found" }
+          Start-Process $exe -ArgumentList "/S" -Wait
+          $dst = "$env:LOCALAPPDATA\IUM"
+          $bin = (Get-ChildItem "$dst\*.exe" | Where-Object Name -notlike "Uninstall*" | Select-Object -First 1).FullName
+          if (-not $bin) { throw "NSIS binary not found after /S install" }
+          $p = Start-Process $bin -PassThru
+          Start-Sleep -Seconds 8
+          if ($p.HasExited) { throw "PROCESS DIED during NSIS smoke boot" }
+          Stop-Process -Id $p.Id -Force
+          $un = (Get-ChildItem "$dst\Uninstall*.exe" | Select-Object -First 1).FullName
+          Start-Process $un -ArgumentList "/S" -Wait
+          if (Test-Path $dst) { throw "uninstaller left $dst behind" }
+      - name: Smoke — DMG (attach, install, boot, clean uninstall)
+        if: runner.os == 'Macos'
+        run: |
+          set -eux
+          DMG=$(ls ium-app/dist_release/*.dmg)
+          hdiutil attach "$DMG" -mountpoint /tmp/ium_dmg -nobrowse -quiet
+          cp -R /tmp/ium_dmg/IUM.app /Applications/
+          hdiutil detach /tmp/ium_dmg
+          /Applications/IUM.app/Contents/MacOS/IUM &
+          sleep 8
+          pgrep -fl "IUM.app" >/dev/null && echo "booted: yes" || { echo "PROCESS DIED"; exit 1; }
+          pkill -f "IUM.app" || true
+          rm -rf /Applications/IUM.app
+          if test -e /Applications/IUM.app; then echo "uninstall left files behind"; exit 1; fi
+          echo "uninstalled: clean"
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: ium-app/dist_release/
+          if-no-files-found: error
+
+  publish:
+    needs: installers
+    runs-on: ubuntu-latest
+    if: github.ref_type == 'tag'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+      - name: Assemble "The installers" (sizes + checksums, measured)
+        run: |
+          mkdir -p release_assets
+          find artifacts -type f ! -name "SHA256SUMS.txt" -exec cp {} release_assets/ \;
+          cd release_assets
+          sha256sum ./* | sed 's|\./||' > SHA256SUMS.txt
+          {
+            echo "## The installers"
+            echo
+            echo "Signed: **no** (see #65 — the signing credentials are a pinned owner"
+            echo "ask). Every artifact carries a sha256 you can check with"
+            echo '`sha256sum -c SHA256SUMS.txt`. Silent install: Windows NSIS `/S`,'
+            echo "MSI \`msiexec /i /qn\`, Linux \`dpkg -i\` / AppImage, macOS DMG drag."
+            echo
+            echo "| Installer | Size |"
+            echo "|---|---|"
+            for f in ./*.deb ./*.rpm ./*.AppImage ./*.dmg ./*.msi ./*.exe; do
+              [ -f "$f" ] || continue
+              b=$(stat -c %s "$f")
+              h=$(numfmt --to=iec "$b")
+              echo "| ${f#./} | $h |"
+            done
+            echo
+            echo "## Checksums"
+            echo
+            '```'
+            cat SHA256SUMS.txt
+            '```'
+          } > ../notes_body.md
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          {
+            echo "IUM ${TAG} — reliability-engineered uploads."
+            echo
+            cat notes_body.md
+          } > release_notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release_assets/* --clobber
+          else
+            gh release create "$TAG" --title "IUM $TAG" \
+              --notes-file release_notes.md release_assets/*
+          fi
