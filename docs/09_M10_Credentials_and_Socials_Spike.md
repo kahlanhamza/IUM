@@ -200,6 +200,27 @@ Primary source: <https://rclone.org/mega> (fetched 2026-11-06).
 - **Owner ask (~5 minutes)**: a MEGA account (email + password; if 2FA is enabled, the
   rotating code is needed at first login) → `.secrets/mega.json` (see §8).
 
+### 6.1 LIVE REHEARSAL (2026-11-06, real credentials, `scripts/wirefacts61/probe_mega_bridge.sh`)
+
+The owner's account works; the bridge carries it end-to-end **today**:
+
+- **W1 login OK** (env-injected `RCLONE_CONFIG_MEGA_TYPE/USER/PASS`, pass via `rclone obscure`
+  at runtime); root listing fine.
+- **W2 rclone-wire roundtrip**: 1 MiB `copyto` → `cat` **byte-exact**.
+- **W3 topology wire fact (the rehearsal caught it)**: `serve s3` parses the FIRST URL path
+  segment as the bucket — serving `mega:ium-drill` directly mis-parses (`/mp.bin` → bucket
+  `mp.bin` → `NoSuchBucket`, `Resource: mp.bin`); a bucket-less backend must be served from
+  its **ROOT** with a top-level folder as the bucket. Corrected topology: `serve s3 mega:`,
+  bucket = `ium-drill`.
+- **W4 single PUT 200 + GET-back byte-exact** over the sigv4 wire on the corrected topology.
+- **W5–W7 multipart FULLY GREEN on the LIVE backend**: `POST ?uploads` → real UploadId;
+  2 × 5/4 MiB part PUTs → real per-part ETags; complete → `CompleteMultipartUploadResult`
+  (ETag `-2` suffix); **9 MiB reconstructed byte-exact from MEGA**.
+- Cleanup: `rclone purge` removed the drill dir — account left clean.
+
+**Verdict: MEGA is a working IUM destination as of today** (bridge carrier). The native
+crypto lane stays research-track exactly as the issue anticipated.
+
 ---
 
 ## 7. TeraBox (issue #64) — cookies, not an API
@@ -222,6 +243,50 @@ protocol), <https://github.com/saahiyo/terabox-gateway> (cookie recipe), both fe
 - **Owner ask (~10 minutes)**: register/log in at <https://www.terabox.com> → F12 →
   Application → Cookies → `https://www.terabox.com` → copy the `ndus` value (+ `jsToken`
   from a Network-tab request) → `.secrets/terabox.json` (see §8).
+
+### 7.1 LIVE REHEARSAL (2026-11-06, real cookies, `scripts/wirefacts64/` — the FULL protocol is now pinned)
+
+The owner's cookies authenticate, and the complete write+read flow was driven LIVE
+(2 MiB probe file, roundtrip **BYTE-EXACT**, account left clean). Nine wire facts, each
+load-bearing:
+
+- **W1 the API surface is `dm.terabox.com`, NOT `www`**: identical cookie jar —
+  `www.terabox.com/api/*` answers `errno -6 "user not login"`; `dm.terabox.com/api/*`
+  answers `errno 0`. Every community tool that targets `www`/`1024terabox` surfaces a
+  different regional deployment (probed: `c-jp`/`data`/`up` hosts answer
+  `31045 "user not exists"` — wrong deployment for this account).
+- **W2 account facts**: quota `errno 0` — 30 GB permanent + 994 GB temporary (promo to
+  2026-12), ~1 TB total, ~5 MB used.
+- **W3 `jsToken` is SELF-SERVE**: it is embedded in the logged-in main page HTML
+  (`fn("<128-hex>")` URL-encoded) — extractable with the SAME ndus cookie, no owner
+  Network-tab step needed. Without it, all WRITE endpoints answer `errno 4000023
+  "need verify"` (risk control); with it, they pass.
+- **W4 `precreate` needs `autoinit=1`** to return the `uploadid` (63-char base64, embedding
+  the client IP — session-bound). Without it: `return_type 1` and NO uploadid (the dead end
+  the first probe hit).
+- **W5 `locateupload` assigns the per-session upload host**:
+  `GET dm.terabox.com/rest/2.0/pcs/file?method=locateupload` →
+  `{server: ["dm1-cdata.terabox.com","dm2-cdata.terabox.com","kul-cdata.terabox.com"],
+  client_ip, expire: 600}`. The fixed community host (`c-jp...`) is deployment-wrong
+  (W1); the assigned host MUST be used.
+- **W6 `superfile2` is a MULTIPART-FORM upload** (`file` field, `uploadsign=0`,
+  `partseq=0`) on the assigned host → **HTTP 200 with the part's MD5 echoed back —
+  matched our local MD5 exactly** (a built-in integrity signal for the adapter's verify).
+- **W7 `create` (with `rtype=1`) finalizes**: `errno 0`, `fs_id` returned; `list` shows the
+  file (name + size). `filemanager?opera=delete` removes it (`errno 0`) — cleanup works.
+- **W8 download = PCS classic**: `GET dm.terabox.com/rest/2.0/pcs/file?method=download&path=…`
+  → **302 to a signed CDN URL** (`kul-ddata.terabox.com/file/…`, `sign`/`pkey`/`expires`)
+  → bytes. The `/api/download` and `filemetas` shapes returned `errno 2` / empty `info` —
+  dead ends recorded for the adapter author.
+- **W9 THE ROUNDTRIP**: 2 MiB uploaded (P1→P7), downloaded back through the signed URL,
+  **byte-exact (cmp clean)**, then deleted — the account ends clean.
+
+**Verdict: the community web protocol is directly adapter-implementable** — the wire maps
+cleanly onto the IUM contract (precreate=init/session, superfile2=chunks with per-part MD5
+echo, create=finalize, method=download=verify stream, filemanager=cleanup). **No fork
+build is required for a native TeraBox adapter**; the fork lane (bclone/rclone-extra)
+drops to optional/backup. The cookie-refresh fragility (W-known: `ndus` expires) remains
+the one operational dependency — the adapter surfaces it as the `ExpiredSession` verdict.
 
 ---
 
@@ -246,22 +311,25 @@ of each lane; the credentials themselves stay in `.secrets/` on the machine.
 
 ## 9. What this changes on the board
 
+**Owner directive (2026-11-06, chat): Google Drive, YouTube and the social-media lanes are
+DEFERRED to later updates.** The M10 order is therefore re-sequenced: **#61 MEGA and #64
+TeraBox first** (both credentials now in hand and both wires PROVEN live the same day —
+§6.1 and §7.1), native TeraBox adapter as the next implementation rung; #59/#60/socials
+wait for the owner's go.
+
 1. **#62's spike deliverable is this document** — per-platform wire facts + the three
    go/no-go criteria answered. The issue closes with it; the ADAPTER work for TikTok/IG/FB
    becomes its own filed lanes once the owner's Meta + TikTok apps exist (Phase 1 = private
    / owner-scope publishing; review walls only gate public distribution later).
-2. **#59 + #60 unblock with ONE owner action** (§5.1): one Google project, one Desktop OAuth
-   client. The drive.file scope keeps the Drive lane verification-free; the 7-day Testing
-   trap is documented with the Production escape.
-3. **#61's immediate path is the bridge** (§6): the native crypto lane stays research-track,
-   exactly as the issue anticipated.
-4. **#64 needs only the owner's cookies** (§7); the fork-build `serve s3` probe (bclone /
-   rclone-extra multipart parity vs W4–W7) is the lane's next wire-fact step and needs
-   nothing from the owner.
-5. **Priority recommendation** (M10 order stands): with credentials in hand the natural
-   ladder is #59 → #60 (one OAuth client covers both) → #64 fork probe + cookies → MEGA
-   through the bridge whenever the account exists → socials adapters filed after the Meta /
-   TikTok apps exist.
+2. **#59 + #60 unblock with ONE owner action** (§5.1) — DEFERRED by the owner; the playbook
+   stays on the shelf for the day they say go.
+3. **#61: bridge path PROVEN LIVE** (§6.1) with the owner's credentials — MEGA works
+   through IUM today; the native crypto lane stays research-track.
+4. **#64: the full community protocol PROVEN LIVE** (§7.1) — a native TeraBox adapter is
+   implementable straight from the nine wire facts; the fork probe drops to backup.
+5. **Priority (re-sequenced by the owner)**: #64 native adapter (wire facts complete) →
+   #61 bridge integration wiring (credentials → `RCLONE_CONFIG_*` seam) → then the
+   deferred lanes when the owner says go.
 
 ## 10. Source-quality honesty
 
