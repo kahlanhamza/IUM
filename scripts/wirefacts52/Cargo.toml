@@ -1,0 +1,12 @@
+[package]
+name = "wirefacts52"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone probe crate — excluded from the workspace ([workspace] empty table),
+# same pattern as scripts/wirefacts51. Never shipped; exists only to pin wire
+# facts for issue #52 (FEC lane) BEFORE any implementation.
+[workspace]
+
+[dependencies]
+raptorq = "1.8"
