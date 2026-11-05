@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use ium_core::{
     HttpOneShotAdapter, JobManager, JobRecord, JobSnapshot, JobSpec, S3MultipartAdapter,
-    S3MultipartConfig, Supervisor, TusAdapter,
+    S3MultipartConfig, Supervisor, TeraboxAdapter, TeraboxConfig, TusAdapter,
 };
 use tauri::{Emitter, Manager, State};
 
@@ -61,6 +61,10 @@ fn register_adapters(manager: &mut JobManager) {
             Err(e) => tracing::warn!("s3_multipart unavailable: {e}"),
         },
         Err(e) => tracing::warn!("s3_multipart not configured (no env credentials): {e}"),
+    }
+    match TeraboxConfig::from_env() {
+        Ok(config) => manager.register_adapter(Arc::new(TeraboxAdapter::new(config))),
+        Err(e) => tracing::warn!("terabox not configured (no ndus cookie): {e}"),
     }
 }
 

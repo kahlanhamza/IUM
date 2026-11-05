@@ -1,0 +1,21 @@
+   Compiling ium-core v0.1.0 (/home/z/my-project/ium-core)
+error[E0432]: unresolved import `ium_core::adapter_terabox`
+ --> ium-core/tests/adapter_terabox_contract.rs:8:15
+  |
+8 | use ium_core::adapter_terabox::{TeraboxAdapter, TeraboxConfig, TERABOX_BLOCK};
+  |               ^^^^^^^^^^^^^^^ could not find `adapter_terabox` in `ium_core`
+
+For more information about this error, try `rustc --explain E0432`.
+error: could not compile `ium-core` (test "adapter_terabox_contract") due to 1 previous error
+
+#64 RED evidence — the TeraBox adapter contract fails to compile at HEAD `c84b51c`
+
+error[E0432]: unresolved import `ium_core::adapter_terabox`
+  --> ium-core/tests/adapter_terabox_contract.rs:4:15
+
+1 error: the module `adapter_terabox` does not exist. The contract file pins the
+public surface the design note declares (TERABOX_BLOCK, TeraboxConfig::from_env,
+session-token JSON roundtrip, loud errno mapping, prescribed uniform-tail
+geometry, the ProbeReport the planner consumes). After implementation the
+assertions move into the module suite and this file is removed (the #52/#56
+compile-fail RED pattern).

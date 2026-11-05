@@ -29,6 +29,10 @@ futures-util = { version = "0.3", default-features = false }
 # SigV4 (issue #6): pure-Rust HMAC/SHA-256 + hex, no AWS SDK, no runtime.
 hmac = "0.12"
 sha2 = "0.10"
+# MD5 (issue #64): the TeraBox wire's block_list/MD5-echo language — RustCrypto,
+# the same family as sha2. Used for the per-slice block_list and the superfile2
+# echo check; NOT for verify (verify is streamed sha256).
+md-5 = "0.10"
 hex = "0.4"
 # FEC lane (issue #52): RFC 6330 RaptorQ erasure coding — pure Rust, the
 # reference implementation class. Client-side symbolization + the decoder the

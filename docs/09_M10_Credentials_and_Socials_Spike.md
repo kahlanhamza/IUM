@@ -286,7 +286,29 @@ cleanly onto the IUM contract (precreate=init/session, superfile2=chunks with pe
 echo, create=finalize, method=download=verify stream, filemanager=cleanup). **No fork
 build is required for a native TeraBox adapter**; the fork lane (bclone/rclone-extra)
 drops to optional/backup. The cookie-refresh fragility (W-known: `ndus` expires) remains
-the one operational dependency — the adapter surfaces it as the `ExpiredSession` verdict.
+the one operational dependency — the adapter surfaces it as `AuthRequired` (the honest
+case: reattach cannot fix dead credentials; the owner re-extracts the cookie).
+
+### 7.2 IMPLEMENTED (2026-11-06, same day as the rehearsal — `adapter_terabox`, Closes #64)
+
+The design note (D1–D6, issue comment 6668170486) + RED (compile-fail contract, comment
+6668184038) → the native lane. Wire facts added by the multipart/verify probes
+(`probe_terabox_multipart.sh`, `probe_terabox_verify.sh`):
+
+- **W10 multi-slice PROVEN**: 3-entry `block_list` (4+4+1 MiB) → errno 0; 9 MiB roundtrip
+  byte-exact → the lane PRESCRIBES uniform 4 MiB + exact tail (the #56 machinery).
+- **W11 out-of-order partseq ACCEPTED** (partseq 1 before 0 → 200 + MD5 echo match).
+- **W12 re-PUT of a done partseq is IDEMPOTENT** (200, same MD5) — crash-window re-sends safe.
+- **W13 the verify route is PCS `method=download` ONLY**: `filemetas` dlink is UNRELIABLE
+  on multi-slice files (no dlink field), `/api/download` answers errno 2 — dead ends recorded.
+
+Deltas pinned by the implementation: errno -6 / 4000023 map to **AuthRequired** (not
+ExpiredSession — reattach cannot fix dead credentials); the upload host (W5, expire 600 s)
+is NEVER journal truth — reattach leaves it empty and the first part re-derives via
+locateupload (a READ); per-slice MD5s are recomputed per call over the journal-immutable
+source instead of bloating the token. LIVE drill green 8.79 s: 9 MiB / 3 slices,
+out-of-order parts + a W12 re-send, fresh-adapter reattach, create → fs_id (twice —
+finalize-once idempotence), download+sha256 byte-exact, cleanup delete. Suite 268.
 
 ---
 
