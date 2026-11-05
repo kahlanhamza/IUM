@@ -10,6 +10,30 @@ prose. An entry without verifiable issue numbers does not belong here.
 
 ## [Unreleased]
 
+### Added — the shipping bar (#65, M11)
+
+- The shipped-product UI pass: a real design system (`theme.css` — light/dark
+  tokens via `prefers-color-scheme`, 4-pt spacing, 150 ms motion with
+  reduced-motion respect, zero runtime dependencies), a brand header with the
+  engine status pill, drag-and-drop file intake riding the same stat-and-plan
+  path as paste-a-path, recent-destination suggestions from the journal,
+  friendly adapter display names, structured capability badges, toast
+  notifications for failed actions, a designed empty state, and an animated
+  per-chunk inspector (#65).
+- The per-OS installer pipeline: tag-triggered CI builds (Windows MSI + NSIS,
+  macOS DMG, Linux deb/AppImage/rpm) with sha256 sidecars, measured sizes, a
+  silent-install → boot → clean-uninstall smoke gate per OS, and a
+  "The installers" release-notes section (#65).
+- Zero-touch OS setup: WebView2 auto-resolves via downloadBootstrapper on
+  Windows; the NSIS installer runs per-user (no UAC); no PATH edits, no
+  service registration, journal data survives reinstalls by design (#65).
+
+### Changed
+
+- The UI's visual layer moved from inline styles to the token system; the
+  app-e2e seams are untouched (element ids, registry-name option values,
+  semantic table structure, `[data-state]` chips) (#65).
+
 ## [0.1.0] — 2026-11-05
 
 The first frozen public surface (per #19): `JobManager`, `Supervisor`, `JobSpec`,
