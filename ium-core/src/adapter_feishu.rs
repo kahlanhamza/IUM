@@ -21,7 +21,7 @@
 //! * **W11** even_split shapes are REJECTED: any non-tail part that is not
 //!   exactly `block_size` fails 1062009 (probed: 3+3+3 refused). Hence the
 //!   lane declares [`ProbeReport::uniform_block`] and the planner must run
-//!   [`ChunkPool::plan_uniform_tail`] — chunk *i* rides part `seq` *i*.
+//!   [`crate::chunk::ChunkPool::plan_uniform_tail`] — chunk *i* rides part `seq` *i*.
 //!
 //! # Design (the design note on #56, D1–D5)
 //!
