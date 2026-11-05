@@ -126,7 +126,10 @@ jobs:
           hdiutil attach "$DMG" -mountpoint /tmp/ium_dmg -nobrowse -quiet
           cp -R /tmp/ium_dmg/IUM.app /Applications/
           hdiutil detach /tmp/ium_dmg
-          /Applications/IUM.app/Contents/MacOS/IUM &
+          # The executable's name follows mainBinaryName — locate, never assume.
+          EXE="/Applications/IUM.app/Contents/MacOS/$(ls /Applications/IUM.app/Contents/MacOS | head -n1)"
+          test -x "$EXE"
+          "$EXE" &
           sleep 8
           pgrep -fl "IUM.app" >/dev/null && echo "booted: yes" || { echo "PROCESS DIED"; exit 1; }
           pkill -f "IUM.app" || true
