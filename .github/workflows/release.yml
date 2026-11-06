@@ -239,7 +239,7 @@ jobs:
             [ -f "$f" ] || continue
             n=$((n+1))
             rm -rf "bundles/$n"; mkdir -p "bundles/$n"
-            gh attestation download "$f" -R "$GITHUB_REPOSITORY" -O "bundles/$n" >/dev/null
+            gh attestation download "$f" -R "$GITHUB_REPOSITORY" --path "bundles/$n" >/dev/null
             k=0
             for j in "bundles/$n"/*.jsonl; do
               [ -f "$j" ] || continue
