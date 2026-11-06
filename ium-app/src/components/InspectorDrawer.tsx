@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import type { JobSnapshot } from "../api";
 import { friendlyAdapter, humanBytes, hostOf } from "../logic";
 import { IconX } from "./icons";
+import { Button, Chip } from "./ui";
 
 export interface InspectorDrawerProps {
   snapshot: JobSnapshot | null;
@@ -29,15 +30,17 @@ export function InspectorDrawer({ snapshot, onClose }: InspectorDrawerProps) {
   return (
     <>
       <div className="drawer-backdrop" onClick={onClose} aria-hidden="true" />
-      <aside className="drawer" role="dialog" aria-label={`Inspector for job ${job.id}`}>
+      {/* #67 RED fix: `role="dialog"` is not allowed on <aside> — strict AT
+          implementations drop the role entirely. A <div> carries it. */}
+      <div className="drawer" role="dialog" aria-label={`Inspector for job ${job.id}`}>
         <div className="drawer-head">
           <div style={{ minWidth: 0 }}>
             <h2 className="drawer-title">{fileName(job.source_path)}</h2>
             <div className="drawer-sub">{hostOf(job.endpoint)}</div>
           </div>
-          <button className="btn btn--ghost btn--icon" aria-label="Close inspector" onClick={onClose}>
+          <Button variant="ghost" size="icon" aria-label="Close inspector" onClick={onClose}>
             <IconX size={14} />
-          </button>
+          </Button>
         </div>
 
         <div className="meta-grid">
@@ -73,9 +76,7 @@ export function InspectorDrawer({ snapshot, onClose }: InspectorDrawerProps) {
                     {c.begin}–{c.end}
                   </td>
                   <td>
-                    <span className="chip" data-state={chunkState(c.state)}>
-                      {c.state}
-                    </span>
+                    <Chip state={chunkState(c.state)}>{c.state}</Chip>
                   </td>
                   <td>{c.bytes_confirmed}</td>
                   <td>{c.adapter_token ?? "—"}</td>
@@ -94,7 +95,7 @@ export function InspectorDrawer({ snapshot, onClose }: InspectorDrawerProps) {
             </li>
           ))}
         </ol>
-      </aside>
+      </div>
     </>
   );
 }

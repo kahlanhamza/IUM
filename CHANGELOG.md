@@ -33,6 +33,13 @@ prose. An entry without verifiable issue numbers does not belong here.
 - The UI's visual layer moved from inline styles to the token system; the
   app-e2e seams are untouched (element ids, registry-name option values,
   semantic table structure, `[data-state]` chips) (#65).
+- The design system became typed component primitives (`Button`, `TextInput`,
+  `Select`, `Field`, `Chip`, `Badge` in `components/ui.tsx`) composing the same
+  token classes — bundle and visuals unchanged (#66, #67).
+- Accessibility is a CI gate, not a hope: axe-core audits every screen state
+  and every primitive on `npm test`; landed the two real defects it caught
+  (unnamed progress bars announcing bare numbers; a `role="dialog"` on
+  `<aside>` that strict assistive tech would drop) (#66, #67).
 
 ## [0.1.0] — 2026-11-05
 

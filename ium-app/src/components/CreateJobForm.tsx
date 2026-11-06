@@ -17,6 +17,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "../api";
 import { friendlyAdapter, humanBytes } from "../logic";
 import { IconAlert, IconCheck, IconFile, IconUpload, IconX } from "./icons";
+import { Button, Field, Select, TextInput } from "./ui";
 
 export interface CreateJobFormProps {
   onCreated: () => void;
@@ -183,9 +184,10 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
               </div>
             </div>
             <IconCheck size={18} style={{ marginLeft: "auto", color: "var(--ok)" }} />
-            <button
-              type="button"
-              className="btn btn--ghost btn--sm file-clear"
+            <Button
+              variant="ghost"
+              size="sm"
+              className="file-clear"
               aria-label="Clear selected file"
               onClick={(e) => {
                 e.stopPropagation();
@@ -195,7 +197,7 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
               }}
             >
               <IconX size={13} />
-            </button>
+            </Button>
           </div>
         ) : (
           <>
@@ -209,76 +211,57 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
       </div>
 
       <div className="form-grid">
-        <div className="field field--full">
-          <label className="field-label" htmlFor="upload-path">
-            Path
-          </label>
-          <input
+        <Field label="Path" htmlFor="upload-path" full>
+          <TextInput
             id="upload-path"
-            className="input mono"
+            mono
             placeholder="or paste a source path…"
             value={sourcePath}
             onChange={(e) => void onPathTyped(e.target.value)}
-            spellCheck={false}
           />
-        </div>
+        </Field>
 
-        <div className="field">
-          <label className="field-label" htmlFor="upload-endpoint">
-            Destination
-          </label>
-          <input
+        <Field label="Destination" htmlFor="upload-endpoint">
+          <TextInput
             id="upload-endpoint"
-            className="input mono"
+            mono
             placeholder="endpoint URL"
             value={endpoint}
             list="endpoint-recents"
             onChange={(e) => setEndpoint(e.target.value)}
-            spellCheck={false}
           />
           <datalist id="endpoint-recents">
             {recents.map((ep) => (
               <option key={ep} value={ep} />
             ))}
           </datalist>
-        </div>
+        </Field>
 
-        <div className="field">
-          <label className="field-label" htmlFor="upload-adapter">
-            Protocol
-          </label>
-          <select
-            id="upload-adapter"
-            className="select"
-            value={adapter}
-            onChange={(e) => setAdapter(e.target.value)}
-          >
+        <Field label="Protocol" htmlFor="upload-adapter">
+          {/* Option VALUES stay the engine registry names — the #65 seam. */}
+          <Select id="upload-adapter" value={adapter} onChange={(e) => setAdapter(e.target.value)}>
             {adapters.map((a) => (
               <option key={a} value={a}>
                 {friendlyAdapter(a)}
               </option>
             ))}
-          </select>
-        </div>
+          </Select>
+        </Field>
 
-        <div className="field">
-          <label className="field-label" htmlFor="upload-connections">
-            Connections
-          </label>
-          <input
+        <Field label="Connections" htmlFor="upload-connections">
+          <TextInput
             id="upload-connections"
-            className="input"
             type="number"
             min={1}
             max={32}
             value={maxConns}
             onChange={(e) => setMaxConns(Math.max(1, Number(e.target.value) || 1))}
           />
-        </div>
+        </Field>
 
-        <button id="upload-submit" className="btn btn--primary" onClick={submit} disabled={!ready}>
+        <Button id="upload-submit" onClick={submit} disabled={!ready}>
           {busy ? "Creating…" : "Upload"}
-        </button>
+        </Button>
       </div>
 
       {error && (

@@ -22,6 +22,7 @@ import {
   percentDone,
 } from "../logic";
 import { IconAlert, IconInfinite, IconPause, IconPlay, IconFile, IconX } from "./icons";
+import { Badge, Button, Chip } from "./ui";
 
 export interface JobView {
   record: JobRecord;
@@ -83,8 +84,8 @@ export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCance
                   <div className="cell-dim">{hostOf(record.endpoint)}</div>
                 </td>
                 <td>
-                  <span
-                    className={`badge${badge.kind === "resumable" ? " badge--resumable" : ""}`}
+                  <Badge
+                    kind={badge.kind}
                     title={
                       badge.kind === "resumable"
                         ? "This destination accepts resumable uploads — interruptions heal."
@@ -99,19 +100,20 @@ export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCance
                       <IconAlert size={11} />
                     ) : null}
                     {badge.label}
-                  </span>
+                  </Badge>
                 </td>
                 <td>
                   {/* data-state: the journal's truth as a WebDriver-readable
                       attribute (#35) — the chip's text stays human-facing. */}
-                  <span data-state={record.state} className="chip">
-                    {record.state}
-                  </span>
+                  <Chip state={record.state}>{record.state}</Chip>
                 </td>
                 <td>
+                  {/* #67 RED fix: a progressbar without a name announces
+                      "progress bar, 25" — name it after WHAT is progressing. */}
                   <div
                     className="progress"
                     role="progressbar"
+                    aria-label={`${fileName(record.source_path)}: ${pct}% uploaded`}
                     aria-valuenow={pct}
                     aria-valuemin={0}
                     aria-valuemax={100}
@@ -126,8 +128,9 @@ export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCance
                 <td>
                   <div className="cell-actions">
                     {canResume(record.state) ? (
-                      <button
-                        className="btn btn--ghost btn--icon"
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         aria-label={`resume job ${record.id}`}
                         title="Resume"
                         disabled={!canResume(record.state)}
@@ -137,10 +140,11 @@ export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCance
                         }}
                       >
                         <IconPlay size={13} />
-                      </button>
+                      </Button>
                     ) : (
-                      <button
-                        className="btn btn--ghost btn--icon"
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         aria-label={`pause job ${record.id}`}
                         title="Pause"
                         disabled={!canPause(record.state)}
@@ -150,10 +154,11 @@ export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCance
                         }}
                       >
                         <IconPause size={13} />
-                      </button>
+                      </Button>
                     )}
-                    <button
-                      className="btn btn--danger-ghost btn--icon"
+                    <Button
+                      variant="danger-ghost"
+                      size="icon"
                       aria-label={`cancel job ${record.id}`}
                       title="Cancel"
                       disabled={!canCancel(record.state)}
@@ -163,7 +168,7 @@ export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCance
                       }}
                     >
                       <IconX size={13} />
-                    </button>
+                    </Button>
                   </div>
                 </td>
               </tr>
