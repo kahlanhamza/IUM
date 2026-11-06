@@ -311,9 +311,9 @@ jobs:
             echo
             echo "## Checksums"
             echo
-            '```'
+            echo '```'
             cat SHA256SUMS.txt
-            '```'
+            echo '```'
           } > ../notes_body.md
       - name: Publish the GitHub release
         env:
