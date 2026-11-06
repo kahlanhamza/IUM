@@ -3,6 +3,19 @@
 //! pause/resume → Done badge → inspector (inspect_chunks through real IPC)
 //! → cancel leaves NO server object.
 //!
+//! **The locator inventory (#68 — the seam checklist; restyle against THIS,
+//! not against a red run):**
+//! * `#upload-path` / `#upload-endpoint` / `#upload-adapter` /
+//!   `#upload-connections` / `#upload-submit` — the intake seams (ids).
+//! * adapter `<option>` VALUES are the engine registry names.
+//! * rows are located via `table tbody tr:nth-child(i)`; file name lives in
+//!   the FIRST td; the FIFTH td's text starts with `NN%`.
+//! * every row's state cell carries a `[data-state]` chip (journal truth).
+//! * the inspector drawer is found by its ACCESSIBLE ROLE —
+//!   `[role="dialog"]` — never by a tag name (the `aside` tag broke once
+//!   already when #67 moved the role to its legal host; roles are the
+//!   contract, tags are the accident).
+//!
 //! Leg A runs the **tus adapter** (issue #37 CI debt): per-PATCH server
 //! acks make `bytes_confirmed` advance DURING the transfer, so the UI's
 //! percent genuinely climbs — with the one-shot family it honestly cannot
@@ -596,7 +609,7 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
     wd.click(&row_cell)
         .await
         .expect("click row A opens inspector");
-    wd.wait_for_element("aside", Duration::from_secs(10))
+    wd.wait_for_element("[role=\"dialog\"]", Duration::from_secs(10))
         .await
         .expect("inspector drawer");
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -606,7 +619,7 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         for i in 1..=64 {
             let Some(state_cell) = wd
                 .wait_for_element(
-                    &format!("aside table tbody tr:nth-child({i}) td:nth-child(3)"),
+                    &format!("[role=\"dialog\"] table tbody tr:nth-child({i}) td:nth-child(3)"),
                     Duration::from_secs(2),
                 )
                 .await
@@ -617,7 +630,7 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
             states.push(wd.text(&state_cell).await.unwrap_or_default());
             if let Ok(conf_cell) = wd
                 .wait_for_element(
-                    &format!("aside table tbody tr:nth-child({i}) td:nth-child(4)"),
+                    &format!("[role=\"dialog\"] table tbody tr:nth-child({i}) td:nth-child(4)"),
                     Duration::from_secs(2),
                 )
                 .await
@@ -649,7 +662,7 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
     // window's right edge — the next row's action buttons live underneath
     // it, and a WebDriver click lands on the overlay, not the button.
     let close_btn = wd
-        .wait_for_element("aside button", Duration::from_secs(5))
+        .wait_for_element("[role=\"dialog\"] button", Duration::from_secs(5))
         .await
         .expect("inspector close button");
     wd.click(&close_btn).await.expect("close inspector");
