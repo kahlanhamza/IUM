@@ -49,6 +49,18 @@
           "English"
         ]
       }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/kahlanhamza/IUM/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ0MTU3RTZEMjlFOEZGMDMKUldRRC8rZ3BiWDRWMUJ2b1dYczNUMDZoVktubWlkSVpkYWJvdnZnb2ljTFkzaHpvRCtIZWN1cTkK",
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
