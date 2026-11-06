@@ -15,7 +15,7 @@ import { JobsTable, type JobView } from "./components/JobsTable";
 import { IconAlert, IconCheck, IconGear, IconUpload } from "./components/icons";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { confirmedTotal, recentEndpoints, speedBetween } from "./logic";
-import { humanizeError } from "./copy";
+import { APP_COPY, humanizeError } from "./copy";
 
 interface Progress {
   confirmed: number;
@@ -168,7 +168,7 @@ export default function App() {
         <CreateJobForm
           onCreated={() => {
             refreshJobs();
-            pushToast("ok", "Upload created — the engine is driving it.");
+            pushToast("ok", APP_COPY.created);
           }}
           recents={recentEndpoints(jobs)}
           onError={onError}
@@ -187,11 +187,8 @@ export default function App() {
           <div className="card">
             <div className="empty">
               <IconUpload size={26} />
-              <div className="empty-title">No uploads yet</div>
-              <div className="empty-hint">
-                Drop a file above, choose a destination, and press Upload. Progress,
-                pause, resume and cancel are all journaled — a crash never loses ground.
-              </div>
+              <div className="empty-title">{APP_COPY.emptyTitle}</div>
+              <div className="empty-hint">{APP_COPY.emptyHint}</div>
             </div>
           </div>
         ) : (

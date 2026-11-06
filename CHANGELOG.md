@@ -11,6 +11,12 @@ prose. An entry without verifiable issue numbers does not belong here.
 ## [Unreleased]
 
 ### Added
+- The brand sheet: `docs/10_Brand_Sheet.md` records the decided identity —
+  the IUM name and wordmark, the voice (honest, specific, calm, the engine's
+  truth kept visible), the naming rules (friendly product labels over
+  technical seams), the color/type/iconography sourced from the tree — and
+  `brand.test.ts` enforces it: the sheet cannot drift from `theme.css`'s
+  tokens and the enumerated copy surface follows the voice (#73).
 - The supervisor concurrency limiter: `Supervisor::with_concurrency_limit` /
   `with_handle_and_limit` admit at most N simultaneous drive tasks and
   FIFO-queue the rest; the shell boots bounded at 4 — a 100-file intake is

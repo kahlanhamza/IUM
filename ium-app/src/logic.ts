@@ -44,7 +44,11 @@ export function badgeFor(capability: string): BadgeView {
  * sets `.value` directly), an unknown registry name passes through untouched
  * because the UI reflects the engine, it never invents lanes.
  */
-const ADAPTER_LABELS: Record<string, string> = {
+/**
+ * The friendly labels, exported for the brand gate (#73): product surfaces
+ * are friendly, engine seams stay technical — the table is the contract.
+ */
+export const ADAPTER_LABELS: Record<string, string> = {
   http_oneshot: "HTTP one-shot",
   tus: "TUS resumable",
   s3_multipart: "S3 multipart",

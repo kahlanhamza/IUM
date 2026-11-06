@@ -21,8 +21,13 @@ interface CopyRule {
   title: string;
   hint: string;
 }
+export type { CopyRule };
 
-const RULES: CopyRule[] = [
+/**
+ * The rules, exported for the brand gate (#73): the copy surface is
+ * enumerated, so the voice rules can be asserted against every sentence.
+ */
+export const RULES: CopyRule[] = [
   {
     // The engine lives INSIDE the app — a different "unreachable" than a
     // remote endpoint; keep it ahead of the generic network rule.
@@ -113,6 +118,24 @@ const RULES: CopyRule[] = [
 
 const DEFAULT_TITLE = "Something went wrong";
 
+/** The fall-back sentence pair, exported for the brand gate (#73). */
+export const DEFAULT_COPY = {
+  title: DEFAULT_TITLE,
+  hint: "The engine's own words are below — they help report the problem.",
+} as const;
+
+/**
+ * The app-level sentences (the #73 copy surface): the created toast and the
+ * empty state, moved here so every user-visible sentence lives in ONE table
+ * and the brand gate can assert the voice over all of them.
+ */
+export const APP_COPY = {
+  created: "Upload created — the engine is driving it.",
+  emptyTitle: "No uploads yet",
+  emptyHint:
+    "Drop a file above, choose a destination, and press Upload. Progress, pause, resume and cancel are all journaled — a crash never loses ground.",
+} as const;
+
 export function humanizeError(raw: string): ErrorCopy {
   const lowered = raw.toLowerCase();
   for (const rule of RULES) {
@@ -120,5 +143,5 @@ export function humanizeError(raw: string): ErrorCopy {
       return { title: rule.title, hint: rule.hint, raw };
     }
   }
-  return { title: DEFAULT_TITLE, hint: "The engine's own words are below — they help report the problem.", raw };
+  return { title: DEFAULT_COPY.title, hint: DEFAULT_COPY.hint, raw };
 }
