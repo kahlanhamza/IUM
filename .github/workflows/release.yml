@@ -239,7 +239,15 @@ jobs:
             [ -f "$f" ] || continue
             n=$((n+1))
             rm -rf "bundles/$n"; mkdir -p "bundles/$n"
-            gh attestation download "$f" -R "$GITHUB_REPOSITORY" --path "bundles/$n" >/dev/null
+            # gh attestation download writes sha256-<digest>.jsonl into the
+            # CWD — no output flag exists (verified against the gh manual
+            # after run 42161614408 died on 'unknown flag: --path'), so the
+            # download runs in a per-subject subshell on an absolute path.
+            (
+              cd "bundles/$n" \
+                && gh attestation download "$GITHUB_WORKSPACE/$f" \
+                     -R "$GITHUB_REPOSITORY" >/dev/null
+            )
             k=0
             for j in "bundles/$n"/*.jsonl; do
               [ -f "$j" ] || continue
