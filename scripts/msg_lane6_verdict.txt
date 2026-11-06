@@ -1,0 +1,15 @@
+docs(status): lane 6 closed end-to-end — CI 8/8 GREEN on the fix commit (refs #73)
+
+The re-run verdict: CI run 42278762803 on c237b66 — 8/8 GREEN, all three
+OSes; the windows-only CRLF failure is dead (no .gitattributes -> CRLF
+checkout -> the $-anchored token table parsed empty on windows only).
+The session-log row records the verdict; the row-generator script rides
+along; this commit also replaces the UUID-mangled message of the tail
+commit with this one.
+
+Product-bar lanes 1-6 complete (#67/#69/#70/#71/#72/#73); remaining:
+lane 7 (telemetry stance — pinned owner decision, no code before it),
+lane 8 (RE-resistance checklist at release). Follow-up #74 (pin
+.gitattributes) filed and open.
+
+Refs #73. Evidence comment 6693330328.
