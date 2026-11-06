@@ -10,6 +10,13 @@ prose. An entry without verifiable issue numbers does not belong here.
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-11-06
+
+The product bar cut: the shipping bar of #65 plus product-bar lanes 1–4 of #66 —
+design-system depth, the credentials vault, the error-copy table, and
+supply-chain integrity (SBOM + provenance) — with the first-ever end-to-end
+run of the installer pipeline against a real tag.
+
 ### Added — the shipping bar (#65, M11)
 
 - The shipped-product UI pass: a real design system (`theme.css` — light/dark
@@ -40,6 +47,36 @@ prose. An entry without verifiable issue numbers does not belong here.
   and every primitive on `npm test`; landed the two real defects it caught
   (unnamed progress bars announcing bare numbers; a `role="dialog"` on
   `<aside>` that strict assistive tech would drop) (#66, #67).
+
+- The credentials vault: `.secrets/` env-contract as a product surface — a
+  0600 atomic store in the OS data dir, env-wins precedence, secrets never
+  leaving the process, settings dialog axe-audited; feishu and the 74-backend
+  rclone bridge in the adapter registry (#66, #69).
+- The error-copy table: every engine error kind becomes a human sentence with
+  an action hint, raw engine truth kept visible; the copy lives in one table,
+  not scattered literals (#66, #70).
+- Supply-chain integrity on every release (#66 lane 4, #71): two CycloneDX
+  SBOMs (the Rust workspace closure via checksummed syft over the root
+  `Cargo.lock`; the app npm tree including devDependencies, which ship in the
+  bundle), SLSA v1 build provenance on every shipped artifact (GitHub
+  artifact attestations over OIDC), sigstore bundles attached for offline
+  verification, and an in-job attestation verification gate — a release
+  cannot exist unless its attestations verify. All workflow actions
+  SHA-pinned; least-privilege permissions per job.
+- A supply-chain check tool, `scripts/release_supply_chain_check.sh`: pure
+  REST verification that a release carries both SBOMs and that every
+  installer resolves to a live attestation.
+
+### Fixed — what the first pipeline rehearsal caught (#71)
+
+- The updater signing lane was unshippable in silence: `createUpdaterArtifacts`
+  + pubkey had landed but the minisign private half existed nowhere (the
+  installer pipeline had never run against a real tag). Key rotated
+  (zero clients ever held the old one — no release shipped an updater
+  artifact); the private half lives in the repo secret store only.
+- The rehearsal also pinned two packaging wire facts: MSI requires
+  numeric-only prerelease identifiers, and RPM forbids `-` in the version
+  string — the three package formats intersect only on dash-free versions.
 
 ## [0.1.0] — 2026-11-05
 
