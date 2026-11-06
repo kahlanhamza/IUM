@@ -16,6 +16,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "../api";
 import { friendlyAdapter, humanBytes } from "../logic";
+import { humanizeError } from "../copy";
 import { IconAlert, IconCheck, IconFile, IconUpload, IconX } from "./icons";
 import { Button, Field, Select, TextInput } from "./ui";
 
@@ -154,6 +155,9 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
 
   const ready = Boolean(adapter && sourcePath && sourceSize !== null && endpoint.trim() && !busy);
   const filled = Boolean(sourcePath && sourceSize !== null);
+  // The copy table (#70): the human sentence + the hint, and the engine's
+  // own words stay visible — the product never hides what the engine said.
+  const copy = error ? humanizeError(error) : null;
 
   return (
     <section className="card" aria-label="New upload">
@@ -264,11 +268,15 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
         </Button>
       </div>
 
-      {error && (
-        <p className="alert" role="alert">
+      {copy && (
+        <div className="alert" role="alert">
           <IconAlert size={14} />
-          <span>{error}</span>
-        </p>
+          <div style={{ minWidth: 0 }}>
+            <div>{copy.title}</div>
+            {copy.hint && <div className="alert-hint">{copy.hint}</div>}
+            <code className="alert-raw">the engine said: {copy.raw}</code>
+          </div>
+        </div>
       )}
     </section>
   );

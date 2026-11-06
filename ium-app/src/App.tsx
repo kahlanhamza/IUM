@@ -15,6 +15,7 @@ import { JobsTable, type JobView } from "./components/JobsTable";
 import { IconAlert, IconCheck, IconGear, IconUpload } from "./components/icons";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { confirmedTotal, recentEndpoints, speedBetween } from "./logic";
+import { humanizeError } from "./copy";
 
 interface Progress {
   confirmed: number;
@@ -55,7 +56,9 @@ export default function App() {
   }, []);
 
   const onError = useCallback(
-    (message: string) => pushToast("error", message),
+    // The copy table (#70): toasts carry the human sentence; the form alert
+    // keeps the raw engine words in view.
+    (message: string) => pushToast("error", humanizeError(message).title),
     [pushToast],
   );
 
@@ -72,7 +75,7 @@ export default function App() {
       .then((detail) => setEngine({ kind: "ready", detail }))
       .catch((e) => {
         setEngine({ kind: "down", detail: String(e) });
-        pushToast("error", `engine unreachable: ${e}`);
+        pushToast("error", humanizeError(`engine unreachable: ${e}`).title);
       });
     refreshJobs();
 
