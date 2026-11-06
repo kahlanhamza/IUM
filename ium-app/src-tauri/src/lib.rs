@@ -11,9 +11,10 @@
 //! journals the honest `Canceled` terminal state BEFORE the drive task is
 //! aborted.
 
+mod telemetry;
 mod vault;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use ium_core::{
@@ -23,6 +24,12 @@ use ium_core::{
 use tauri::{Emitter, Manager, State};
 
 struct Engine(Arc<Supervisor>);
+
+/// The telemetry pipeline (#75): one instance, reachable from the panic
+/// hook (which runs outside any State) and from the watcher's terminal
+/// transition. Unset = drop silently (a panic before setup is nobody's
+/// telemetry problem).
+static TELEMETRY: OnceLock<Arc<telemetry::Telemetry>> = OnceLock::new();
 
 /// Registry names for the create-job form's adapter select (#16): the UI
 /// reflects the engine's registry, it never hard-codes protocol lists.
@@ -290,15 +297,108 @@ fn spawn_watcher(app: tauri::AppHandle, sup: Arc<Supervisor>, job_id: String) {
             let terminal = snap.job.state.is_terminal();
             let _ = app.emit("job_updated", &snap);
             if terminal {
+                // Lane 7 (#75): the usage event rides the FINAL snapshot's
+                // non-user fields only — adapter, terminal state, wide
+                // buckets. `source_path` and `endpoint` sit on the same
+                // record and are structurally unable to reach an event.
+                if let Some(t) = TELEMETRY.get() {
+                    let duration = snap.job.updated_at - snap.job.created_at;
+                    t.record_job_terminal(
+                        &snap.job.adapter,
+                        snap.job.state.as_str(),
+                        snap.job.source_size,
+                        duration,
+                    );
+                }
                 return;
             }
         }
     });
 }
 
+fn payload_message(info: &std::panic::PanicHookInfo<'_>) -> String {
+    let p = info.payload();
+    if let Some(s) = p.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = p.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+/// The telemetry Privacy commands (#75): consent + buffer, schema-flat.
+#[derive(serde::Serialize)]
+struct TelemetryView {
+    consent: bool,
+    count: usize,
+    path: String,
+}
+
+#[tauri::command]
+fn telemetry_status() -> TelemetryView {
+    match TELEMETRY.get() {
+        Some(t) => {
+            let (consent, count) = t.status();
+            TelemetryView {
+                consent,
+                count,
+                path: t.buf_path().display().to_string(),
+            }
+        }
+        None => TelemetryView {
+            consent: true,
+            count: 0,
+            path: String::new(),
+        },
+    }
+}
+
+#[tauri::command]
+fn telemetry_set_consent(on: bool) -> Result<(), String> {
+    match TELEMETRY.get() {
+        Some(t) => t.set_consent(on),
+        None => Err("telemetry is not ready yet".to_string()),
+    }
+}
+
+#[tauri::command]
+fn telemetry_clear() -> Result<(), String> {
+    match TELEMETRY.get() {
+        Some(t) => t.clear(),
+        None => Err("telemetry is not ready yet".to_string()),
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            // Lane 7 (#75): the telemetry pipeline installs FIRST — the
+            // panic hook must be in place before any risky work, and the
+            // buffer lives in the app-data dir (the journal's directory;
+            // the vault keeps the config dir). The hook CHAINS to the
+            // default: the real panic still prints, the event rides the
+            // charter's allowlist (verbatim message + IUM source location).
+            let tel_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir());
+            let _ = std::fs::create_dir_all(&tel_dir);
+            let tel = Arc::new(telemetry::Telemetry::open(&tel_dir));
+            let _ = TELEMETRY.set(tel.clone());
+            let default_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                if let Some(t) = TELEMETRY.get() {
+                    let loc = info.location();
+                    t.record_panic(
+                        &payload_message(info),
+                        loc.map(|l| l.file()).unwrap_or("unknown"),
+                        loc.map(|l| l.line()).unwrap_or(0),
+                        loc.map(|l| l.column()).unwrap_or(0),
+                    );
+                }
+                default_hook(info);
+            }));
             // The vault fills the env gaps BEFORE adapters construct (env
             // wins: real env vars are never overwritten) — the *_from_env
             // constructors behave identically, vault-configured machines
@@ -347,6 +447,9 @@ pub fn run() {
             credentials_get,
             credentials_set,
             credentials_delete,
+            telemetry_status,
+            telemetry_set_consent,
+            telemetry_clear,
         ])
         .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())

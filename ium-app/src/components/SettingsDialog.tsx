@@ -12,8 +12,9 @@
  * inventory); this dialog itself is not driven by the lane yet.
  */
 import { useCallback, useEffect, useState } from "react";
-import { api, type AdapterSchema } from "../api";
+import { api, type AdapterSchema, type TelemetryStatus } from "../api";
 import { canSave, changedFields, toRows, type FieldRow } from "../settings";
+import { TELEMETRY_COPY } from "../copy";
 import { IconAlert, IconCheck, IconX } from "./icons";
 import { Button, Chip, cx, TextInput } from "./ui";
 
@@ -130,6 +131,8 @@ export function SettingsDialog({ open, onClose, onError, onSaved }: SettingsDial
           </Button>
         </div>
 
+        <PrivacySection onError={onError} onSaved={onSaved} />
+
         {sections.map((s) => {
           const savable = canSave(s.rows) && Object.keys(changedFields(s.rows)).length > 0;
           return (
@@ -232,5 +235,108 @@ function SecretField({ section, row, busy, onDraft }: SecretFieldProps) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The Privacy card (#66 Lane 7, #75): the telemetry stance as a product
+ * surface — the written stance sentence, the opt-out master switch (the
+ * engine enforces it at the single write point), what is and is never
+ * collected (sentences from the copy table), and the local buffer's count
+ * + path + two-step clear. The card LEADS the dialog: trust first.
+ */
+function PrivacySection({
+  onError,
+  onSaved,
+}: {
+  onError: (message: string) => void;
+  onSaved: (message: string) => void;
+}) {
+  const [st, setSt] = useState<TelemetryStatus>({ consent: true, count: 0, path: "" });
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .telemetryStatus()
+      .then(setSt)
+      .catch((e) => onError(`privacy status unavailable: ${e}`));
+  }, [onError]);
+
+  async function toggle(on: boolean) {
+    setBusy(true);
+    try {
+      await api.telemetrySetConsent(on);
+      setSt((s) => ({ ...s, consent: on }));
+      onSaved(on ? TELEMETRY_COPY.consentOnToast : TELEMETRY_COPY.consentOffToast);
+    } catch (e) {
+      onError(`changing the diagnostics switch failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clear() {
+    if (!confirmClear) {
+      setConfirmClear(true);
+      return;
+    }
+    setConfirmClear(false);
+    setBusy(true);
+    try {
+      await api.telemetryClear();
+      setSt((s) => ({ ...s, count: 0 }));
+      onSaved(TELEMETRY_COPY.clearedToast);
+    } catch (e) {
+      onError(`clearing the local diagnostics failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card" aria-label="Privacy">
+      <div className="section-head" style={{ marginBottom: 8 }}>
+        <h3 className="drawer-h3" style={{ margin: 0 }}>Privacy</h3>
+      </div>
+      <p className="settings-note">{TELEMETRY_COPY.stance}</p>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "10px 0" }}>
+        <input
+          id="telemetry-consent"
+          type="checkbox"
+          checked={st.consent}
+          disabled={busy}
+          onChange={(e) => void toggle(e.target.checked)}
+          style={{ width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer" }}
+        />
+        <label htmlFor="telemetry-consent" style={{ cursor: "pointer" }}>
+          {TELEMETRY_COPY.switchLabel}
+        </label>
+      </div>
+      <p className="settings-note">{TELEMETRY_COPY.collectJob}</p>
+      <p className="settings-note">{TELEMETRY_COPY.collectCrash}</p>
+      <p className="settings-note" style={{ color: "var(--text-2)" }}>
+        {TELEMETRY_COPY.neverLine}
+      </p>
+      <div className="cell-actions" style={{ justifyContent: "space-between", marginTop: 8 }}>
+        <span className="settings-note" style={{ margin: 0 }}>
+          {st.count} recorded so far. {TELEMETRY_COPY.bufferNote}
+          {st.path ? (
+            <>
+              {" "}
+              <code style={{ fontSize: 11, wordBreak: "break-all" }}>{st.path}</code>
+            </>
+          ) : null}
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={busy || st.count === 0}
+          onClick={() => void clear()}
+        >
+          {confirmClear ? "Click again to clear" : "Clear local events"}
+        </Button>
+      </div>
+    </section>
   );
 }

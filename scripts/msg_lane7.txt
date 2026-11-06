@@ -1,0 +1,34 @@
+feat(app): the telemetry stance — the written privacy contract, enforced (#75)
+
+Lane 7 of #66, owner-approved this session (option (a) full telemetry,
+opt-out — the big-tech standard, users trust first).
+docs/11_Telemetry_Stance.md is the pivot: its collected-fields table is
+parsed and required EQUAL to the code on BOTH sides (the Rust harness
+reads it CARGO_MANIFEST_DIR-relative; the vitest charter gate compares it
+to the TELEMETRY_FIELDS mirror the UI is built from) — the stance cannot
+drift from the implementation.
+
+The pipeline (pure-std telemetry.rs, standalone rustc --test harness —
+no WebKitGTK in the sandbox): consent opt-out enforced at the single
+write point (off = zero file IO); allowlist-by-construction writers
+(job_terminal from the watcher's terminal snapshot — source_path and
+endpoint are structurally unable to ride; panic via a CHAINED hook — the
+real panic still prints); hand-rolled escaped JSON for the 5 fixed
+shapes; 0600 atomic consent file (corrupt = default, live switch); a
+capped 500 / rotate 250 local JSONL buffer with status + clear commands.
+Settings -> Privacy LEADS the dialog: the stance sentence, the master
+switch, what-we-collect sentences, the buffer path + two-step clear —
+every sentence from TELEMETRY_COPY, voice-gated via the brand surface.
+
+NO transport ships in this build — no sink endpoint exists; the sink is
+the pinned owner ask (the lane-4 signing precedent). Nothing leaves the
+device by construction, not by promise.
+
+RED: charter ENOENT on both sides at HEAD c1e926e (comment 6694066013).
+The standalone harness caught 3 real defects pre-commit: the
+str::lines() rewrite glued records (split_inclusive + tail normalize),
+the starts_with prefix wrongly included the closing brace, and the cap
+test asserted phase arithmetic instead of the invariant.
+
+Gates: harness 11/11; vitest 60/60; tsc strict; vite build; fmt clean;
+gate.sh on the committed tree. Closes #75

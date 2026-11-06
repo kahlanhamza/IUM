@@ -158,6 +158,16 @@ describe("a11y: the full shell (header, pill, form, table, empty state)", () => 
           }),
         credentialsSet: () => Promise.resolve(),
         credentialsDelete: () => Promise.resolve(),
+        // The telemetry Privacy card (#75): the audit sees the consent
+        // switch ON with a populated local buffer — the trust surface.
+        telemetryStatus: () =>
+          Promise.resolve({
+            consent: true,
+            count: 2,
+            path: "/home/u/.local/share/ium/telemetry.jsonl",
+          }),
+        telemetrySetConsent: () => Promise.resolve(),
+        telemetryClear: () => Promise.resolve(),
       },
     }));
     vi.mock("@tauri-apps/api/event", () => ({

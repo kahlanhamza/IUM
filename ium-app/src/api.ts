@@ -57,6 +57,13 @@ export interface JobSnapshot {
   events: [number, string, string][];
 }
 
+/** The telemetry Privacy view (#75): consent + the local buffer's shape. */
+export interface TelemetryStatus {
+  consent: boolean;
+  count: number;
+  path: string;
+}
+
 export const api = {
   engineStatus: (): Promise<string> => invoke("engine_status"),
   /** Registry names for the adapter select — the UI reflects the engine. */
@@ -87,4 +94,12 @@ export const api = {
     invoke("credentials_set", { adapter, fields }),
   credentialsDelete: (adapter: string): Promise<void> =>
     invoke("credentials_delete", { adapter }),
+  // --- privacy: the telemetry stance (#66 lane 7, #75) ----------------------
+  /** Consent switch state + the local buffer's count and absolute path. */
+  telemetryStatus: (): Promise<TelemetryStatus> => invoke("telemetry_status"),
+  /** The master switch — enforced at the engine's single write point. */
+  telemetrySetConsent: (on: boolean): Promise<void> =>
+    invoke("telemetry_set_consent", { on }),
+  /** Empties the local buffer (the UI two-step-confirms). */
+  telemetryClear: (): Promise<void> => invoke("telemetry_clear"),
 };

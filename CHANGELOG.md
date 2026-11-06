@@ -11,6 +11,14 @@ prose. An entry without verifiable issue numbers does not belong here.
 ## [Unreleased]
 
 ### Added
+- The telemetry stance: `docs/11_Telemetry_Stance.md` is the WRITTEN privacy
+  contract — anonymous diagnostics (terminal-state events + panic captures)
+  over an allowlisted field set, opt-out consent enforced at the engine's
+  single write point, and a capped local JSONL buffer the user can read and
+  clear from Settings → Privacy. No transport ships in this build (the sink
+  is the pinned owner ask), so nothing leaves the device by construction.
+  The charter's collected-fields table is asserted equal to the code on both
+  the Rust and TS sides — the stance cannot drift (#75).
 - The brand sheet: `docs/10_Brand_Sheet.md` records the decided identity —
   the IUM name and wordmark, the voice (honest, specific, calm, the engine's
   truth kept visible), the naming rules (friendly product labels over

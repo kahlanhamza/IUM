@@ -136,6 +136,51 @@ export const APP_COPY = {
     "Drop a file above, choose a destination, and press Upload. Progress, pause, resume and cancel are all journaled — a crash never loses ground.",
 } as const;
 
+/**
+ * The telemetry Privacy surface (#66 Lane 7, #75): every sentence the
+ * Settings → Privacy card renders, enumerated here so the brand gate's
+ * voice rules cover it like the rest of the copy table. The stance itself
+ * is the charter (docs/11_Telemetry_Stance.md) — these sentences must be
+ * able to state it honestly: collection is opt-out, the record is local,
+ * this build uploads nothing.
+ */
+export const TELEMETRY_COPY = {
+  stance:
+    "IUM collects anonymous diagnostics to keep uploads honest — the record stays on your machine, and one switch turns it off.",
+  switchLabel: "Collect anonymous diagnostics",
+  collectJob:
+    "For each finished upload: the transfer method, how it ended, and the size and duration as wide buckets — never the file name, never the destination.",
+  collectCrash:
+    "When IUM itself fails: the panic message and where in IUM's own code it fired — nothing else about your session.",
+  neverLine:
+    "IUM never collects file names, folder paths, destinations, credentials, account ids or file contents.",
+  bufferNote:
+    "Events live in a local file you can open and clear. This build uploads nothing anywhere.",
+  consentOnToast: "Diagnostics collection is on — events stay in the local file.",
+  consentOffToast: "Diagnostics collection is off — nothing more is recorded.",
+  clearedToast: "The local diagnostics file is cleared.",
+} as const;
+
+/**
+ * The exact field set a telemetry event may carry — the TS mirror of the
+ * charter's collected-fields table (docs/11_Telemetry_Stance.md). The
+ * charter gate asserts table == this list; the Rust harness asserts the
+ * same table against the writers. Neither side moves without the other.
+ */
+export const TELEMETRY_FIELDS = [
+  "v",
+  "kind",
+  "ts",
+  "adapter",
+  "state",
+  "size_bucket",
+  "duration_bucket",
+  "message",
+  "source",
+  "line",
+  "column",
+] as const;
+
 export function humanizeError(raw: string): ErrorCopy {
   const lowered = raw.toLowerCase();
   for (const rule of RULES) {
