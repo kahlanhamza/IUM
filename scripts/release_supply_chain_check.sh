@@ -103,9 +103,11 @@ for a in json.load(open('$ASSETS_JSON')):
   echo "verifying provenance: $name"
   curl -sSL -H "Authorization: Bearer $TOKEN" -o "$FILE" "$URL"
   DIGEST=$(sha256sum "$FILE" | cut -d' ' -f1)
+  # The API wants the digest ALGORITHM-PREFIXED ("sha256:<hex>") — bare hex
+  # always 404s (false negative proven live on the v0.1.1 attestations).
   CODE=$(curl -sS -o "$TMP/att.json" -w "%{http_code}" \
     -H "Authorization: Bearer $TOKEN" \
-    "https://api.github.com/repos/$REPO/attestations/$DIGEST")
+    "https://api.github.com/repos/$REPO/attestations/sha256:$DIGEST")
   [ "$CODE" = "200" ] || fail "$name (sha256:$DIGEST) has NO build provenance attestation (HTTP $CODE)"
   N=$(python3 -c "import json; print(len(json.load(open('$TMP/att.json')).get('attestations', [])))")
   [ "$N" -ge 1 ] || fail "$name attestation lookup returned 0 entries"
