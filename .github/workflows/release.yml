@@ -84,6 +84,12 @@ jobs:
             librsvg2-dev libxdo-dev libssl-dev build-essential
       - name: Build the installers (per-OS bundle list)
         working-directory: ium-app
+        env:
+          # updater artifacts (createUpdaterArtifacts) are minisign-signed at
+          # bundle time — the private half lives in the repo secret store
+          # (#71: the original key was lost pre-release; rotated 2026-11-06,
+          # zero clients ever held the old pubkey)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           npm ci --no-audit --no-fund
           npm run tauri build -- --bundles "${{ matrix.bundles }}"
