@@ -5,6 +5,24 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 
+/** The masked credentials view (#69): secrets never carry values. */
+export interface FieldView {
+  label: string;
+  secret: boolean;
+  required: boolean;
+  present: boolean;
+  value: string | null;
+}
+
+export type AdapterViews = Record<string, Record<string, FieldView>>;
+
+export interface AdapterSchema {
+  adapter: string;
+  label: string;
+  note: string;
+  fields: { name: string; label: string; secret: boolean; required: boolean }[];
+}
+
 export interface JobSpec {
   source_path: string;
   source_size: number;
@@ -59,4 +77,14 @@ export const api = {
     invoke("cancel_job", { jobId }),
   /** The shell stats, the engine plans — the UI never computes truth. */
   statFile: (path: string): Promise<number> => invoke("stat_file", { path }),
+  // --- settings: the credentials vault (#69) -------------------------------
+  /** The static schema — which adapters need which fields. */
+  credentialsSchema: (): Promise<AdapterSchema[]> => invoke("credentials_schema"),
+  /** Masked views for every schema field; secret values are never sent. */
+  credentialsGet: (): Promise<AdapterViews> => invoke("credentials_get"),
+  /** PARTIAL merge: absent field = keep, empty = delete (schema-guarded). */
+  credentialsSet: (adapter: string, fields: Record<string, string>): Promise<void> =>
+    invoke("credentials_set", { adapter, fields }),
+  credentialsDelete: (adapter: string): Promise<void> =>
+    invoke("credentials_delete", { adapter }),
 };

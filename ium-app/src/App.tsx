@@ -12,7 +12,8 @@ import { api, type JobRecord, type JobSnapshot } from "./api";
 import { CreateJobForm } from "./components/CreateJobForm";
 import { InspectorDrawer } from "./components/InspectorDrawer";
 import { JobsTable, type JobView } from "./components/JobsTable";
-import { IconAlert, IconCheck, IconUpload } from "./components/icons";
+import { IconAlert, IconCheck, IconGear, IconUpload } from "./components/icons";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { confirmedTotal, recentEndpoints, speedBetween } from "./logic";
 
 interface Progress {
@@ -38,6 +39,7 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [inspected, setInspected] = useState<JobSnapshot | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Last snapshot per job for the Δ speed math — kept in a ref so the event
   // handler never goes stale.
@@ -146,6 +148,17 @@ export default function App() {
               ? "connecting…"
               : "engine unreachable"}
         </div>
+        {/* The credentials vault (#69): a product surface, not env vars.
+            id is a pinned e2e seam (the locator inventory). */}
+        <button
+          id="app-settings"
+          className="btn btn--ghost btn--icon"
+          aria-label="Open settings — adapter credentials"
+          title="Settings"
+          onClick={() => setSettingsOpen(true)}
+        >
+          <IconGear size={16} />
+        </button>
       </header>
 
       <main className="app-main">
@@ -202,6 +215,13 @@ export default function App() {
       </main>
 
       <InspectorDrawer snapshot={inspected} onClose={() => setSelected(null)} />
+
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onError={onError}
+        onSaved={(message) => pushToast("ok", message)}
+      />
 
       <div className="toast-stack" role="status" aria-live="polite">
         {toasts.map((t) => (

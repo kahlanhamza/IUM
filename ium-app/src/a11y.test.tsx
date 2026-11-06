@@ -44,6 +44,7 @@ import type { JobRecord, JobSnapshot } from "./api";
 import { CreateJobForm } from "./components/CreateJobForm";
 import { InspectorDrawer } from "./components/InspectorDrawer";
 import { JobsTable } from "./components/JobsTable";
+import { SettingsDialog } from "./components/SettingsDialog";
 
 const job = (over: Partial<JobRecord>): JobRecord => ({
   id: "job-1",
@@ -126,6 +127,37 @@ describe("a11y: the full shell (header, pill, form, table, empty state)", () => 
         pauseJob: () => Promise.resolve(),
         resumeSignal: () => Promise.resolve(),
         cancelJob: () => Promise.reject(new Error("unused in audit")),
+        // The credentials vault (#69): schema + masked views.
+        credentialsSchema: () =>
+          Promise.resolve([
+            {
+              adapter: "mega",
+              label: "MEGA (rclone bridge)",
+              note: "Your MEGA login.",
+              fields: [
+                { name: "user", label: "Email", secret: false, required: true },
+                { name: "pass", label: "Password", secret: true, required: true },
+              ],
+            },
+            {
+              adapter: "terabox",
+              label: "TeraBox",
+              note: "The ndus cookie.",
+              fields: [{ name: "ndus", label: "ndus cookie", secret: true, required: true }],
+            },
+          ]),
+        credentialsGet: () =>
+          Promise.resolve({
+            mega: {
+              user: { label: "Email", secret: false, required: true, present: true, value: "u@x" },
+              pass: { label: "Password", secret: true, required: true, present: true, value: null },
+            },
+            terabox: {
+              ndus: { label: "ndus cookie", secret: true, required: true, present: false, value: null },
+            },
+          }),
+        credentialsSet: () => Promise.resolve(),
+        credentialsDelete: () => Promise.resolve(),
       },
     }));
     vi.mock("@tauri-apps/api/event", () => ({
@@ -137,6 +169,24 @@ describe("a11y: the full shell (header, pill, form, table, empty state)", () => 
     // product (table rows + named progressbars), not the boot frame.
     // (Three fixture rows share the file name — findAll, not find.)
     await findAllByText("quarterly-report.pdf");
+    await expectAccessible(container as HTMLElement);
+  });
+});
+
+describe("a11y: the settings dialog (#69 — the credentials vault, masked)", () => {
+  it("has no axe violations with saved secrets shown as chips, not values", async () => {
+    const { container, findByLabelText } = render(
+      <SettingsDialog open onClose={() => {}} onError={() => {}} onSaved={() => {}} />,
+    );
+    // Wait for the async schema/views pull: the Email field carries the
+    // stored value; the Password field must show NO value at all.
+    // Exact label text ("Field *" = required marker) — the reveal buttons'
+    // aria-labels ("Reveal Password") must not collide with the query.
+    const email = (await findByLabelText("Email *")) as HTMLInputElement;
+    expect(email.value).toBe("u@x");
+    const pass = (await findByLabelText("Password *")) as HTMLInputElement;
+    expect(pass.value).toBe(""); // a secret never travels to the UI
+    expect(pass.type).toBe("password"); // and is masked by default
     await expectAccessible(container as HTMLElement);
   });
 });

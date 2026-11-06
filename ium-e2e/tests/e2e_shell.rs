@@ -11,6 +11,8 @@
 //! * rows are located via `table tbody tr:nth-child(i)`; file name lives in
 //!   the FIRST td; the FIFTH td's text starts with `NN%`.
 //! * every row's state cell carries a `[data-state]` chip (journal truth).
+//! * the settings gear is `#app-settings` (the #69 credentials vault —
+//!   present in the header, not yet driven by this suite).
 //! * the inspector drawer is found by its ACCESSIBLE ROLE —
 //!   `[role="dialog"]` — never by a tag name (the `aside` tag broke once
 //!   already when #67 moved the role to its legal host; roles are the

@@ -11,6 +11,8 @@
 //! journals the honest `Canceled` terminal state BEFORE the drive task is
 //! aborted.
 
+mod vault;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,14 +46,27 @@ fn db_path(app: &tauri::AppHandle) -> std::path::PathBuf {
     dir.join("ium-session.db")
 }
 
+/// The vault lives in the OS config dir (not data — it is configuration,
+/// and some backup tools treat data differently) (#69).
+fn vault_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 fn engine_error(e: ium_core::EngineError) -> String {
     e.to_string()
 }
 
-/// Register the protocol adapters this build ships with. S3 credentials
-/// come from the environment (`S3MultipartConfig::from_env`); a machine
-/// without them simply has no `s3_multipart` in the registry — the UI
-/// reflects the registry, it never assumes.
+/// Register the protocol adapters this build ships with. Credentials come
+/// from the process env — which the vault has already filled from the
+/// settings UI by the time this runs (env wins: real env vars are never
+/// overwritten). A machine without credentials for a lane simply has no
+/// such entry in the registry — the UI reflects the registry, it never
+/// assumes.
 fn register_adapters(manager: &mut JobManager) {
     manager.register_adapter(Arc::new(HttpOneShotAdapter::new().expect("http client")));
     manager.register_adapter(Arc::new(TusAdapter::new()));
@@ -65,6 +80,32 @@ fn register_adapters(manager: &mut JobManager) {
     match TeraboxConfig::from_env() {
         Ok(config) => manager.register_adapter(Arc::new(TeraboxAdapter::new(config))),
         Err(e) => tracing::warn!("terabox not configured (no ndus cookie): {e}"),
+    }
+    // Feishu Drive (#56) — core-proven since M9; the vault/env gives it a
+    // product surface now (#69).
+    match ium_core::adapter_feishu::FeishuConfig::from_env() {
+        Ok(config) => match ium_core::adapter_feishu::FeishuAdapter::new(config) {
+            Ok(adapter) => manager.register_adapter(Arc::new(adapter)),
+            Err(e) => tracing::warn!("feishu unavailable: {e}"),
+        },
+        Err(e) => tracing::warn!("feishu not configured (no tenant creds): {e}"),
+    }
+    // The generic rclone bridge (#63 — 74 backends day one). Same async
+    // constructor shape as the mega seam below: serve spawn + readiness is
+    // async, setup is sync, both under the app runtime.
+    let rclone = tauri::async_runtime::block_on(async {
+        match ium_core::adapter_rclone::RcloneBridgeConfig::from_env() {
+            Ok(cfg) => ium_core::adapter_rclone::RcloneBridgeAdapter::start(cfg)
+                .await
+                .map(Some)
+                .map_err(|e| e.to_string()),
+            Err(_) => Ok(None), // no remote configured — no lane, honestly
+        }
+    });
+    match rclone {
+        Ok(Some(adapter)) => manager.register_adapter(Arc::new(adapter)),
+        Ok(None) => tracing::warn!("rclone_bridge not configured (no remote)"),
+        Err(e) => tracing::warn!("rclone_bridge lane unavailable: {e}"),
     }
     // The MEGA lane (#61) rides the rclone bridge: the constructor AND the
     // start are async (serve spawn + readiness + mkdir, bounded ~15 s) and
@@ -84,6 +125,80 @@ fn register_adapters(manager: &mut JobManager) {
         Ok(None) => tracing::warn!("mega not configured (no env credentials)"),
         Err(e) => tracing::warn!("mega lane unavailable: {e}"),
     }
+}
+
+/// The settings UI renders forms from the schema; secret VALUES never
+/// leave the process (`value: null, present: true`) (#69).
+#[derive(serde::Serialize)]
+struct FieldView {
+    label: &'static str,
+    secret: bool,
+    required: bool,
+    present: bool,
+    value: Option<String>,
+}
+
+#[tauri::command]
+fn credentials_schema() -> Vec<vault::AdapterSchema> {
+    vault::schema()
+}
+
+#[tauri::command]
+fn credentials_get(
+    app: tauri::AppHandle,
+) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, FieldView>> {
+    let data = vault::Vault::open(&vault_dir(&app)).load();
+    let mut out = std::collections::BTreeMap::new();
+    for a in vault::schema() {
+        let stored = data.adapters.get(a.adapter);
+        let mut fields = std::collections::BTreeMap::new();
+        for f in a.fields {
+            let stored_val = stored.and_then(|e| e.get(f.name));
+            let (value, present) = if f.secret {
+                (None, stored_val.is_some())
+            } else {
+                (stored_val.cloned(), stored_val.is_some())
+            };
+            fields.insert(
+                f.name.to_string(),
+                FieldView {
+                    label: f.label,
+                    secret: f.secret,
+                    required: f.required,
+                    present,
+                    value,
+                },
+            );
+        }
+        out.insert(a.adapter.to_string(), fields);
+    }
+    out
+}
+
+/// PARTIAL merge with a schema guard: absent field = keep (so the UI can
+/// leave masked secrets untouched), empty = delete; unknown adapters and
+/// fields are refused — the vault is not a generic KV store.
+#[tauri::command]
+fn credentials_set(
+    app: tauri::AppHandle,
+    adapter: String,
+    fields: std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    let schema = vault::schema();
+    let Some(a) = schema.iter().find(|s| s.adapter == adapter) else {
+        return Err(format!("unknown adapter: {adapter}"));
+    };
+    for k in fields.keys() {
+        if !a.fields.iter().any(|f| f.name == *k) {
+            return Err(format!("unknown field for {adapter}: {k}"));
+        }
+    }
+    vault::Vault::open(&vault_dir(&app)).set(&adapter, fields)
+}
+
+#[tauri::command]
+fn credentials_delete(app: tauri::AppHandle, adapter: String) -> Result<(), String> {
+    vault::Vault::open(&vault_dir(&app)).delete(&adapter)
 }
 
 #[tauri::command]
@@ -184,6 +299,14 @@ fn spawn_watcher(app: tauri::AppHandle, sup: Arc<Supervisor>, job_id: String) {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            // The vault fills the env gaps BEFORE adapters construct (env
+            // wins: real env vars are never overwritten) — the *_from_env
+            // constructors behave identically, vault-configured machines
+            // just get the same registry env-configured ones do (#69).
+            let injected = vault::Vault::open(&vault_dir(app.handle())).apply_env();
+            if injected > 0 {
+                tracing::info!("vault: injected {injected} credential variables");
+            }
             let manager = JobManager::open(db_path(app.handle())).map_err(|e| e.to_string())?;
             let mut manager = manager;
             register_adapters(&mut manager);
@@ -214,6 +337,10 @@ pub fn run() {
             resume_signal,
             cancel_job,
             stat_file,
+            credentials_schema,
+            credentials_get,
+            credentials_set,
+            credentials_delete,
         ])
         .plugin(tauri_plugin_dialog::init())
         .run(tauri::generate_context!())
