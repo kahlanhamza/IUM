@@ -1,0 +1,19 @@
+fix(app): the allowlist IS the writer — emit() consumes the charter-gated constants (#75)
+
+CI held the design note's claim honest: the first cut hand-rolled the
+field names in the writers while the allowlist constants (EVERY /
+JOB_KEYS / PANIC_KEYS) were only used by the drift test — dead code in
+the non-test build, clippy -D warnings failed ium-app on all three OSes,
+and worse, "allowlist-by-construction" was not literally true.
+
+The fix: emit(kind, kind_keys, vals) assembles every event object FROM
+the constants — the EVERY fields first, then the kind's keys paired with
+the caller's values in order (a length assert pins the lineup). A field
+can now appear in an event only by being in a constant the drift test
+pins to the charter; the writers cannot grow a field without growing the
+charter first. The emitted order is now the charter's row order.
+
+Gates: standalone harness 11/11; the non-test build (rustc --crate-type
+lib) compiles warning-free; fmt clean. CI owns the 3-OS verdict.
+
+Refs #75.

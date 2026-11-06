@@ -69,33 +69,31 @@ impl Telemetry {
     }
 
     /// One event per terminal job — the watcher's final snapshot, non-user
-    /// fields only. Wide buckets carry the size and the duration.
+    /// fields only. Wide buckets carry the size and the duration. The values
+    /// line up IN ORDER with JOB_KEYS — emit() is the allowlist-by-
+    /// construction writer (CI held this claim honest: the first cut
+    /// hand-rolled the field names and clippy -D warnings killed the
+    /// constants as dead code on all three OSes).
     pub fn record_job_terminal(&self, adapter: &str, state: &str, size: u64, duration_ms: i64) {
-        let line = format!(
-            "{{\"v\":1,\"kind\":\"job_terminal\",\"adapter\":{},\"state\":{},\
-             \"size_bucket\":{},\"duration_bucket\":{},\"ts\":{}}}\n",
+        let vals = vec![
             json(adapter),
             json(state),
             json(size_bucket(size)),
             json(duration_bucket(duration_ms)),
-            now_ms(),
-        );
-        self.record(line);
+        ];
+        self.record(emit("job_terminal", JOB_KEYS, vals));
     }
 
     /// One event per panic — verbatim payload (charter § The honest limits),
     /// the panic's own source location, chained hooks keep the real print.
     pub fn record_panic(&self, message: &str, source: &str, line: u32, column: u32) {
-        let l = format!(
-            "{{\"v\":1,\"kind\":\"panic\",\"message\":{},\"source\":{},\"line\":{},\
-             \"column\":{},\"ts\":{}}}\n",
+        let vals = vec![
             json(message),
             json(source),
-            line,
-            column,
-            now_ms(),
-        );
-        self.record(l);
+            line.to_string(),
+            column.to_string(),
+        ];
+        self.record(emit("panic", PANIC_KEYS, vals));
     }
 
     /// THE write point (D3): consent checked here means the switch cannot be
@@ -172,6 +170,31 @@ pub fn duration_bucket(ms: i64) -> &'static str {
 // the standalone harness honest. The escaper is tested against quotes,
 // backslashes, newlines and control bytes (panic payloads are hostile).
 // ---------------------------------------------------------------------------
+
+/// THE allowlist-by-construction writer: the object is assembled FROM the
+/// charter-gated constants — the EVERY fields first, then the kind's own
+/// keys paired with the caller's values IN ORDER. A field can appear in an
+/// event only by being in a constant the drift test pins to the charter;
+/// the writers cannot grow a field without growing the charter first.
+fn emit(kind: &str, kind_keys: &[&str], vals: Vec<String>) -> String {
+    assert_eq!(
+        kind_keys.len(),
+        vals.len(),
+        "writer values must line up with the allowlist"
+    );
+    let every_vals = ["1".to_string(), json(kind), now_ms().to_string()];
+    let mut out = String::with_capacity(160);
+    out.push('{');
+    for (k, v) in EVERY.iter().zip(every_vals.iter()) {
+        out.push_str(&format!("\"{k}\":{v},"));
+    }
+    for (k, v) in kind_keys.iter().zip(vals.iter()) {
+        out.push_str(&format!("\"{k}\":{v},"));
+    }
+    out.pop(); // the trailing comma
+    out.push_str("}\n");
+    out
+}
 
 fn json(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
@@ -370,8 +393,10 @@ mod tests {
         t.record_job_terminal("tus", "done", 2 * 1024 * 1024, 5_000);
         let line = std::fs::read_to_string(dir.join(TELEMETRY_FILE)).unwrap();
         let line = line.trim_end();
+        // emit() writes the fields in the CHARTER'S ROW ORDER — the object
+        // literally reads top-to-bottom like the stance document.
         assert!(
-            line.starts_with("{\"v\":1,\"kind\":\"job_terminal\",\"adapter\":"),
+            line.starts_with("{\"v\":1,\"kind\":\"job_terminal\",\"ts\":"),
             "{line}"
         );
         assert!(line.contains("\"adapter\":\"tus\""), "{line}");
