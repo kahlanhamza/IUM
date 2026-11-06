@@ -1,0 +1,9 @@
+chore(scripts): the lane-6 verdict message file + the repo-state checker (refs #73)
+
+Helper scripts that rode the lane-6 tail: the commit-message file used
+for the amended verdict commit, and the API checker used to verify #66's
+lane text, the open-issue whitelist and CI run verdicts. This commit also
+replaces the UUID-mangled message the background committer left behind
+with this one.
+
+Refs #73.
