@@ -328,7 +328,7 @@ mod tests {
         let vault = Vault::open(&dir);
         vault.set("mega", entry(&[("user", "u")])).expect("set");
         vault.delete("mega").expect("delete");
-        assert!(vault.load().adapters.get("mega").is_none());
+        assert!(!vault.load().adapters.contains_key("mega"));
         // Deleting an absent adapter is honest Ok — idempotent.
         vault.delete("never-was").expect("idempotent delete");
         let _ = std::fs::remove_dir_all(&dir);
