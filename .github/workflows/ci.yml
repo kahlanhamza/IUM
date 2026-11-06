@@ -41,6 +41,13 @@ jobs:
         run: cargo clippy -p ium-core --all-targets -- -D warnings
       - name: Tests
         run: cargo test -p ium-core
+      # Product bar #66 lane 5: the installer-size budget gate stays alive
+      # between releases — the synthetic verdict proof (ok / over-budget /
+      # unknown-suffix / sidecar-ignored / empty-dir-loud) rides the core
+      # job on every push, so the gate cannot rot silently.
+      - name: Installer-size gate (self-test)
+        if: runner.os == 'Linux'
+        run: python3 scripts/installer_size_gate.py --self-test
       # Issue #19 (M5 API freeze): the public surface stays documented —
       # rustdoc must build warning-free on every push.
       - name: Docs (warnings as errors)

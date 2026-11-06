@@ -10,6 +10,21 @@ prose. An entry without verifiable issue numbers does not belong here.
 
 ## [Unreleased]
 
+### Added
+- The supervisor concurrency limiter: `Supervisor::with_concurrency_limit` /
+  `with_handle_and_limit` admit at most N simultaneous drive tasks and
+  FIFO-queue the rest; the shell boots bounded at 4 — a 100-file intake is
+  no longer 100 simultaneous uploads. Legacy constructors stay unbounded
+  (#72).
+- The 100-jobs load e2e: 100 interleaved jobs over one manager and one
+  journal reach the exact honest terminal mix (92 Done / 8 Failed) with
+  journaled retry receipts and bounded fd/RSS orchestration (#72).
+- The installer-size budget gate: `scripts/installer_budget.json` pins the
+  v0.1.1 measured baselines and per-format max sizes (NSIS 10 / MSI 12 /
+  DMG 12 / deb 12 / rpm 12 / AppImage 110 MB); `scripts/installer_size_gate.py`
+  fails any installer over budget or without a decided budget, enforced
+  per-OS in release.yml and self-tested in ci.yml (#72).
+
 ## [0.1.1] — 2026-11-06
 
 The product bar cut: the shipping bar of #65 plus product-bar lanes 1–4 of #66 —

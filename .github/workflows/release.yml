@@ -96,6 +96,14 @@ jobs:
       - name: Collect artifacts + sha256 + measured sizes
         working-directory: ium-app
         run: bash ../scripts/release_collect.sh
+      # ---- product bar #66 lane 5: the ship-size DECISION, enforced ----
+      # An installer over its budget (or a new bundle format without a
+      # decided budget) fails THIS job before upload/publish can ship it.
+      # Budgets live in scripts/installer_budget.json (v0.1.1 baselines);
+      # growth is a reviewed diff to that table.
+      - name: Installer-size budget gate
+        working-directory: ium-app
+        run: python3 ../scripts/installer_size_gate.py --dir dist_release
       # ---- the zero-touch proof: silent install, real boot, clean uninstall ----
       - name: Smoke — deb (silent install, xvfb boot, clean uninstall)
         if: runner.os == 'Linux'

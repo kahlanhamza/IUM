@@ -320,9 +320,15 @@ pub fn run() {
             // ("Session terminated without a reply", CI #65–#70).
             let runtime_handle =
                 tauri::async_runtime::block_on(async { tokio::runtime::Handle::current() });
-            app.manage(Engine(Arc::new(Supervisor::with_handle(
+            // Product bar #66 lane 5: the intake can queue faster than any
+            // uplink drains — 4 simultaneous drives (aria2 ships 5 for
+            // downloads; uploads are heavier), the rest FIFO-queued in the
+            // supervisor. Queued jobs read Created in the journal, so the
+            // UI needs no new state.
+            app.manage(Engine(Arc::new(Supervisor::with_handle_and_limit(
                 Arc::new(manager),
                 runtime_handle,
+                4,
             ))));
             Ok(())
         })
