@@ -82,12 +82,12 @@ fn register_adapters(manager: &mut JobManager) {
         Err(e) => tracing::warn!("terabox not configured (no ndus cookie): {e}"),
     }
     // Feishu Drive (#56) — core-proven since M9; the vault/env gives it a
-    // product surface now (#69).
+    // product surface now (#69). FeishuAdapter::new is infallible (base is
+    // a constant here) — only the env check decides the lane.
     match ium_core::adapter_feishu::FeishuConfig::from_env() {
-        Ok(config) => match ium_core::adapter_feishu::FeishuAdapter::new(config) {
-            Ok(adapter) => manager.register_adapter(Arc::new(adapter)),
-            Err(e) => tracing::warn!("feishu unavailable: {e}"),
-        },
+        Ok(config) => manager.register_adapter(Arc::new(
+            ium_core::adapter_feishu::FeishuAdapter::new(config),
+        )),
         Err(e) => tracing::warn!("feishu not configured (no tenant creds): {e}"),
     }
     // The generic rclone bridge (#63 — 74 backends day one). Same async
