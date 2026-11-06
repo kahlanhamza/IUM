@@ -12,12 +12,16 @@ import { ADAPTER_LABELS } from "./logic";
 
 // node:fs is the ONE mechanism for both files: vitest stubs plain `.css`
 // imports to "" even with `?raw`, so the real file must be read off disk.
+// Both readers normalize CRLF: windows runners check out text files with
+// CRLF (no .gitattributes pin — #74), and the table regexes anchor on `$`.
 const SHEET_PATH = fileURLToPath(
   new URL("../../docs/10_Brand_Sheet.md", import.meta.url),
 );
 const THEME_PATH = fileURLToPath(new URL("./theme.css", import.meta.url));
-const readSheet = () => readFileSync(SHEET_PATH, "utf8");
-const readTheme = () => readFileSync(THEME_PATH, "utf8");
+const readSheet = () =>
+  readFileSync(SHEET_PATH, "utf8").replace(/\r\n/g, "\n");
+const readTheme = () =>
+  readFileSync(THEME_PATH, "utf8").replace(/\r\n/g, "\n");
 
 const REQUIRED_SECTIONS = [
   "What IUM is",
