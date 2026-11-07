@@ -1,0 +1,9 @@
+fix(app): the mega probe calls rclone_obscure on the config, not the adapter (refs #81)
+
+CI caught the one error the sandbox structurally cannot: the shell lane
+does not compile locally (no WebKitGTK — the #61 contract), and CI's
+clippy flagged E0599 — `rclone_obscure` is an associated function of
+`RcloneBridgeConfig` (where mega_from_env lives), not of
+`RcloneBridgeAdapter`. The `pub` visibility change itself was correct;
+only the receiver was wrong. core (3 OS) + fmt GREEN on 5debf2a; this
+fixes the shell lane + app-e2e build.

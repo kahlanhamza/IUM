@@ -424,7 +424,7 @@ async fn probe_credentials(adapter: String, fields: BTreeMap<String, String>) ->
             let (Some(user), Some(pass)) = (draft("user"), draft("pass")) else {
                 return probe_missing("Your MEGA email and password are required for a test.");
             };
-            let obscured = ium_core::adapter_rclone::RcloneBridgeAdapter::rclone_obscure(
+            let obscured = ium_core::adapter_rclone::RcloneBridgeConfig::rclone_obscure(
                 &std::path::PathBuf::from("rclone"),
                 &pass,
             )
