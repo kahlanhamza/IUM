@@ -26,7 +26,7 @@ describe("honest badge mapping (#16, #65 Lane 1 structured badge)", () => {
 describe("adapter display names (#65 Lane 1)", () => {
   it("maps known registry names to friendly labels — values stay registry names", () => {
     expect(friendlyAdapter("http_oneshot")).toBe("HTTP one-shot");
-    expect(friendlyAdapter("tus")).toBe("TUS resumable");
+    expect(friendlyAdapter("tus")).toBe("TUS 1.0.0");
     expect(friendlyAdapter("s3_multipart")).toBe("S3 multipart");
     expect(friendlyAdapter("feishu_drive")).toBe("Feishu Drive");
     expect(friendlyAdapter("terabox")).toBe("TeraBox");

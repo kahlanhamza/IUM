@@ -53,6 +53,11 @@
   --dur: 150ms;
   --ease: cubic-bezier(0.2, 0.6, 0.3, 1);
 
+  /* spacing — the 4-pt scale the settings surface was written against */
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+
   /* type */
   --font: system-ui, -apple-system, "Segoe UI Variable", "Segoe UI",
     Cantarell, Roboto, "Helvetica Neue", sans-serif;
@@ -181,15 +186,11 @@ td,
   min-width: 0;
 }
 
-.brand-mark {
+/* The logomark (#77): the constructed brand mark. Size rides the SVG
+   viewBox; identity colors are fixed inside the component, not themed. */
+.logomark {
   flex: none;
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-down));
-  display: grid;
-  place-items: center;
-  color: var(--accent-text);
+  display: block;
 }
 
 .brand-name {
@@ -225,9 +226,7 @@ td,
 .section-title {
   font-size: 13px;
   font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: var(--text-2);
+  color: var(--text);
   margin: 0;
 }
 
@@ -240,7 +239,9 @@ td,
   padding: 1px 8px;
 }
 
-/* ------------------------------------------------------------ engine pill */
+/* ------------------------------------------------------------ engine pill
+   Quiet status (#77): dot + two words, no box when healthy — furniture, not
+   a readout. The box appears only when attention is NEEDED (unreachable). */
 .engine-pill {
   display: inline-flex;
   align-items: center;
@@ -248,10 +249,8 @@ td,
   font-size: 12px;
   font-weight: 550;
   color: var(--text-2);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
   border-radius: var(--r-pill);
-  padding: 5px 12px 5px 10px;
+  padding: 5px 8px;
   max-width: 380px;
   white-space: nowrap;
   overflow: hidden;
@@ -279,7 +278,9 @@ td,
 
 .engine-pill--down {
   color: var(--danger);
-  border-color: var(--danger);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  padding: 4px 11px 4px 9px;
 }
 .engine-pill--down .dot {
   background: var(--danger);
@@ -421,6 +422,7 @@ td,
   font-size: 12px;
   font-weight: 600;
   color: var(--text-2);
+  white-space: nowrap;
 }
 
 .input,
@@ -557,10 +559,8 @@ td,
 
 .table th {
   text-align: left;
-  font-size: 11px;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.7px;
+  font-size: 11.5px;
+  font-weight: 600;
   color: var(--text-3);
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
@@ -593,6 +593,12 @@ td,
 
 .cell-main {
   font-weight: 550;
+}
+
+/* Numeric columns never wrap — "23.3 MiB/s" on one line (#77). */
+.cell-progress,
+.cell-speed {
+  white-space: nowrap;
 }
 
 .cell-dim {
@@ -667,30 +673,14 @@ td,
   min-width: 140px;
 }
 
+/* Solid fill (#77): liveness is encoded by the state chip and the speed
+   column — motion is not duplicated on the bar (the old sheen gradient is
+   gone; no decoration without information). */
 .progress-fill {
   height: 100%;
   border-radius: 3px;
   background: var(--accent);
   transition: width 400ms var(--ease);
-}
-
-/* the sheen runs only while the row's chip says the job is driving;
-   pure CSS — the engine truth stays in data-state (#35 seam). */
-tr[data-active="true"] .progress-fill {
-  background: linear-gradient(
-    90deg,
-    var(--accent) 0%,
-    var(--accent-hover) 50%,
-    var(--accent) 100%
-  );
-  background-size: 200% 100%;
-  animation: sheen 1.6s linear infinite;
-}
-
-@keyframes sheen {
-  to {
-    background-position: -200% 0;
-  }
 }
 
 /* ---------------------------------------------------------------- drawer */
@@ -781,8 +771,6 @@ tr[data-active="true"] .progress-fill {
   margin: 4px 0 0;
   font-size: 12px;
   font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.7px;
   color: var(--text-2);
 }
 
@@ -795,8 +783,6 @@ tr[data-active="true"] .progress-fill {
 .chunk-table th {
   text-align: left;
   font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
   color: var(--text-3);
   padding: 5px 8px;
   border-bottom: 1px solid var(--border);
@@ -958,7 +944,7 @@ tr[data-active="true"] .progress-fill {
   margin: var(--space-4) 0 0;
   padding: var(--space-3);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--r-ctl);
   background: var(--surface-2);
   color: var(--text-2);
   font-size: 12px;
@@ -967,6 +953,50 @@ tr[data-active="true"] .progress-fill {
 .settings-footer svg {
   flex: none;
   color: var(--warn);
+}
+
+/* About (#77): the version and the engine's own words have a home here —
+   the header never carries them (the quiet-chrome rule). */
+.about {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-3) 0;
+}
+
+.about-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.about-version {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-radius: var(--r-pill);
+  padding: 1px 7px;
+}
+
+.about-line {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 2px;
+}
+
+.about-engine {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 4px;
+  word-break: break-all;
+  user-select: text;
 }
 
 /* --- Error copy (#70): the human sentence + hint + the engine's raw words --- */

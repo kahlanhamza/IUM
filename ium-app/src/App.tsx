@@ -12,7 +12,7 @@ import { api, type JobRecord, type JobSnapshot } from "./api";
 import { CreateJobForm } from "./components/CreateJobForm";
 import { InspectorDrawer } from "./components/InspectorDrawer";
 import { JobsTable, type JobView } from "./components/JobsTable";
-import { IconAlert, IconCheck, IconGear, IconUpload } from "./components/icons";
+import { IconAlert, IconCheck, IconGear, IconUpload, Logomark } from "./components/icons";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { confirmedTotal, recentEndpoints, speedBetween } from "./logic";
 import { APP_COPY, humanizeError } from "./copy";
@@ -63,10 +63,26 @@ export default function App() {
   );
 
   const refreshJobs = useCallback(() => {
-    api
-      .listJobs()
-      .then(setJobs)
-      .catch(() => setJobs([]));
+    api.listJobs().then((records) => {
+      setJobs(records);
+      // Live jobs speak through job_updated; every other state would sit at
+      // 0% forever — no event ever comes. Read their truth from the journal
+      // instead (#77: the product screenshots exposed the 0%-done lie).
+      for (const r of records) {
+        if (r.state === "running" || r.state === "queued") continue;
+        api
+          .snapshot(r.id)
+          .then((s) =>
+            setProgress((prev) => ({
+              ...prev,
+              [r.id]: { confirmed: confirmedTotal(s.chunks), speed: 0 },
+            })),
+          )
+          .catch(() => {
+            /* a vanished row stays at zero — the next refresh retries */
+          });
+      }
+    }).catch(() => setJobs([]));
   }, []);
 
   useEffect(() => {
@@ -130,26 +146,33 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <div className="brand">
-          <div className="brand-mark">
-            <IconUpload size={16} />
-          </div>
+          {/* The constructed mark (#77) — identity in the chrome, not a
+              repurposed action icon. */}
+          <Logomark className="logomark" size={28} />
           <div>
             <div className="brand-name">IUM</div>
             <div className="brand-sub">Internet Upload Manager</div>
           </div>
         </div>
+        {/* Quiet status (#77): dot + two words — the big-tech rule (HIG,
+            defer to content). The engine's own sentence stays inspectable in
+            the tooltip and Settings → About, never as permanent chrome. */}
         <div
           className={`engine-pill engine-pill--${
             engine.kind === "ready" ? "ok" : engine.kind === "connecting" ? "wait" : "down"
           }`}
-          title={engine.kind === "connecting" ? "connecting to the engine…" : engine.detail}
+          title={
+            engine.kind === "connecting"
+              ? "connecting to the engine…"
+              : engine.detail
+          }
         >
           <span className="dot" />
           {engine.kind === "ready"
-            ? engine.detail
+            ? "Connected"
             : engine.kind === "connecting"
-              ? "connecting…"
-              : "engine unreachable"}
+              ? "Connecting…"
+              : "Engine unreachable"}
         </div>
         {/* The credentials vault (#69): a product surface, not env vars.
             id is a pinned e2e seam (the locator inventory). */}
@@ -221,6 +244,7 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         onError={onError}
         onSaved={(message) => pushToast("ok", message)}
+        engineDetail={engine.kind === "connecting" ? undefined : engine.detail}
       />
 
       <div className="toast-stack" role="status" aria-live="polite">

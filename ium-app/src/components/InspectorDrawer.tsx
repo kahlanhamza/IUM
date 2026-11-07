@@ -73,7 +73,7 @@ export function InspectorDrawer({ snapshot, onClose }: InspectorDrawerProps) {
                 <tr key={c.idx}>
                   <td>{c.idx}</td>
                   <td>
-                    {c.begin}–{c.end}
+                    {humanBytes(c.begin)}–{humanBytes(c.end)}
                   </td>
                   <td>
                     <Chip state={chunkState(c.state)}>{c.state}</Chip>

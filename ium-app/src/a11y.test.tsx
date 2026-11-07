@@ -122,6 +122,7 @@ describe("a11y: the full shell (header, pill, form, table, empty state)", () => 
             job({ id: "c", state: "done" }),
           ]),
         statFile: () => Promise.resolve(1048576),
+        snapshot: () => Promise.resolve(snapshot),
         createJob: () => Promise.reject(new Error("unused in audit")),
         inspectChunks: () => Promise.resolve(snapshot),
         pauseJob: () => Promise.resolve(),

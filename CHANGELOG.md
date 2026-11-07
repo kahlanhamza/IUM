@@ -11,6 +11,24 @@ prose. An entry without verifiable issue numbers does not belong here.
 ## [Unreleased]
 
 ### Added
+- The IUM logomark: `design/logo.svg` is the constructed master (a teal tile
+  carrying a white U whose counter holds an upload arrow — pure SVG paths,
+  two flat tones, no gradients), feeding the in-app `Logomark` component,
+  the favicon, and the full Tauri platform icon set regenerated via
+  `npx tauri icon`; documented in the brand sheet's Logomark section (#77).
+- Settings → About: the shell version (`__APP_VERSION__` injected from
+  `package.json` at build time) and the engine's own status sentence have a
+  permanent home — the header never carries them (#77).
+- The README receipts gate: `readme.test.ts` pins that the README embeds
+  all six committed product screenshots and carries no stale roadmap
+  claims; `header.test.tsx` pins the quiet chrome — no version string, no
+  adapter roster, no raw engine sentence in the header, ever (#77).
+- The screenshot harness: `scripts/screenshots.py` drives the real frontend
+  through the OFFICIAL `@tauri-apps/api/mocks` IPC harness (vendor wire
+  protocol: `mockIPC` + `mockWindows` + `plugin:event|emit` delivery) over
+  journal-shaped fixtures, and captures the six product shots into
+  `docs/screenshots/` for the README (#77).
+
 - The telemetry stance: `docs/11_Telemetry_Stance.md` is the WRITTEN privacy
   contract — anonymous diagnostics (terminal-state events + panic captures)
   over an allowlisted field set, opt-out consent enforced at the engine's
@@ -38,6 +56,27 @@ prose. An entry without verifiable issue numbers does not belong here.
   DMG 12 / deb 12 / rpm 12 / AppImage 110 MB); `scripts/installer_size_gate.py`
   fails any installer over budget or without a decided budget, enforced
   per-OS in release.yml and self-tested in ci.yml (#72).
+
+### Changed
+- The chrome is quiet (#77, refs #66): the header pill renders dot + two
+  words (`Connected` / `Connecting…` / `Engine unreachable`) with the
+  engine's full sentence demoted to tooltip and About; the brand block
+  carries the logomark instead of a gradient tile reusing the upload
+  action icon.
+- The visual system sheds the template tells (#77): section and table
+  headers are sentence case with weight/color hierarchy (no letter-spaced
+  uppercase), the progress fill is solid accent (the animated sheen
+  gradient is gone), status has no box when healthy (the bordered pill
+  remains only for `Engine unreachable`), numeric cells never wrap, and
+  the missing 4-pt spacing tokens the settings surface referenced now
+  exist in `theme.css`.
+- Non-running jobs render journal truth: paused, done, failed and canceled
+  rows read their confirmed bytes from the journal via `snapshot` at list
+  time instead of sitting at 0% until an event that never comes — the
+  product screenshots exposed the 0%-done lie and the fix rides the same
+  gate (#77).
+- The tus adapter's friendly label is `TUS 1.0.0` (the protocol version,
+  matching the transports table) — the badge already says resumable (#77).
 
 ## [0.1.1] — 2026-11-06
 

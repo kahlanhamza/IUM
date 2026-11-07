@@ -18,9 +18,9 @@ It reports what happened, never what sounds nice.
 - The name is **IUM** — three letters, always uppercase, never "Ium".
 - The expansion is **Internet Upload Manager** — the README title's form and
   the header's sub-line (`App.tsx`); no other tagline exists or is invented.
-- The wordmark is one lockup: the stroke-built upload glyph (`IconUpload`)
-  in the accent brand chip, **IUM** beside it, the expansion as the sub-line.
-  No other lockups, no logomark, no word-on-shape variants.
+- The lockup is the **Logomark** (see below) beside **IUM**, the expansion
+  as the sub-line. Version numbers and engine details belong to Settings →
+  About, never to the lockup (#77's quiet-chrome rule).
 - The engine crate is `ium-core` — lowercase, code context only. The desktop
   app is IUM; "the IUM app" is not a name.
 
@@ -50,7 +50,7 @@ Product surfaces are friendly; engine seams stay technical.
 | Engine seam (code, docs) | UI label (`ADAPTER_LABELS`) |
 | --- | --- |
 | `http_oneshot` | HTTP one-shot |
-| `tus` | TUS resumable |
+| `tus` | TUS 1.0.0 |
 | `s3_multipart` | S3 multipart |
 | `feishu_drive` | Feishu Drive |
 | `terabox` | TeraBox |
@@ -112,9 +112,26 @@ respect) are theme.css territory; the sheet records the fact, not the numbers.
 - In-app icons are the hand-drawn stroke set (`components/icons.tsx`): 2 px
   stroke on a 24-unit grid, `currentColor`, round caps and joins, optically
   sized for 14–18 px UI use — ~2 KB of path data instead of an icon package.
-- The installer icon set (`src-tauri/icons/`) ships the per-OS marks; a
-  custom mark, if ever wanted, replaces that set — the wordmark lockup does
-  not change to match it.
+- The installer icon set (`src-tauri/icons/`) is GENERATED from the
+  logomark master (`npx tauri icon design/logo.svg`) — the set is never
+  hand-edited; the master is the only source.
+
+## Logomark (#77)
+
+The mark is a constructed object, not a repurposed action icon: a teal
+rounded-square tile carrying a bold white **U** — the initial of IUM — whose
+counter holds an upward **arrow**, the product's whole promise in one glyph.
+
+- **Master:** `design/logo.svg` — 512-unit grid, pure `<path>` data, no
+  text elements, no raster, no gradients.
+- **Colors are fixed identity, not theme:** tile `#0F766E` (the light-scheme
+  accent) and glyph `#FFFFFF` on every surface, both schemes. A mark does
+  not re-derive itself from tokens.
+- **Surfaces:** the in-app `Logomark` component (24-unit mirror in
+  `icons.tsx`), `ium-app/public/favicon.svg`, and the full Tauri platform
+  set (PNG/ICO/ICNS) regenerated from the master.
+- **Legibility bar:** the arrow must read at 16 px favicon and at 512 px
+  installer size — geometry is tuned once for both, not drawn twice.
 
 ## What this sheet governs
 

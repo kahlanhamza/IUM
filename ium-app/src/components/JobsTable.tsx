@@ -107,7 +107,7 @@ export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCance
                       attribute (#35) — the chip's text stays human-facing. */}
                   <Chip state={record.state}>{record.state}</Chip>
                 </td>
-                <td>
+                <td className="cell-progress">
                   {/* #67 RED fix: a progressbar without a name announces
                       "progress bar, 25" — name it after WHAT is progressing. */}
                   <div
@@ -124,7 +124,7 @@ export function JobsTable({ jobs, selected, onSelect, onPause, onResume, onCance
                     {pct}% · {humanBytes(j.confirmed)} / {humanBytes(record.source_size)}
                   </div>
                 </td>
-                <td>{j.speed > 0 ? `${humanBytes(j.speed)}/s` : "—"}</td>
+                <td className="cell-speed">{j.speed > 0 ? `${humanBytes(j.speed)}/s` : "—"}</td>
                 <td>
                   <div className="cell-actions">
                     {canResume(record.state) ? (

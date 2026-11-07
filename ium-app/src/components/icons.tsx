@@ -110,6 +110,35 @@ export function IconInfinite(props: P) {
   );
 }
 
+/**
+ * The IUM logomark (#77): the U of IUM carrying an upload arrow in its
+ * counter. Mirrors design/logo.svg (the 512 master) on a 24-unit grid —
+ * two flat tones, constructed geometry, legible from favicon to installer.
+ * Brand colors are FIXED (not tokens): a mark is identity, not theme.
+ */
+export function Logomark({ size = 24, ...rest }: P) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden {...rest}>
+      <rect width="24" height="24" rx="5.4" fill="#0F766E" />
+      <path
+        d="M7 5.7v8.2a5 5 0 0 0 10 0V5.7"
+        stroke="#FFFFFF"
+        strokeWidth={2.45}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M12 15.5V5.5" stroke="#FFFFFF" strokeWidth={2.45} strokeLinecap="round" />
+      <path
+        d="m9.7 7.9 2.3-3.4 2.3 3.4"
+        stroke="#FFFFFF"
+        strokeWidth={2.45}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function IconGear(props: P) {
   return (
     <svg {...base(props)}>

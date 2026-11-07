@@ -1,0 +1,13 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- IUM logomark — the U of IUM carrying an upload arrow in its counter.
+       Two flat tones, constructed geometry, legible 16 px → 512 px.
+       Single source of truth: the in-app Logomark component (ium-app/src/components/icons.tsx)
+       mirrors these paths in a 24-unit grid; platform sets regenerate via `npx tauri icon`. -->
+  <rect width="512" height="512" rx="115" fill="#0F766E"/>
+  <path d="M150 122 V296 A106 106 0 0 0 362 296 V122"
+        fill="none" stroke="#FFFFFF" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M256 330 V118"
+        fill="none" stroke="#FFFFFF" stroke-width="52" stroke-linecap="round"/>
+  <path d="M206 168 L256 96 L306 168"
+        fill="none" stroke="#FFFFFF" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

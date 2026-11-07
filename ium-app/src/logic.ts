@@ -50,7 +50,7 @@ export function badgeFor(capability: string): BadgeView {
  */
 export const ADAPTER_LABELS: Record<string, string> = {
   http_oneshot: "HTTP one-shot",
-  tus: "TUS resumable",
+  tus: "TUS 1.0.0",
   s3_multipart: "S3 multipart",
   feishu_drive: "Feishu Drive",
   terabox: "TeraBox",

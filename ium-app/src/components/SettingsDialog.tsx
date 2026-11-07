@@ -15,7 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type AdapterSchema, type TelemetryStatus } from "../api";
 import { canSave, changedFields, toRows, type FieldRow } from "../settings";
 import { TELEMETRY_COPY } from "../copy";
-import { IconAlert, IconCheck, IconX } from "./icons";
+import { IconAlert, IconCheck, IconX, Logomark } from "./icons";
 import { Button, Chip, cx, TextInput } from "./ui";
 
 export interface SettingsDialogProps {
@@ -24,6 +24,9 @@ export interface SettingsDialogProps {
   /** Surfaced as toasts by the shell — silent failures are a dev-tool habit. */
   onError: (message: string) => void;
   onSaved: (message: string) => void;
+  /** The engine's own status sentence — lives HERE (#77), in About, never
+   *  as permanent header chrome. The shell passes it when known. */
+  engineDetail?: string;
 }
 
 interface AdapterSection {
@@ -31,7 +34,7 @@ interface AdapterSection {
   rows: FieldRow[];
 }
 
-export function SettingsDialog({ open, onClose, onError, onSaved }: SettingsDialogProps) {
+export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }: SettingsDialogProps) {
   const [sections, setSections] = useState<AdapterSection[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
@@ -178,6 +181,21 @@ export function SettingsDialog({ open, onClose, onError, onSaved }: SettingsDial
           Credentials are read when IUM starts — changes take effect the next time it starts.
           A real environment variable always wins over a saved value.
         </p>
+
+        {/* About (#77): the version and the engine's own words have a home —
+            the header never carries them (the quiet-chrome rule). */}
+        <div className="about" aria-label="About IUM">
+          <Logomark size={22} />
+          <div style={{ minWidth: 0 }}>
+            <div className="about-name">
+              IUM <span className="about-version">{__APP_VERSION__}</span>
+            </div>
+            <div className="about-line">
+              Internet Upload Manager — reliability-engineered uploads.
+            </div>
+            {engineDetail && <div className="about-engine">{engineDetail}</div>}
+          </div>
+        </div>
       </div>
     </>
   );
