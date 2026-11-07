@@ -125,6 +125,14 @@ export const api = {
    *  and the lane hot-applies. The backend id is allowlisted both ends. */
   authorizeOauth: (backend: string, bin?: string): Promise<ApplyOutcome> =>
     invoke("authorize_oauth", { backend, bin: bin ?? null }),
+  /** The YouTube sign-in (#85): the shell runs its own loopback OAuth
+   *  flow (PKCE + state) — the browser opens Google's real consent screen,
+   *  the redirect returns to localhost:8737, and the exchanged token is
+   *  stored under the lane's own hidden secret (OS keychain). The client
+   *  id/secret are drafts (falling back to the saved values) — the honest
+   *  one-time setup until IUM ships a registered client. */
+  connectYoutube: (clientId?: string, clientSecret?: string): Promise<ApplyOutcome> =>
+    invoke("connect_youtube", { clientId: clientId ?? null, clientSecret: clientSecret ?? null }),
   /** Read-only credential check against the DRAFTS (never persisted, no
    *  upload session created — a Test button cannot orphan a real upload). */
   probeCredentials: (adapter: string, fields: Record<string, string>): Promise<ProbeResult> =>

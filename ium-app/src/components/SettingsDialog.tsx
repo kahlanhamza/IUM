@@ -356,6 +356,10 @@ function ConnectSheet({
   // no picker, no fields (the token row is hidden; its presence is the
   // state). The drawer closes itself on a green answer (the reflex).
   const driveLock = schema.adapter === "google_drive" ? "drive" : undefined;
+  // The YouTube lane (#85): its sheet is the two one-time client fields
+  // (visible) + the loopback Google sign-in. The hidden token row's
+  // presence is the state.
+  const isYouTube = schema.adapter === "youtube";
   const visibleRows = rows.filter((r) => !r.hidden);
   const binDraft = rows.find((r) => r.name === "bin")?.draft ?? null;
   return (
@@ -381,6 +385,15 @@ function ConnectSheet({
           binDraft={binDraft}
           busy={busy}
           locked={driveLock}
+          onError={onError}
+          onConnected={onConnected}
+          onVaultChanged={onVaultChanged}
+        />
+      )}
+      {isYouTube && (
+        <GoogleSignIn
+          rows={rows}
+          busy={busy}
           onError={onError}
           onConnected={onConnected}
           onVaultChanged={onVaultChanged}
@@ -528,6 +541,71 @@ function BrowserSignIn({
       {waiting && (
         <p className="settings-note" role="status" style={{ margin: "6px 0 0" }}>
           {APP_COPY.oauthWaiting}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The YouTube sign-in (#85): the lane's sheet carries the two one-time
+ * client fields (visible rows, masked secret included) + this block. The
+ * drafts travel to the shell (saved values win when the drafts are empty);
+ * the browser opens Google's real consent screen, the redirect returns to
+ * the shell's loopback listener, and the drawer closes itself on a green
+ * answer. The UI never sees a token byte.
+ */
+function GoogleSignIn({
+  rows,
+  busy,
+  onError,
+  onConnected,
+  onVaultChanged,
+}: {
+  rows: FieldRow[];
+  busy: boolean;
+  onError: (message: string) => void;
+  onConnected: (message: string) => void;
+  onVaultChanged: () => Promise<void>;
+}) {
+  const [waiting, setWaiting] = useState(false);
+  const clientId = rows.find((r) => r.name === "client_id");
+  const clientSecret = rows.find((r) => r.name === "client_secret");
+  const ready = (r: FieldRow | undefined) =>
+    !!r && ((r.draft !== null && r.draft !== "") || r.present);
+  const canConnect = ready(clientId) && ready(clientSecret);
+
+  async function connect() {
+    setWaiting(true);
+    try {
+      await api.connectYoutube(
+        clientId?.draft ?? undefined,
+        clientSecret?.draft ?? undefined,
+      );
+      await onVaultChanged();
+      onConnected(APP_COPY.oauthDone);
+    } catch (e) {
+      onError(String(e));
+    } finally {
+      setWaiting(false);
+    }
+  }
+
+  return (
+    <div className="oauth-block" aria-label="Google sign-in">
+      <div className="cell-actions" style={{ justifyContent: "flex-start", marginTop: 4 }}>
+        <Button disabled={busy || waiting || !canConnect} onClick={() => void connect()}>
+          {waiting ? "Signing in…" : "Connect YouTube"}
+        </Button>
+      </div>
+      {waiting && (
+        <p className="settings-note" role="status" style={{ margin: "6px 0 0" }}>
+          {APP_COPY.oauthWaiting}
+        </p>
+      )}
+      {!canConnect && (
+        <p className="settings-note" style={{ margin: "6px 0 0" }}>
+          Both the client id and the client secret are needed before the sign-in can open.
         </p>
       )}
     </div>

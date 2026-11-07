@@ -142,6 +142,16 @@ pub fn schema() -> Vec<AdapterSchema> {
             note: "Sign in with your Google account in the browser — no fields to fill. The sign-in token lives in your OS keychain.",
             fields: vec![h("token", "Google sign-in")],
         },
+        AdapterSchema {
+            adapter: "youtube",
+            label: "YouTube",
+            note: "Upload videos by connecting your Google account. YouTube's upload scope needs a registered client: paste your Google Cloud project's client id and secret once — after that, connect is one click.",
+            fields: vec![
+                f("client_id", "Client id (…apps.googleusercontent.com)", false, true),
+                f("client_secret", "Client secret", true, true),
+                h("token", "Google sign-in"),
+            ],
+        },
     ]
 }
 
@@ -360,6 +370,9 @@ impl Vault {
             ("webdav.vendor", "IUM_WEBDAV_VENDOR"),
             ("webdav.bucket", "IUM_WEBDAV_BUCKET"),
             ("google_drive.token", "IUM_GOOGLE_DRIVE_TOKEN"),
+            ("youtube.client_id", "IUM_GOOGLE_CLIENT_ID"),
+            ("youtube.client_secret", "IUM_GOOGLE_CLIENT_SECRET"),
+            ("youtube.token", "IUM_YOUTUBE_TOKEN"),
         ];
         let mut set = 0;
         for (key, var) in direct {
@@ -582,6 +595,7 @@ mod tests {
             "feishu",
             "webdav",
             "google_drive",
+            "youtube",
         ] {
             assert!(names.contains(&want), "schema misses {want}: {names:?}");
         }
@@ -685,6 +699,52 @@ mod tests {
         );
         std::env::remove_var("IUM_GOOGLE_DRIVE_TOKEN"); // leave the shared env clean
         assert_eq!(n, 1, "the one token maps to one env var");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #85 — the YouTube lane: two visible client fields (the honest BYO
+    /// setup until IUM ships a registered client) + ONE hidden token row
+    /// the loopback sign-in writes. apply_env maps all three.
+    #[test]
+    fn youtube_lane_is_two_fields_and_a_hidden_token() {
+        let schema = schema();
+        let y = schema
+            .iter()
+            .find(|a| a.adapter == "youtube")
+            .expect("the youtube lane must exist in the schema");
+        let field = |n: &str| {
+            y.fields
+                .iter()
+                .find(|f| f.name == n)
+                .unwrap_or_else(|| panic!("the youtube lane misses the {n} field"))
+        };
+        assert!(field("client_id").required && !field("client_id").secret);
+        assert!(field("client_secret").required && field("client_secret").secret);
+        let token = field("token");
+        assert!(token.required && token.secret && token.hidden);
+        assert_eq!(
+            y.fields.len(),
+            3,
+            "two client fields + the hidden token — nothing else"
+        );
+        // apply_env maps all three names.
+        let dir = tmpdir("youtube-map");
+        let v = Vault::open(&dir);
+        let mut fields = BTreeMap::new();
+        fields.insert("client_id".to_string(), "cid".to_string());
+        fields.insert("client_secret".to_string(), "sec".to_string());
+        fields.insert("token".to_string(), "{\"access_token\":\"a\"}".to_string());
+        v.set("youtube", fields).unwrap();
+        let n = v.apply_env();
+        for var in [
+            "IUM_GOOGLE_CLIENT_ID",
+            "IUM_GOOGLE_CLIENT_SECRET",
+            "IUM_YOUTUBE_TOKEN",
+        ] {
+            assert!(std::env::var(var).is_ok(), "apply_env must map {var}");
+            std::env::remove_var(var); // leave the shared env clean
+        }
+        assert_eq!(n, 3, "the three youtube fields map to env vars");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

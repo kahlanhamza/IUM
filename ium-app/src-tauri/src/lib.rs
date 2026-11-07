@@ -172,6 +172,16 @@ fn build_adapter(id: &str) -> Option<Arc<dyn TransferAdapter>> {
                 None
             }
         },
+        // The YouTube lane (#85): IUM's first native OAuth adapter — the
+        // config is sync (client id/secret + the stored TokenSet), no
+        // session at construction. Absence is the honest no-lane state.
+        "youtube" => match ium_core::YoutubeConfig::from_env() {
+            Ok(cfg) => Some(Arc::new(ium_core::YoutubeAdapter::new(cfg))),
+            Err(e) => {
+                tracing::warn!("youtube not configured (no client/token): {e}");
+                None
+            }
+        },
         // The rclone family (#63): serve spawn + readiness is async, setup
         // is sync, both under the app runtime (same shape as boot). The
         // webdav lane (#83) rides the same family — its constructor reads
@@ -229,6 +239,7 @@ fn register_adapters(manager: &mut JobManager) {
         "mega",
         "webdav",
         "google_drive",
+        "youtube",
     ] {
         if let Some(adapter) = build_adapter(id) {
             manager.register_adapter(adapter);
@@ -449,6 +460,139 @@ async fn authorize_oauth(
     Ok(applied)
 }
 
+/// Open the user's default browser at `url` — the provider owns the flow
+/// (the OS opener, per-OS one-liner; no extra shell dependency).
+fn open_in_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let spawn = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let spawn = std::process::Command::new("cmd")
+        .args(["/c", "start", "", url])
+        .spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let spawn = std::process::Command::new("xdg-open").arg(url).spawn();
+    spawn
+        .map(|_| ())
+        .map_err(|e| format!("could not open the browser at {url} ({e})"))
+}
+
+/// The loopback redirect server (#85): ONE `GET /?code=…&state=…`, the
+/// anti-CSRF state verified, one honest landing sentence, and the code is
+/// the answer. Ten minutes of patience — the user takes as long as they
+/// take (2FA included); then the honest timeout. Blocks: it runs on the
+/// blocking pool, never on a runtime worker.
+fn wait_for_code(expect_state: String) -> Result<String, String> {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+    let listener =
+        TcpListener::bind(("127.0.0.1", ium_core::google::REDIRECT_PORT)).map_err(|e| {
+            format!(
+                "could not listen on localhost:{} — another IUM sign-in may be in flight. ({e})",
+                ium_core::google::REDIRECT_PORT
+            )
+        })?;
+    let deadline = Instant::now() + Duration::from_secs(10 * 60);
+    let ok_page = "<html><body style=\"font-family:sans-serif;background:#f8fafc;color:#0f172a\"><p>Sign-in complete. You can close this window and return to IUM.</p></body></html>";
+    let bad_page = "<html><body style=\"font-family:sans-serif;background:#f8fafc;color:#0f172a\"><p>IUM did not receive a valid sign-in. Close this window and try again.</p></body></html>";
+    while Instant::now() < deadline {
+        let (mut stream, _) = listener
+            .accept()
+            .map_err(|e| format!("the loopback listener failed: {e}"))?;
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 4096];
+        loop {
+            match stream.read(&mut tmp) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&tmp[..n]);
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 16_384 {
+                        break;
+                    }
+                }
+            }
+        }
+        let head = String::from_utf8_lossy(&buf);
+        let request_line = head.lines().next().unwrap_or("");
+        let target = request_line.split_whitespace().nth(1).unwrap_or("/");
+        let answered = match ium_core::google::parse_redirect(target) {
+            Ok((code, state)) if ium_core::google::state_matches(&state, &expect_state) => {
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    ok_page.len(),
+                    ok_page
+                );
+                let _ = stream.flush();
+                Some(code)
+            }
+            _ => {
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    bad_page.len(),
+                    bad_page
+                );
+                let _ = stream.flush();
+                None
+            }
+        };
+        if let Some(code) = answered {
+            return Ok(code);
+        }
+        // A favicon probe or a stray request: keep listening.
+    }
+    Err("the browser sign-in timed out after ten minutes — nothing was connected.".into())
+}
+
+/// The YouTube sign-in (#85): the loopback OAuth flow. The client id/secret
+/// ride the DRAFTS (the sheet's two fields) with the saved values as
+/// fallback — a one-time setup, after which connect is one click. The
+/// token lands under the lane's own hidden secret (OS keychain, #81) and
+/// the lane hot-applies — the drawer closes itself (the reflex).
+#[tauri::command]
+async fn connect_youtube(
+    engine: State<'_, Engine>,
+    app: tauri::AppHandle,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+) -> Result<ApplyOutcome, String> {
+    let saved = |k: &str| {
+        vault(&app)
+            .load()
+            .adapters
+            .get("youtube")
+            .and_then(|m| m.get(k))
+            .cloned()
+    };
+    let draft = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let id = draft(client_id).or_else(|| saved("client_id"));
+    let secret = draft(client_secret).or_else(|| saved("client_secret"));
+    let (Some(id), Some(secret)) = (id, secret) else {
+        return Err("The YouTube client id and secret are required — paste them from your Google Cloud project once (console.cloud.google.com → OAuth client, type Desktop app, redirect URI http://localhost:8737).".into());
+    };
+    let client = ium_core::GoogleClient {
+        client_id: id,
+        client_secret: secret,
+    };
+    let (verifier, _challenge) = ium_core::google::pkce_pair();
+    let state = ium_core::google::new_state();
+    let url = ium_core::google::authorize_url(&client.client_id, &verifier, &state);
+    open_in_browser(&url)?;
+    let expect_state = state;
+    let code = tauri::async_runtime::spawn_blocking(move || wait_for_code(expect_state))
+        .await
+        .map_err(|e| format!("the sign-in task failed: {e}"))??;
+    let fresh = client.exchange_code(&code, &verifier).await?;
+    vault(&app).set(
+        "youtube",
+        BTreeMap::from([("token".to_string(), fresh.to_json())]),
+    )?;
+    vault(&app).apply_env();
+    hot_apply(&engine, "youtube")
+}
+
 /// What Test-connection learned (#81). `checked = false` is the honest
 /// "verified on the first upload" answer — never a fake green check.
 /// `final = true` means `sentence` is already human copy (a missing field);
@@ -596,6 +740,30 @@ async fn probe_credentials(
                 return probe_missing("The WebDAV configuration was refused.");
             };
             bridge_probe(cfg).await
+        }
+        "youtube" => {
+            let (Some(id), Some(secret)) = (draft("client_id"), draft("client_secret")) else {
+                return probe_missing(
+                    "The client id and the client secret are required for a test.",
+                );
+            };
+            // The token is a hidden row: no draft exists, the test reads
+            // the SAVED sign-in.
+            let token = vault(&app)
+                .load()
+                .adapters
+                .get("youtube")
+                .and_then(|m| m.get("token"))
+                .cloned();
+            let Some(token) = token else {
+                return probe_missing(
+                    "No Google sign-in yet — connect YouTube once and the token lives in your keychain.",
+                );
+            };
+            match ium_core::YoutubeConfig::from_parts(&id, &secret, &token, "", "") {
+                Ok(cfg) => probe_raw(ium_core::YoutubeAdapter::new(cfg).check_credentials().await),
+                Err(e) => probe_missing(&e.to_string()),
+            }
         }
         "google_drive" => {
             // The token is a hidden row: no draft exists, the test reads
@@ -954,6 +1122,7 @@ pub fn run() {
             credentials_delete,
             apply_credentials,
             authorize_oauth,
+            connect_youtube,
             probe_credentials,
             secret_mode,
             telemetry_status,

@@ -1,0 +1,51 @@
+feat(app,core): the YouTube lane — native resumable upload + the loopback Google sign-in (Closes #85, closes #60)
+
+The owner's ruling: upload by connecting the account. rclone has NO
+youtube backend, so this is IUM's first NATIVE OAuth adapter — the sign-in
+cannot borrow `rclone authorize` and runs its own installed-app flow.
+
+Core google.rs (#85): the OAuth pure math against real vectors — PKCE S256
+(the RFC 7636 Appendix B vector pins it), an anti-CSRF state, the
+consent-screen URL (`scope=youtube.upload`, `access_type=offline`,
+`redirect_uri=http://localhost:8737`, S256), the percent-decoded loopback
+redirect parse (a cancelled consent is an honest refusal, a mismatched
+state never passes), and TokenSet (parse/expiry with the 60 s skew/
+roundtrip keeping `expires_at`). The two network calls (exchange/refresh)
+build their own rustls client — the shell gains no dependency.
+
+Core adapter_youtube.rs (#85): the resumable protocol ridden directly —
+init POST (`part=snippet,status`, privacyStatus PRIVATE by default, title
+from the filename sanitized to YouTube's 100-char cap) → journaled session
+URI → sequential 8 MiB PUTs (256 KiB grain, max_parallel 1: one session is
+ONE byte stream) with `Content-Range`; the `308 + Range` answer is the
+server's acknowledgment and the resume probe (`bytes */total`) is the
+session's own truth — the plan's optimism never outranks it (a chunk
+starting ahead of the session is ExpiredSession). verify-before-declare =
+videos.list status — honest-by-capability: no server-side checksum exists,
+so the lane says exactly what it verified. Refresh-on-expiry is lazy (the
+stored grant's refresh token is the durable credential).
+
+Shell (#85): the loopback redirect server (std TcpListener on 8737, the
+OS opener launches the browser — no new dependency), `connect_youtube`
+(drafts first, saved client values as fallback; the token lands under the
+lane's own hidden secret — OS keychain, #81 — and the lane hot-applies),
+the vault lane (two visible client fields + the hidden token row,
+apply_env → IUM_GOOGLE_CLIENT_ID/SECRET + IUM_YOUTUBE_TOKEN), the
+build_adapter arm, and a probe arm whose Test proves the SAVED sign-in
+with the read-only channels.list check.
+
+UI (#85): the youtube sheet = the two client fields + Connect YouTube
+(disabled until both are present or saved) + the hidden token chip; the
+drawer closes itself on a green answer. HONEST LIMIT, shipped in the
+sheet's note: YouTube's upload scope needs a registered client — until
+IUM ships one, the two fields are a ONE-TIME setup (console.cloud.google.com
+→ Desktop client, redirect URI http://localhost:8737); after that, connect
+is one click. `youtube.upload` is a sensitive scope — unverified projects
+serve test users only.
+
+RED (comment 6713323974): E0432 unresolved imports — the contract suite
+existed before the modules did. En route the suite caught 2 real defects
+pre-commit (the title sanitizer stripped the extension the contract keeps;
+the TokenSet roundtrip lost `expires_at` — parse_at now reads BOTH
+spelling). Gates: core 313 green (+25), fmt clean, clippy -D warnings,
+vitest 97/97, tsc strict, vite build 203.02 KB.
