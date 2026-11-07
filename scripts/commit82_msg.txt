@@ -1,0 +1,39 @@
+feat(app,shell): connect, don't configure — one-click connect sheets + browser OAuth sign-in (Closes #82)
+
+The owner's bar: "to connect an account you must click connect and a
+window should be popped up and user can connect to their account as
+normal, after finishes the window closes and the app is connected — like
+the google authentication style", with the honest caveat that OAuth is
+"not meant for every adapter we support, for example S3 might be any
+service... I'm just talking about obvious ones."
+
+The connect surface (#82): every lane collapses to one honest row — its
+state sentence (connected / almost there / not set up, read from SAVED
+required-field presence, drafts are not values) and ONE action. Connect
+opens a focused single-lane sheet: only that lane's fields, the Test
+control, one Save-and-connect action — and on a connected (or honestly
+unchecked) answer the drawer CLOSES ITSELF. A failure keeps the sheet
+open with the probe's sentence in view.
+
+The browser sign-in: the rclone bridge lane leads with an allowlisted
+platform picker (pCloud, Dropbox, OneDrive, Box — Google types absent by
+owner ruling, #59/#60). The shell spawns `rclone authorize <backend>` on
+the blocking pool, the provider's REAL page opens in the user's browser
+(2FA and consent screens included — the provider owns the flow), rclone
+prints the token config, and the shell parses it (auth.rs, pure-std —
+marker block, drift-tolerant, ambiguity-refusing), merges the env lines
+into the bridge lane's extra_env INSIDE the process (a masked secret
+value never crosses the UI, #69), and hot-applies the lane — the token
+lives in the OS keychain like every other secret. Generic protocols (S3
+keys, TeraBox cookie, MEGA email+password, Feishu app secret) keep the
+focused sheet — there is no single identity to redirect to, and no fake
+OAuth is built for them.
+
+Gates: vitest 93/93 (8 new connect-state contracts + the one-click list
+a11y audit), the rustc --test harness 12/12 on auth.rs (real rclone
+output fixture, cancelled sign-in, ambiguity, the merge order rules, the
+allowlist), tsc strict, vite build. The ium-app rust lane compiles in CI
+per the #61 contract.
+
+RED evidence: issue comment 6712091028 (ERR_MODULE_NOT_FOUND on
+./connect; rustc couldn't find auth.rs) — before any implementation.
