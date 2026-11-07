@@ -83,4 +83,29 @@ describe("the quiet header (#77)", () => {
     expect(mark!.querySelector("image")).toBeNull();
     expect(mark!.getAttribute("aria-hidden")).toBe("true");
   });
+
+  it("the logomark is the dart (#79) — twin arcs, round caps, no tile, currentColor", async () => {
+    const { default: App } = await import("./App");
+    const { container } = render(<App />);
+    const mark = container.querySelector("header .brand .logomark");
+    expect(mark, "header renders a .logomark").not.toBeNull();
+    // the dart is exactly two ribbons — the main arc and its echo
+    const paths = mark!.querySelectorAll("path");
+    expect(paths.length, "the dart is two arcs").toBe(2);
+    for (const p of Array.from(paths)) {
+      // smooth geometry only: arcs, round caps — the owner's construction ruling
+      expect(p.getAttribute("d")).toMatch(/^M\s/);
+      expect(p.getAttribute("stroke-linecap")).toBe("round");
+      expect(p.getAttribute("stroke-width")).toBeTruthy();
+      // flat ink discipline: the mark paints with currentColor, no hardcoded
+      // brand hex, no fills, no blends
+      expect(p.getAttribute("stroke")).toBe("currentColor");
+      expect(p.getAttribute("fill")).toBe("none");
+    }
+    // the teal tile is gone — no rects in the mark, ever
+    expect(mark!.querySelector("rect")).toBeNull();
+    // and no gradient machinery may ride along (the owner banned it outright)
+    expect(mark!.innerHTML).not.toMatch(/gradient/i);
+    expect(mark!.querySelector("defs")).toBeNull();
+  });
 });

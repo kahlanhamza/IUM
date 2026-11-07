@@ -111,30 +111,32 @@ export function IconInfinite(props: P) {
 }
 
 /**
- * The IUM logomark (#77): the U of IUM carrying an upload arrow in its
- * counter. Mirrors design/logo.svg (the 512 master) on a 24-unit grid —
- * two flat tones, constructed geometry, legible from favicon to installer.
- * Brand colors are FIXED (not tokens): a mark is identity, not theme.
+ * The IUM logomark (#79): the dart — two smooth concentric arcs on one bow,
+ * round caps, zero pointed vertices. Byte-frozen geometry from the owner-
+ * approved set03 master (design/logo.svg, 512 grid), painted with
+ * currentColor so the mark reads ink on light and white on dark — the
+ * same one-ink discipline as the favicon and the README picture swap.
+ * Flat solid ink only: no tile, no fills, no color blends (owner ruling).
  */
 export function Logomark({ size = 24, ...rest }: P) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden {...rest}>
-      <rect width="24" height="24" rx="5.4" fill="#0F766E" />
-      <path
-        d="M7 5.7v8.2a5 5 0 0 0 10 0V5.7"
-        stroke="#FFFFFF"
-        strokeWidth={2.45}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path d="M12 15.5V5.5" stroke="#FFFFFF" strokeWidth={2.45} strokeLinecap="round" />
-      <path
-        d="m9.7 7.9 2.3-3.4 2.3 3.4"
-        stroke="#FFFFFF"
-        strokeWidth={2.45}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+    <svg width={size} height={size} viewBox="0 0 512 512" fill="none" aria-hidden {...rest}>
+      <g transform="translate(11 -10.8) scale(1.15)">
+        <path
+          d="M 214 314.4 A 104 104 0 0 1 261.9 227.4"
+          stroke="currentColor"
+          strokeWidth={46}
+          strokeLinecap="round"
+          fill="none"
+        />
+        <path
+          d="M 148 314 A 170 170 0 0 1 278 150"
+          stroke="currentColor"
+          strokeWidth={54}
+          strokeLinecap="round"
+          fill="none"
+        />
+      </g>
     </svg>
   );
 }

@@ -1,13 +1,13 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <!-- IUM logomark — the U of IUM carrying an upload arrow in its counter.
-       Two flat tones, constructed geometry, legible 16 px → 512 px.
-       Single source of truth: the in-app Logomark component (ium-app/src/components/icons.tsx)
-       mirrors these paths in a 24-unit grid; platform sets regenerate via `npx tauri icon`. -->
-  <rect width="512" height="512" rx="115" fill="#0F766E"/>
-  <path d="M150 122 V296 A106 106 0 0 0 362 296 V122"
-        fill="none" stroke="#FFFFFF" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M256 330 V118"
-        fill="none" stroke="#FFFFFF" stroke-width="52" stroke-linecap="round"/>
-  <path d="M206 168 L256 96 L306 168"
-        fill="none" stroke="#FFFFFF" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- IUM logomark — the dart (#79): two smooth concentric arcs on one bow,
+       round caps, zero pointed vertices. Owner-approved set03 geometry,
+       byte-frozen; ink colorway #0F172A for light surfaces (white mono twin:
+       design/logo-white.svg). Flat solid ink only — color blends are banned by
+       owner ruling. Platform icon sets regenerate from design/logo-tile.svg. -->
+  <g transform="translate(11 -10.8) scale(1.15)">
+    <path fill="none" stroke="#0F172A" stroke-width="46" stroke-linecap="round"
+      d="M 214 314.4 A 104 104 0 0 1 261.9 227.4"/>
+    <path fill="none" stroke="#0F172A" stroke-width="54" stroke-linecap="round"
+      d="M 148 314 A 170 170 0 0 1 278 150"/>
+  </g>
 </svg>

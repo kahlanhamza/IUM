@@ -186,8 +186,9 @@ td,
   min-width: 0;
 }
 
-/* The logomark (#77): the constructed brand mark. Size rides the SVG
-   viewBox; identity colors are fixed inside the component, not themed. */
+/* The logomark (#79): the dart — two smooth arcs, round caps. Size rides
+   the SVG viewBox; the mark paints with currentColor, so it reads ink on
+   light and white on dark (one mark, both themes — same as the favicon). */
 .logomark {
   flex: none;
   display: block;

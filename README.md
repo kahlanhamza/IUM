@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="design/logo.svg" width="96" alt="The IUM logomark — a teal tile carrying a white U whose counter holds an upward arrow" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="design/logo-white.svg" />
+  <img src="design/logo.svg" width="96" alt="The IUM logomark — the dart: two smooth concentric arcs on one bow, round caps, one flat ink" />
+</picture>
 
 # IUM — Internet Upload Manager
 

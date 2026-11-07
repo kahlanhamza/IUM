@@ -1,0 +1,12 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- IUM platform icon tile (#79): the dart on a near-white rounded tile.
+       Source for the Tauri icon set (Windows taskbar / macOS dock need a
+       self-contained surface); the bare mark lives in design/logo.svg. -->
+  <rect width="512" height="512" rx="115" fill="#F6F8FB"/>
+  <g transform="translate(11 -10.8) scale(1.15)">
+    <path fill="none" stroke="#0F172A" stroke-width="46" stroke-linecap="round"
+      d="M 214 314.4 A 104 104 0 0 1 261.9 227.4"/>
+    <path fill="none" stroke="#0F172A" stroke-width="54" stroke-linecap="round"
+      d="M 148 314 A 170 170 0 0 1 278 150"/>
+  </g>
+</svg>

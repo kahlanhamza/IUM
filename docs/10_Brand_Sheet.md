@@ -113,25 +113,34 @@ respect) are theme.css territory; the sheet records the fact, not the numbers.
   stroke on a 24-unit grid, `currentColor`, round caps and joins, optically
   sized for 14–18 px UI use — ~2 KB of path data instead of an icon package.
 - The installer icon set (`src-tauri/icons/`) is GENERATED from the
-  logomark master (`npx tauri icon design/logo.svg`) — the set is never
-  hand-edited; the master is the only source.
+  platform tile (`npx tauri icon design/logo-tile.svg`) — the set is never
+  hand-edited; the masters are the only source.
 
-## Logomark (#77)
+## Logomark (#79)
 
-The mark is a constructed object, not a repurposed action icon: a teal
-rounded-square tile carrying a bold white **U** — the initial of IUM — whose
-counter holds an upward **arrow**, the product's whole promise in one glyph.
+The mark is the **dart**: two smooth concentric arcs on one bow — the main
+ribbon and its shorter echo — round caps everywhere, zero pointed vertices.
+One gesture, one ink: motion without a single hard corner. It was hand-drawn
+as SVG paths (set03, owner-approved on the #78 review) and is carried
+byte-frozen into every surface; flat solid ink only — color blends are
+banned outright by owner ruling (they were a reference-image crutch, #78).
 
-- **Master:** `design/logo.svg` — 512-unit grid, pure `<path>` data, no
-  text elements, no raster, no gradients.
-- **Colors are fixed identity, not theme:** tile `#0F766E` (the light-scheme
-  accent) and glyph `#FFFFFF` on every surface, both schemes. A mark does
-  not re-derive itself from tokens.
-- **Surfaces:** the in-app `Logomark` component (24-unit mirror in
-  `icons.tsx`), `ium-app/public/favicon.svg`, and the full Tauri platform
-  set (PNG/ICO/ICNS) regenerated from the master.
-- **Legibility bar:** the arrow must read at 16 px favicon and at 512 px
-  installer size — geometry is tuned once for both, not drawn twice.
+- **Masters:** `design/logo.svg` (bare ink dart for light surfaces) and
+  `design/logo-white.svg` (white mono twin for dark surfaces) — 512-unit
+  grid, two `<path>` arcs, round caps, no tile, no text, no raster, no
+  blends. `design/logo-tile.svg` (near-white rounded tile carrying the ink
+  dart) is the platform-icon source where the mark needs a self-contained
+  surface (taskbar, dock, installer).
+- **One ink, two twins:** `#0F172A` on light surfaces, `#FFFFFF` on dark.
+  In the shell the mark paints with `currentColor` so it follows the theme
+  automatically (the same rule as the icon set below); README swaps the
+  twins with a `<picture>` light/dark source.
+- **Surfaces:** the in-app `Logomark` component (`icons.tsx`, byte-frozen
+  512-grid paths), `ium-app/public/favicon.svg`, the README lockup, and the
+  full Tauri platform set (PNG/ICO/ICNS) regenerated from the tile.
+- **Legibility bar:** the twin arcs must read at 32 px taskbar and 512 px
+  installer size — strokes stay fat (46/54 units on the frozen grid), so
+  nothing thins out down the ladder (verified 96/48/24 on the #78 sheet).
 
 ## What this sheet governs
 
