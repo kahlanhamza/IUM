@@ -1,0 +1,27 @@
+fix(repo): pin .gitattributes — text files byte-stable across OS checkouts (Closes #74)
+
+The lane-6 lesson, made repo-wide. Wire facts at HEAD 633f4f6 (RED
+evidence comment 6699305281): a windows-default clone
+(core.autocrlf=true, no pin) byte-diverges 287 / 307 tracked files and
+the brand sheet's $-anchored table regex parses ZERO rows from the CRLF
+copy — the exact run-42277434539 failure, reproduced against HEAD, not
+recalled from the incident.
+
+The pin: `* text=auto eol=lf` (store and check out LF everywhere,
+regardless of core.autocrlf) plus explicit `-text` exceptions for the
+19 tracked binaries (the icon inventory: *.png x17, icon.ico,
+icon.icns) and the installer/archive extensions the #65 release bar
+will produce. `git add --renormalize .` changed ZERO blobs — every text
+file was already stored LF (287 x i/lf), so the pin changes the
+CHECKOUT contract, not the content.
+
+The gates stay robust either way (the #74 acceptance line): the brand
+gate and the telemetry charter gate each gain a windows-default
+checkout simulation — the real files converted to CRLF disk bytes,
+run through the same reader normalization, parsed by the REAL parsers,
+asserted identical; the Rust charter harness gains the same CRLF case
+(12/12 standalone). vitest 62/62 (60 + 2 CRLF simulations); vite build
+189.71 KB JS; the pin makes the CRLF-at-the-source class impossible
+while the parsers keep their defense-in-depth.
+
+Closes #74.

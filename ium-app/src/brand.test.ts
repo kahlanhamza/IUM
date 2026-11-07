@@ -99,6 +99,35 @@ describe("the brand sheet — the token projection cannot drift (D2)", () => {
     expect(missing, "tokens missing from the sheet table").toEqual([]);
   });
 
+  it("the gate survives a windows-default checkout (the #74 simulation: CRLF disk bytes)", () => {
+    // The windows-default clone (core.autocrlf=true, no pin) puts CRLF on
+    // disk. This feeds the CRLF-converted real files through the SAME
+    // reader-normalization the gate applies — the full pipeline (CRLF disk
+    // → normalize → parse) must produce the identical tables. The pin
+    // (.gitattributes) removes the CRLF-at-the-source; this test proves the
+    // gate stays robust either way — the #74 acceptance line.
+    const crlfDisk = (s: string) => s.replace(/\r?\n/g, "\r\n"); // the checkout writes CRLF
+    const gateNormalize = (s: string) => s.replace(/\r\n/g, "\n"); // the readers' normalization
+    const rawSheet = readFileSync(SHEET_PATH, "utf8");
+    const rawTheme = readFileSync(THEME_PATH, "utf8");
+
+    const table = sheetTable(gateNormalize(crlfDisk(rawSheet)));
+    const missing = BRAND_COLOR_TOKENS.filter((t) => !(t in table));
+    expect(missing, "tokens missing from the CRLF sheet table").toEqual([]);
+
+    const css = gateNormalize(crlfDisk(rawTheme));
+    const light = cssTokens(css.slice(0, css.indexOf("@media (prefers-color-scheme: dark)")));
+    const dark = cssTokens(css.slice(css.indexOf("@media (prefers-color-scheme: dark)")));
+    const drift: string[] = [];
+    for (const tok of BRAND_COLOR_TOKENS) {
+      const row = table[tok];
+      expect(row, `${tok} missing from the CRLF sheet`).toBeDefined();
+      if (light[tok] !== row[0]) drift.push(`${tok} light: sheet ${row[0]} ≠ css ${light[tok]}`);
+      if (dark[tok] !== row[1]) drift.push(`${tok} dark: sheet ${row[1]} ≠ css ${dark[tok]}`);
+    }
+    expect(drift, "the CRLF pipeline drifted from theme.css").toEqual([]);
+  });
+
   it("the sheet's hex values equal theme.css's actual values — light and dark", () => {
     const css = readTheme();
     const darkStart = css.indexOf("@media (prefers-color-scheme: dark)");

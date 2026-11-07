@@ -57,6 +57,17 @@ describe("the telemetry charter — the field table cannot drift (D2)", () => {
     expect(charterFields(readCharter())).toEqual(TELEMETRY_FIELDS);
   });
 
+  it("the gate survives a windows-default checkout (the #74 simulation: CRLF disk bytes)", () => {
+    // The windows-default clone puts CRLF on disk. Feed the CRLF-converted
+    // real charter through the same reader-normalization the gate applies —
+    // the full pipeline (CRLF disk → normalize → parse) must yield the
+    // identical field list. The pin (.gitattributes) removes the CRLF at
+    // the source; this test proves the gate stays robust either way.
+    const crlfDisk = readFileSync(CHARTER_PATH, "utf8").replace(/\r?\n/g, "\r\n");
+    const table = charterFields(crlfDisk.replace(/\r\n/g, "\n"));
+    expect(table).toEqual(TELEMETRY_FIELDS);
+  });
+
   it("the stance sentence the UI renders matches the charter's decision", () => {
     expect(readCharter()).toContain("opt-out");
     expect(TELEMETRY_COPY.stance).toContain("stays on your machine");

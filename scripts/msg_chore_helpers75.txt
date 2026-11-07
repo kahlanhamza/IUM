@@ -1,0 +1,11 @@
+chore(scripts): the lane-7 landing helpers + the poller retarget (refs #75)
+
+Helper scripts that rode the lane-7 tail: scripts/land_issue75.py (posted
+the LANDED evidence comment 6695100450 on #75), scripts/state_check75.py
+(one-page repo truth: issue states, comments, CI runs, origin/main), and
+scripts/poll_ci_75.py retargeted to the verdict-commit run 42291038005
+(completed/success on db813f0, all jobs GREEN). Also lands the message
+file from the d1ac268 chore itself.
+
+This commit replaces the UUID-mangled message the background committer
+left behind (the third such mangling; the amend-and-push recipe holds).

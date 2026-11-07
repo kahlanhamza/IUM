@@ -370,6 +370,46 @@ mod tests {
     }
 
     #[test]
+    fn charter_table_survives_a_crlf_checkout() {
+        // The #74 simulation: a windows-default clone (core.autocrlf=true,
+        // no pin) puts CRLF on disk. `str::lines()` strips the trailing
+        // `\r`, so the parser must yield the identical table from the
+        // CRLF-converted real charter. The pin removes the CRLF at the
+        // source; this test pins the parser's robustness either way.
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/11_Telemetry_Stance.md"
+        );
+        let doc = std::fs::read_to_string(path).expect("the charter exists");
+        let crlf = doc.replace('\n', "\r\n");
+        let table = charter_table(&crlf);
+        assert_eq!(
+            table
+                .get("every")
+                .expect("crlf charter has an `every` group")
+                .len(),
+            EVERY.len(),
+            "the CRLF copy parsed a different `every` group"
+        );
+        assert_eq!(
+            table
+                .get("job_terminal")
+                .expect("crlf charter has a job_terminal group")
+                .len(),
+            JOB_KEYS.len(),
+            "the CRLF copy parsed a different job_terminal group"
+        );
+        assert_eq!(
+            table
+                .get("panic")
+                .expect("crlf charter has a panic group")
+                .len(),
+            PANIC_KEYS.len(),
+            "the CRLF copy parsed a different panic group"
+        );
+    }
+
+    #[test]
     fn default_consent_is_opt_out() {
         let dir = tmpdir("default");
         assert!(Telemetry::open(&dir).consented());

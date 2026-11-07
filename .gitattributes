@@ -1,0 +1,35 @@
+# Byte-stable text across OS checkouts (#74, the lane-6 lesson).
+#
+# Store and check out LF everywhere: `text=auto` normalizes all files git
+# detects as text into LF in the repo, `eol=lf` forces LF on disk regardless
+# of core.autocrlf — a windows-default clone (autocrlf=true) checks out the
+# same bytes a Linux CI runner sees. Every line-anchored parser in this repo
+# (the brand gate's `$`-anchored tables, the telemetry charter, the bash
+# harnesses, the workflow YAML) depends on that byte-stability.
+* text=auto eol=lf
+
+# Binary assets — never normalize, never diff as text. Content detection
+# must not touch them (a stray NUL byte in a text file would misclassify;
+# these pins make the classification explicit). The icon set is the current
+# inventory (19 files); installers are forward pins for the #65 release bar.
+*.png   -text
+*.ico   -text
+*.icns  -text
+*.jpg   -text
+*.jpeg  -text
+*.gif   -text
+*.woff  -text
+*.woff2 -text
+*.ttf   -text
+*.otf   -text
+*.pdf   -text
+*.zip   -text
+*.gz    -text
+*.exe   -text
+*.msi   -text
+*.dmg   -text
+*.app   -text
+*.deb   -text
+*.rpm   -text
+*.AppImage -text
+*.wasm  -text
