@@ -1,0 +1,10 @@
+docs(status): the RE-resistance verdict — CI 8/8 GREEN, product-bar lanes 1–8 complete (refs #76)
+
+The M11#9 session-log row: lane 8 closed end-to-end — the strip pin,
+the three-mode gate (selftest/repo/bin), the flip checklist doc, the
+ci.yml push-lane wiring, the release.yml remap + binary gate, the
+/home/ registry-path leak caught and fixed, seven pre-ship defect
+catches, CI run 42322157075 8/8 GREEN on e05a903, #76 auto-closed.
+The landing evidence comment (6700172136) is on the issue. Also lands
+the lane-8 helper scripts (the issue filer, the evidence posters, the
+landing poster).
