@@ -1,0 +1,9 @@
+docs(status): the .gitattributes pin verdict — CI 8/8 GREEN on the fix commit (refs #74)
+
+The M11#8 session-log row: the repo-wide CRLF class risk closed — RED
+287/307 byte-divergence at 633f4f6, the zero-blob renormalize, the
+CRLF-simulation gates on both parser pipelines (vitest 62/62, harness
+12/12), CI run 42317366839 8/8 GREEN on c170ded incl. windows-latest,
+#74 auto-closed. The landing evidence comment (6699518221) is on the
+issue. Also lands the helper scripts that rode the tail (the RED
+comment poster, the landing poster, the CI poller, the message files).
