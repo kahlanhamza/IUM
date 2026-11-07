@@ -190,18 +190,34 @@ describe("a11y: the full shell (header, pill, form, table, empty state)", () => 
 
 describe("a11y: the settings dialog (#69 — the credentials vault, masked)", () => {
   it("has no axe violations with saved secrets shown as chips, not values", async () => {
-    const { container, findByLabelText } = render(
+    const { container, findByLabelText, findByRole } = render(
       <SettingsDialog open onClose={() => {}} onError={() => {}} onSaved={() => {}} />,
     );
-    // Wait for the async schema/views pull: the Email field carries the
-    // stored value; the Password field must show NO value at all.
-    // Exact label text ("Field *" = required marker) — the reveal buttons'
-    // aria-labels ("Reveal Password") must not collide with the query.
+    // #82: the dialog opens as the one-click list; the MEGA lane is fully
+    // saved in the fixture, so its row says Details. Open the focused
+    // connect sheet, THEN audit the fields behind it.
+    const details = await findByRole("button", { name: "Details for MEGA (rclone bridge)" });
+    details.click();
+    // Wait for the sheet: the Email field carries the stored value; the
+    // Password field must show NO value at all. Exact label text ("Field *"
+    // = required marker) — the reveal buttons' aria-labels ("Reveal
+    // Password") must not collide with the query.
     const email = (await findByLabelText("Email *")) as HTMLInputElement;
     expect(email.value).toBe("u@x");
     const pass = (await findByLabelText("Password *")) as HTMLInputElement;
     expect(pass.value).toBe(""); // a secret never travels to the UI
     expect(pass.type).toBe("password"); // and is masked by default
+    await expectAccessible(container as HTMLElement);
+  });
+
+  it("has no axe violations in the one-click list (#82)", async () => {
+    const { container, findByRole } = render(
+      <SettingsDialog open onClose={() => {}} onError={() => {}} onSaved={() => {}} />,
+    );
+    // The connect rows tell the per-lane truth: a saved lane says Details,
+    // an empty one says Connect.
+    await findByRole("button", { name: "Details for MEGA (rclone bridge)" });
+    await findByRole("button", { name: "Connect TeraBox" });
     await expectAccessible(container as HTMLElement);
   });
 });

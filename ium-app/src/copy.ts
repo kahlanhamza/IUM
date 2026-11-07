@@ -150,6 +150,15 @@ export const APP_COPY = {
     "Your OS keychain service is unavailable — secrets are stored in the 0600 vault file instead.",
   authFooterEnv: "A real environment variable always wins over a saved value.",
   authFooterLive: "Saving re-registers the transfer lane immediately — no restart.",
+  // #82: the one-click connect surface — the per-lane state sentences and
+  // the connect sheet's outcomes. Calm sentences, no exclamation marks.
+  connectStateConnected: "Connected.",
+  connectStatePartial: "Almost there — some required details are missing.",
+  connectStateEmpty: "Not set up yet.",
+  connectDone: "Connected — the transfer lane is live in the registry, no restart needed.",
+  oauthWaiting:
+    "Your browser opened — sign in to the platform there. IUM finishes by itself when you do.",
+  oauthDone: "Connected — the token lives in your OS keychain.",
 } as const;
 
 /**

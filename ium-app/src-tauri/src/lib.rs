@@ -11,6 +11,7 @@
 //! journals the honest `Canceled` terminal state BEFORE the drive task is
 //! aborted.
 
+mod auth;
 mod telemetry;
 mod vault;
 
@@ -302,19 +303,12 @@ struct ApplyOutcome {
     lanes: Vec<String>,
 }
 
-/// The hot apply (#81): called by the settings UI right after a save or a
-/// removal. The lane is rebuilt from vault+env through the shared factory
-/// and upserted — the NEXT job uses the fresh config; in-flight jobs keep
-/// the Arc they resolved at create_job (the engine's non-retroactive
-/// contract). No restart. Removing credentials removes the lane.
-#[tauri::command]
-fn apply_credentials(
-    engine: State<Engine>,
-    app: tauri::AppHandle,
-    adapter: String,
-) -> Result<ApplyOutcome, String> {
-    vault(&app).apply_env();
-    let action = match build_adapter(&adapter) {
+/// The hot apply's shared body (#81): rebuild the lane from vault+env
+/// through the shared factory and upsert or remove it — the NEXT job uses
+/// the fresh config; in-flight jobs keep the Arc they resolved at
+/// create_job (the engine's non-retroactive contract). No restart.
+fn hot_apply(engine: &Engine, adapter: &str) -> Result<ApplyOutcome, String> {
+    let action = match build_adapter(adapter) {
         Some(a) => {
             if engine.0.manager().replace_adapter(a) {
                 "replaced"
@@ -323,7 +317,7 @@ fn apply_credentials(
             }
         }
         None => {
-            engine.0.manager().remove_adapter(&adapter);
+            engine.0.manager().remove_adapter(adapter);
             "removed"
         }
     };
@@ -337,6 +331,86 @@ fn apply_credentials(
             .map(str::to_string)
             .collect(),
     })
+}
+
+/// The hot apply (#81): called by the settings UI right after a save or a
+/// removal. Removing credentials removes the lane.
+#[tauri::command]
+fn apply_credentials(
+    engine: State<Engine>,
+    app: tauri::AppHandle,
+    adapter: String,
+) -> Result<ApplyOutcome, String> {
+    vault(&app).apply_env();
+    hot_apply(&engine, &adapter)
+}
+
+/// The browser sign-in (#82): `rclone authorize <backend>` opens the
+/// provider's real sign-in page in the user's browser; they sign in as
+/// normal (2FA and consent screens included — the provider owns the
+/// flow); rclone prints the token config; the shell parses it, merges the
+/// env lines into the bridge lane's `extra_env` INSIDE the process (a
+/// masked secret value never crosses the UI, #69), and hot-applies the
+/// lane. The token rides a secret field, so the OS keychain stores it.
+/// The allowlist below is the injection contract; Google types are absent
+/// by owner ruling (#59/#60 shelved).
+#[tauri::command]
+async fn authorize_oauth(
+    engine: State<'_, Engine>,
+    app: tauri::AppHandle,
+    backend: String,
+    bin: Option<String>,
+) -> Result<ApplyOutcome, String> {
+    if !auth::is_oauth_backend(&backend) {
+        return Err(format!("not a browser-sign-in backend: {backend}"));
+    }
+    let bin = bin
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "rclone".to_string());
+    // The spawn+wait blocks for as long as the user takes in their browser
+    // — it runs on the blocking pool, never on a runtime worker.
+    let backend_for_spawn = backend.clone();
+    let run = tauri::async_runtime::spawn_blocking(move || {
+        std::process::Command::new(&bin)
+            .arg("authorize")
+            .arg(&backend_for_spawn)
+            .output()
+            .map_err(|e| {
+                format!(
+                    "could not run {bin} — install rclone or point the bridge lane's bin field at it. ({e})"
+                )
+            })
+    })
+    .await
+    .map_err(|e| format!("the browser sign-in task failed: {e}"))?;
+    let out = run?;
+    if !out.status.success() {
+        return Err(format!(
+            "the browser sign-in did not finish ({}). {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let token = auth::parse_authorize_output(&String::from_utf8_lossy(&out.stdout))?;
+    let lines: Vec<String> = auth::env_lines(&backend, &token)
+        .into_iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    let stored = vault(&app)
+        .load()
+        .adapters
+        .get("rclone_bridge")
+        .and_then(|m| m.get("extra_env"))
+        .cloned()
+        .unwrap_or_default();
+    let merged = auth::merge_env_lines(&stored, &lines);
+    vault(&app).set(
+        "rclone_bridge",
+        BTreeMap::from([("extra_env".to_string(), merged)]),
+    )?;
+    vault(&app).apply_env();
+    hot_apply(&engine, "rclone_bridge")
 }
 
 /// What Test-connection learned (#81). `checked = false` is the honest
@@ -758,6 +832,7 @@ pub fn run() {
             credentials_set,
             credentials_delete,
             apply_credentials,
+            authorize_oauth,
             probe_credentials,
             secret_mode,
             telemetry_status,

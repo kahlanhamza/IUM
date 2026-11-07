@@ -114,6 +114,13 @@ export const api = {
    *  it — the next job uses the fresh config, no restart. */
   applyCredentials: (adapter: string): Promise<ApplyOutcome> =>
     invoke("apply_credentials", { adapter }),
+  /** The browser sign-in (#82): the shell spawns `rclone authorize
+   *  <backend>` — the provider's real page opens in the user's browser,
+   *  they sign in as normal, the captured token is merged into the bridge
+   *  lane's extra_env INSIDE the shell (masked values never cross the UI)
+   *  and the lane hot-applies. The backend id is allowlisted both ends. */
+  authorizeOauth: (backend: string, bin?: string): Promise<ApplyOutcome> =>
+    invoke("authorize_oauth", { backend, bin: bin ?? null }),
   /** Read-only credential check against the DRAFTS (never persisted, no
    *  upload session created — a Test button cannot orphan a real upload). */
   probeCredentials: (adapter: string, fields: Record<string, string>): Promise<ProbeResult> =>
