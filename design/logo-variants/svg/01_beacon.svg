@@ -1,0 +1,15 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- 01 · Beacon — the exit.
+       A thin ring with a single break at the top; the arrow leaves through it.
+       Concept: a file passing through the boundary. One color, near-black tile,
+       Vercel/Linear-grade minimal. Reads at 16px as "circle + rise". -->
+  <rect width="512" height="512" rx="115" fill="#0B0D12"/>
+  <!-- ring, ~320-degree arc, gap at top -->
+  <path d="M 194.3 202.5 A 96 96 0 1 1 317.7 202.5"
+        fill="none" stroke="#FFFFFF" stroke-width="32" stroke-linecap="round"/>
+  <!-- arrow escaping through the gap -->
+  <path d="M 256 336 V 150"
+        fill="none" stroke="#FFFFFF" stroke-width="32" stroke-linecap="round"/>
+  <path d="M 216 192 L 256 150 L 296 192"
+        fill="none" stroke="#FFFFFF" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

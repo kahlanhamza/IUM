@@ -1,0 +1,9 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- IUM dart — set03 geometry frozen, flat solid inks (owner ruling: no color blends) -->
+  <g transform="translate(11 -10.8) scale(1.15)">
+    <path fill="none" stroke="#7C3AED" stroke-width="46" stroke-linecap="round"
+      d="M 214 314.4 A 104 104 0 0 1 261.9 227.4"/>
+    <path fill="none" stroke="#2563EB" stroke-width="54" stroke-linecap="round"
+      d="M 148 314 A 170 170 0 0 1 278 150"/>
+  </g>
+</svg>

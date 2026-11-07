@@ -1,0 +1,30 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <linearGradient id="gTop" gradientUnits="userSpaceOnUse" x1="150" y1="140" x2="360" y2="230">
+    <stop offset="0%" stop-color="#7DD3FC"/><stop offset="100%" stop-color="#3B82F6"/>
+  </linearGradient>
+  <linearGradient id="gLeft" gradientUnits="userSpaceOnUse" x1="126" y1="196" x2="256" y2="391">
+    <stop offset="0%" stop-color="#2563EB"/><stop offset="100%" stop-color="#1E3A8A"/>
+  </linearGradient>
+  <linearGradient id="gRight" gradientUnits="userSpaceOnUse" x1="256" y1="391" x2="386" y2="196">
+    <stop offset="0%" stop-color="#3B82F6"/><stop offset="100%" stop-color="#7C3AED"/>
+  </linearGradient>
+</defs>
+<!-- left wall: four filleted corners (r=22) -->
+<path class="facet" fill="url(#gLeft)" stroke="url(#gLeft)" stroke-width="16" stroke-linejoin="round"
+  d="M 126 287 L 126 218 Q 126 196 145.1 207 L 236.9 260 Q 256 271 256 293
+     L 256 369 Q 256 391 236.9 380 L 145.1 320 Q 126 309 126 287 Z"/>
+<!-- right wall -->
+<path class="facet" fill="url(#gRight)" stroke="url(#gRight)" stroke-width="16" stroke-linejoin="round"
+  d="M 386 287 L 386 218 Q 386 196 366.9 207 L 275.1 260 Q 256 271 256 293
+     L 256 369 Q 256 391 275.1 380 L 366.9 320 Q 386 309 386 287 Z"/>
+<!-- top face: filleted diamond (r=20) -->
+<path class="facet" fill="url(#gTop)" stroke="url(#gTop)" stroke-width="16" stroke-linejoin="round"
+  d="M 273.3 131 L 368.7 185 Q 386 196 366.9 206 L 273.3 261 Q 256 271 238.7 261
+     L 143.3 206 Q 126 196 143.3 186 L 238.7 131 Q 256 121 273.3 131 Z"/>
+<!-- the opening: dark filleted diamond (r=12) -->
+<path class="dark" d="M 266.4 160.8 L 317.1 190 Q 327.5 196 317.1 202 L 266.4 231.3
+  Q 256 237.3 245.6 231.3 L 194.9 202 Q 184.5 196 194.9 190 L 245.6 160.8
+  Q 256 154.8 266.4 160.8 Z"/>
+<!-- seams where facets abut (mono/construction only) -->
+</svg>

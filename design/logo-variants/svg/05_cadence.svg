@@ -1,0 +1,11 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- 05 · Cadence — throughput.
+       Three ascending rounded bars with a chevron peak: the progress ladder.
+       "Step by step to the ultimate product" as a mark. Solid deep blue. -->
+  <rect width="512" height="512" rx="115" fill="#1E40AF"/>
+  <rect x="150" y="264" width="52" height="96"  rx="26" fill="#FFFFFF"/>
+  <rect x="230" y="204" width="52" height="156" rx="26" fill="#FFFFFF"/>
+  <rect x="310" y="144" width="52" height="216" rx="26" fill="#FFFFFF"/>
+  <path d="M 302 108 L 336 74 L 370 108"
+        fill="none" stroke="#FFFFFF" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,21 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- 06 · Zephyr — takeoff.
+       Two rounded bars and a chevron on a 45-degree ascent: the runway.
+       The only diagonal in the set — launch energy on an orange gradient. -->
+  <defs>
+    <linearGradient id="gZephyr" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F97316"/>
+      <stop offset="100%" stop-color="#C2410C"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="115" fill="url(#gZephyr)"/>
+  <g transform="rotate(45 256 256)">
+    <!-- long bar (runway) -->
+    <rect x="224" y="216" width="64" height="190" rx="32" fill="#FFFFFF"/>
+    <!-- arrow tail, fused with the chevron above it -->
+    <rect x="226" y="84" width="60" height="96" rx="30" fill="#FFFFFF"/>
+    <!-- chevron apex -->
+    <path d="M 210 78 L 256 32 L 302 78"
+          fill="none" stroke="#FFFFFF" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
