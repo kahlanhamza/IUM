@@ -16,6 +16,7 @@ import { IconAlert, IconCheck, IconGear, IconUpload, Logomark } from "./componen
 import { SettingsDialog } from "./components/SettingsDialog";
 import { confirmedTotal, recentEndpoints, speedBetween } from "./logic";
 import { APP_COPY, humanizeError } from "./copy";
+import { checkForUpdate } from "./updater";
 
 interface Progress {
   confirmed: number;
@@ -95,6 +96,20 @@ export default function App() {
       });
     refreshJobs();
 
+    // The silent startup update check (#80): once per boot, a few seconds
+    // in, Tauri-only (the wrapper degrades to null elsewhere). A failed
+    // check stays silent HERE — the About control is where an error becomes
+    // a sentence; the chrome never nags on a flaky check.
+    const updateTimer = setTimeout(() => {
+      void checkForUpdate()
+        .then((info) => {
+          if (info) {
+            pushToast("ok", APP_COPY.updateAvailable.replace("{version}", info.version));
+          }
+        })
+        .catch(() => {});
+    }, 4000);
+
     const unlisten = listen<JobSnapshot>("job_updated", (e) => {
       const snap = e.payload;
       setJobs((prev) => {
@@ -116,6 +131,7 @@ export default function App() {
     });
 
     return () => {
+      clearTimeout(updateTimer);
       unlisten.then((f) => f()).catch(() => {
         /* no Tauri runtime (plain-browser dev) — nothing to unlisten */
       });

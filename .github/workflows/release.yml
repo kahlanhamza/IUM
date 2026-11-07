@@ -240,6 +240,18 @@ jobs:
               d = json.load(open(f))
               print(f"{f}: specVersion={d['specVersion']}, components={len(d.get('components', []))}")
           PY
+      - name: Build the updater manifest (latest.json, #80)
+        run: |
+          python3 scripts/build_latest_json.py \
+            --dist release_assets \
+            --version "${TAG#v}" \
+            --notes "See the release notes below." \
+            --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "$TAG" \
+            --out release_assets/latest.json
+          # the manifest joins the attest subjects: an updater manifest is a
+          # shipped artifact like any other (#71 supply-chain bar)
       - name: Provenance — attest every shipped artifact
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2 (pinned 2026-11-06)
         with:
@@ -251,6 +263,9 @@ jobs:
             release_assets/*.msi
             release_assets/*.exe
             release_assets/*.cdx.json
+            release_assets/*.zip
+            release_assets/*.tar.gz
+            release_assets/latest.json
       - name: Provenance — ship the sigstore bundles (offline-verifiable)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -259,7 +274,8 @@ jobs:
           n=0
           for f in release_assets/*.deb release_assets/*.rpm release_assets/*.AppImage \
                    release_assets/*.dmg release_assets/*.msi release_assets/*.exe \
-                   release_assets/*.cdx.json; do
+                   release_assets/*.cdx.json release_assets/*.zip \
+                   release_assets/*.tar.gz release_assets/latest.json; do
             [ -f "$f" ] || continue
             n=$((n+1))
             rm -rf "bundles/$n"; mkdir -p "bundles/$n"
@@ -289,7 +305,8 @@ jobs:
           failed=0
           for f in release_assets/*.deb release_assets/*.rpm release_assets/*.AppImage \
                    release_assets/*.dmg release_assets/*.msi release_assets/*.exe \
-                   release_assets/*.cdx.json; do
+                   release_assets/*.cdx.json release_assets/*.zip \
+                   release_assets/*.tar.gz release_assets/latest.json; do
             [ -f "$f" ] || continue
             if ! gh attestation verify "$f" -R "$GITHUB_REPOSITORY"; then
               echo "ATTESTATION VERIFY FAILED: $f"; failed=1

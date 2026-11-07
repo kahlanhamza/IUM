@@ -452,6 +452,10 @@ pub fn run() {
             telemetry_clear,
         ])
         .plugin(tauri_plugin_dialog::init())
+        // the auto-update lane (#80): check = automatic, install = user-armed;
+        // endpoint + pubkey live in tauri.conf.json (the #71 rotated key)
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .run(tauri::generate_context!())
         .expect("error while running IUM");
 }

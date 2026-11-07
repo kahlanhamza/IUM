@@ -48,6 +48,12 @@ jobs:
       - name: Installer-size gate (self-test)
         if: runner.os == 'Linux'
         run: python3 scripts/installer_size_gate.py --self-test
+      # Auto-update lane #80: the updater manifest builder cannot rot —
+      # pairing rule, platform map, NSIS preference proven on every push
+      # (cheap, Linux-only, no new job — the CI-economics rule).
+      - name: Updater manifest gate (self-test)
+        if: runner.os == 'Linux'
+        run: python3 scripts/build_latest_json.py --self-test
       # Product bar #66 lane 8 (#76): the RE-resistance repo pins stay alive
       # between releases — the [profile.release] strip pin, the checklist
       # doc and the source panic-path audit, plus the synthetic detector

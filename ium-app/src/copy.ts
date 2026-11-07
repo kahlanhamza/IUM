@@ -134,6 +134,10 @@ export const APP_COPY = {
   emptyTitle: "No uploads yet",
   emptyHint:
     "Drop a file above, choose a destination, and press Upload. Progress, pause, resume and cancel are all journaled — a crash never loses ground.",
+  // #80: the silent startup check found a newer release. {version} is
+  // replaced at the call site; the install control lives in Settings → About.
+  updateAvailable:
+    "IUM {version} is available — Settings → About has the install control.",
 } as const;
 
 /**

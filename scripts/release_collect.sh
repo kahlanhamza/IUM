@@ -31,6 +31,13 @@ ARTIFACTS+=("$BUNDLE"/appimage/*.AppImage)
 ARTIFACTS+=("$BUNDLE"/dmg/*.dmg)
 ARTIFACTS+=("$BUNDLE"/msi/*.msi)
 ARTIFACTS+=("$BUNDLE"/nsis/*.exe)
+# the updater bundles + .sig sidecars (#80): tauri emits them next to the
+# installers when createUpdaterArtifacts is on; the manifest builder pairs
+# them in build_latest_json.py — an unsigned bundle never ships
+ARTIFACTS+=("$BUNDLE"/msi/*.msi.zip*)
+ARTIFACTS+=("$BUNDLE"/nsis/*.nsis.zip*)
+ARTIFACTS+=("$BUNDLE"/appimage/*.AppImage.tar.gz*)
+ARTIFACTS+=("$BUNDLE"/macos/*.app.tar.gz*)
 
 if [ ${#ARTIFACTS[@]} -eq 0 ]; then
   echo "ERROR: no installer artifacts found under $BUNDLE" >&2
@@ -47,7 +54,8 @@ done
   sha256sum ./* | sed 's|\./||' > SHA256SUMS.txt
   echo "| Installer | Size (bytes) | Size |"
   echo "|---|---|---|"
-  for f in ./*.deb ./*.rpm ./*.AppImage ./*.dmg ./*.msi ./*.exe; do
+  for f in ./*.deb ./*.rpm ./*.AppImage ./*.dmg ./*.msi ./*.exe \
+           ./*.msi.zip ./*.nsis.zip ./*.AppImage.tar.gz ./*.app.tar.gz; do
     [ -f "$f" ] || continue
     bytes=$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f")
     human=$(numfmt --to=iec --suffix= "$bytes" 2>/dev/null || echo "$bytes B")

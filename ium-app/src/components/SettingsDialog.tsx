@@ -17,6 +17,13 @@ import { canSave, changedFields, toRows, type FieldRow } from "../settings";
 import { TELEMETRY_COPY } from "../copy";
 import { IconAlert, IconCheck, IconX, Logomark } from "./icons";
 import { Button, Chip, cx, TextInput } from "./ui";
+import {
+  checkForUpdate,
+  downloadAndInstall,
+  restartToUpdate,
+  updateSupported,
+  type DownloadProgress,
+} from "../updater";
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -195,9 +202,110 @@ export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }
             </div>
             {engineDetail && <div className="about-engine">{engineDetail}</div>}
           </div>
+          <UpdateCard />
         </div>
       </div>
     </>
+  );
+}
+
+
+/**
+ * The update control (#80): one card, six honest states. Check is
+ * user-triggered here (the startup check lives in App and is silent);
+ * an install NEVER starts without the user's click (the consent rule).
+ * Copy follows the brand voice: calm sentences, no exclamation marks.
+ * Rendered only when a real updater is reachable (#40 lesson — a
+ * permission that was never granted is a silent denial).
+ */
+type UpdateState =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "uptodate" }
+  | { kind: "available"; version: string; notes: string | null }
+  | { kind: "downloading"; received: number; total?: number }
+  | { kind: "ready" }
+  | { kind: "error"; message: string };
+
+function UpdateCard() {
+  const [state, setState] = useState<UpdateState>({ kind: "idle" });
+  const supported = updateSupported();
+  if (!supported) return null;
+
+  const checkNow = async () => {
+    setState({ kind: "checking" });
+    try {
+      const info = await checkForUpdate();
+      setState(
+        info
+          ? { kind: "available", version: info.version, notes: info.notes }
+          : { kind: "uptodate" },
+      );
+    } catch (e) {
+      setState({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  const install = async () => {
+    setState((s) =>
+      s.kind === "available"
+        ? { kind: "downloading", received: 0, total: undefined }
+        : s,
+    );
+    try {
+      await downloadAndInstall((p: DownloadProgress) => {
+        setState((s) =>
+          s.kind === "downloading"
+            ? { kind: "downloading", received: p.downloaded, total: p.total ?? s.total }
+            : s,
+        );
+      });
+      setState({ kind: "ready" });
+    } catch (e) {
+      setState({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  return (
+    <div className="about-update" aria-label="Update IUM">
+      {state.kind === "idle" && (
+        <Button variant="ghost" size="sm" onClick={checkNow}>
+          Check for updates
+        </Button>
+      )}
+      {state.kind === "checking" && <span className="about-update-line">Checking for updates…</span>}
+      {state.kind === "uptodate" && (
+        <span className="about-update-line">IUM {__APP_VERSION__} is up to date.</span>
+      )}
+      {state.kind === "available" && (
+        <>
+          <span className="about-update-line">IUM {state.version} is available. Restart to update when the download finishes.</span>
+          <Button variant="primary" size="sm" onClick={install}>
+            Download {state.version}
+          </Button>
+        </>
+      )}
+      {state.kind === "downloading" && (
+        <span className="about-update-line">
+          {state.total
+            ? `Downloading ${Math.min(100, Math.round((state.received / state.total) * 100))}%`
+            : "Downloading…"}
+        </span>
+      )}
+      {state.kind === "ready" && (
+        <>
+          <span className="about-update-line">The update is ready. Restart to update.</span>
+          <Button variant="primary" size="sm" onClick={() => void restartToUpdate()}>
+            Restart to update
+          </Button>
+        </>
+      )}
+      {state.kind === "error" && (
+        <span className="about-update-line" role="alert">
+          The update check failed: {state.message}
+        </span>
+      )}
+    </div>
   );
 }
 
