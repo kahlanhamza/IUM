@@ -106,6 +106,18 @@ pub fn schema() -> Vec<AdapterSchema> {
                 f("app_secret", "App secret", true, true),
             ],
         },
+        AdapterSchema {
+            adapter: "webdav",
+            label: "WebDAV",
+            note: "Nextcloud, ownCloud or any WebDAV server: its URL, your login, an optional app password.",
+            fields: vec![
+                f("url", "Server URL", false, true),
+                f("username", "Username", false, true),
+                f("password", "Password / app password", true, true),
+                f("vendor", "Vendor (nextcloud, owncloud, sharepoint — optional)", false, false),
+                f("bucket", "Target folder", false, false),
+            ],
+        },
     ]
 }
 
@@ -318,6 +330,11 @@ impl Vault {
             ("rclone_bridge.bin", "IUM_RCLONE_BIN"),
             ("feishu.app_id", "IUM_FEISHU_APP_ID"),
             ("feishu.app_secret", "IUM_FEISHU_APP_SECRET"),
+            ("webdav.url", "IUM_WEBDAV_URL"),
+            ("webdav.username", "IUM_WEBDAV_USER"),
+            ("webdav.password", "IUM_WEBDAV_PASS"),
+            ("webdav.vendor", "IUM_WEBDAV_VENDOR"),
+            ("webdav.bucket", "IUM_WEBDAV_BUCKET"),
         ];
         let mut set = 0;
         for (key, var) in direct {
@@ -546,6 +563,60 @@ mod tests {
             .flat_map(|a| a.fields.iter().map(|f| f.name))
             .collect();
         assert!(all.contains(&"ndus") && all.contains(&"remote") && all.contains(&"app_secret"));
+    }
+
+    /// #83 — the WebDAV lane is the focused credential sheet (the protocol
+    /// has no OAuth; the owner's own framing pinned that). url/username/
+    /// password required, password masked, vendor optional.
+    #[test]
+    fn webdav_lane_is_the_credential_sheet() {
+        let schema = schema();
+        let w = schema
+            .iter()
+            .find(|a| a.adapter == "webdav")
+            .expect("the webdav lane must exist in the schema");
+        let field = |n: &str| {
+            w.fields
+                .iter()
+                .find(|f| f.name == n)
+                .unwrap_or_else(|| panic!("the webdav lane misses the {n} field"))
+        };
+        assert!(field("url").required, "the DAV root URL is required");
+        assert!(field("username").required, "the username is required");
+        let pass = field("password");
+        assert!(
+            pass.required && pass.secret,
+            "the password is a masked, required secret"
+        );
+        assert!(
+            !field("vendor").required,
+            "vendor is optional — generic DAV is the default"
+        );
+        // The env mapping exists for every webdav field (no orphans):
+        // one apply_env run sets all five names.
+        let mapped: &[&str] = &[
+            "IUM_WEBDAV_URL",
+            "IUM_WEBDAV_USER",
+            "IUM_WEBDAV_PASS",
+            "IUM_WEBDAV_VENDOR",
+            "IUM_WEBDAV_BUCKET",
+        ];
+        let dir = tmpdir("webdav-map");
+        let v = Vault::open(&dir);
+        let mut fields = BTreeMap::new();
+        fields.insert("url".to_string(), "https://dav.example.com".to_string());
+        fields.insert("username".to_string(), "u".to_string());
+        fields.insert("password".to_string(), "p".to_string());
+        fields.insert("vendor".to_string(), "nextcloud".to_string());
+        fields.insert("bucket".to_string(), "ium".to_string());
+        v.set("webdav", fields).unwrap();
+        let n = v.apply_env();
+        for var in mapped {
+            assert!(std::env::var(var).is_ok(), "apply_env must map {var}");
+            std::env::remove_var(var); // leave the shared process env clean
+        }
+        assert_eq!(n, 5, "the five webdav fields map to env vars");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ---- #81: the SecretStore seam (keychain mode vs the honest fallback) ----

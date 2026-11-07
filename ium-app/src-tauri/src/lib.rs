@@ -173,11 +173,15 @@ fn build_adapter(id: &str) -> Option<Arc<dyn TransferAdapter>> {
             }
         },
         // The rclone family (#63): serve spawn + readiness is async, setup
-        // is sync, both under the app runtime (same shape as boot).
-        "rclone_bridge" | "mega" => {
+        // is sync, both under the app runtime (same shape as boot). The
+        // webdav lane (#83) rides the same family — its constructor reads
+        // the vault-filled IUM_WEBDAV_* envs and obscures the password.
+        "rclone_bridge" | "mega" | "webdav" => {
             let built = tauri::async_runtime::block_on(async {
                 let cfg = if id == "mega" {
                     ium_core::adapter_rclone::RcloneBridgeConfig::mega_from_env().await
+                } else if id == "webdav" {
+                    ium_core::adapter_rclone::RcloneBridgeConfig::webdav_from_env().await
                 } else {
                     ium_core::adapter_rclone::RcloneBridgeConfig::from_env()
                 };
@@ -212,7 +216,14 @@ fn build_adapter(id: &str) -> Option<Arc<dyn TransferAdapter>> {
 fn register_adapters(manager: &mut JobManager) {
     manager.register_adapter(Arc::new(HttpOneShotAdapter::new().expect("http client")));
     manager.register_adapter(Arc::new(TusAdapter::new()));
-    for id in ["s3_multipart", "terabox", "feishu", "rclone_bridge", "mega"] {
+    for id in [
+        "s3_multipart",
+        "terabox",
+        "feishu",
+        "rclone_bridge",
+        "mega",
+        "webdav",
+    ] {
         if let Some(adapter) = build_adapter(id) {
             manager.register_adapter(adapter);
         } // the factory already warned; absence is the honest state
@@ -524,6 +535,37 @@ async fn probe_credentials(adapter: String, fields: BTreeMap<String, String>) ->
             if let Some(code) = draft("twofa") {
                 cfg.extra_env.push(("RCLONE_CONFIG_MEGA_2FA".into(), code));
             }
+            bridge_probe(cfg).await
+        }
+        "webdav" => {
+            let (Some(url), Some(username), Some(password)) =
+                (draft("url"), draft("username"), draft("password"))
+            else {
+                return probe_missing(
+                    "The server URL, your username and the password are required for a test.",
+                );
+            };
+            let bin = draft("bin").unwrap_or_else(|| "rclone".into());
+            let obscured = ium_core::adapter_rclone::RcloneBridgeConfig::rclone_obscure(
+                &std::path::PathBuf::from(&bin),
+                &password,
+            )
+            .await;
+            let Ok(obscured) = obscured else {
+                return probe_missing(
+                    "The rclone binary is required for a test — install it or point the bridge lane's bin field at it.",
+                );
+            };
+            let Ok(cfg) = ium_core::adapter_rclone::RcloneBridgeConfig::webdav_config_from_parts(
+                &url,
+                &username,
+                &obscured,
+                draft("vendor").unwrap_or_default().as_str(),
+                &draft("bucket").unwrap_or_else(|| "ium".into()),
+                &bin,
+            ) else {
+                return probe_missing("The WebDAV configuration was refused.");
+            };
             bridge_probe(cfg).await
         }
         "rclone_bridge" => {

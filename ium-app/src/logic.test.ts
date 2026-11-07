@@ -31,6 +31,9 @@ describe("adapter display names (#65 Lane 1)", () => {
     expect(friendlyAdapter("feishu_drive")).toBe("Feishu Drive");
     expect(friendlyAdapter("terabox")).toBe("TeraBox");
     expect(friendlyAdapter("mega")).toBe("MEGA");
+    expect(friendlyAdapter("webdav")).toBe("WebDAV");
+    expect(friendlyAdapter("google_drive")).toBe("Google Drive");
+    expect(friendlyAdapter("youtube")).toBe("YouTube");
   });
   it("an unknown registry name passes through untouched — the UI reflects the engine", () => {
     expect(friendlyAdapter("future_adapter")).toBe("future_adapter");

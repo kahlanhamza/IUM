@@ -55,6 +55,9 @@ export const ADAPTER_LABELS: Record<string, string> = {
   feishu_drive: "Feishu Drive",
   terabox: "TeraBox",
   mega: "MEGA",
+  webdav: "WebDAV",
+  google_drive: "Google Drive",
+  youtube: "YouTube",
 };
 
 export function friendlyAdapter(name: string): string {

@@ -1,0 +1,32 @@
+feat(app,core): the WebDAV lane — url + username + password, Test connection, hot apply (Closes #83)
+
+The next queued adapter lane lands as the focused credential sheet the
+owner's own framing pinned: WebDAV is a protocol, not a service — there is
+no OAuth to point at, so the lane keeps its fields (server URL, username,
+password / app password, optional vendor + target folder) and rides the
+proven rclone bridge (#63) exactly like MEGA (#61 D1).
+
+Core (#83): `WEBDAV_LANE = "ium_webdav"` + `WEBDAV_REMOTE = "IUM_WEBDAV"`
+(the IUM_ prefix keeps the env-defined remote out of the user's own
+rclone.conf namespace); `webdav_required` (sync + pure — absence refuses
+loudly with the env var named, AuthRequired), `webdav_config_from_parts`
+(the pure env-contract builder: RCLONE_CONFIG_IUM_WEBDAV_{TYPE,URL,USER,PASS}
++ VENDOR only when a vendor was named), `normalize_vendor` (trim + lowercase,
+unknown vendors pass through untouched), `webdav_from_env` (the async
+constructor: envs → required check → rclone-obscured pass → parts).
+
+Shell: the vault schema gains the webdav lane (password masked + required,
+vendor + folder optional) with the five IUM_WEBDAV_* apply_env mappings;
+build_adapter grows the webdav arm (block_on webdav_from_env + start, same
+shape as boot); registration list +1; the Test-connection probe builds the
+config from DRAFTS, obscures the password, and runs the read-only bridge
+probe — no upload session can ever be orphaned by a Test button.
+
+UI: schema-driven sheet (auto); the friendly-label table gains webdav
+(google_drive + youtube rows ride in the same commit — the queued lanes'
+labels, pinned by the same test).
+
+RED (comment 6712668953): E0425/E0599 (no constructors) + vitest
+friendlyAdapter("webdav") != "WebDAV" at HEAD fda6c09. Gates: core 288
+green (+4 webdav), fmt clean, clippy -D warnings, vitest 93/93, tsc strict,
+vite build 201.63 KB.

@@ -61,6 +61,19 @@ pub const BRIDGE_SCHEME: &str = "rclone-bridge://";
 /// next to the generic operator-configured `rclone_bridge`.
 pub const MEGA_LANE: &str = "mega";
 
+/// The WebDAV lane's registry key (#83): a named bridge instance over the
+/// `webdav` backend (Nextcloud, ownCloud, generic DAV servers). WebDAV is
+/// a protocol, not a service — the owner's own framing pinned that — so the
+/// lane keeps the focused credential sheet; no OAuth, honestly.
+pub const WEBDAV_LANE: &str = "ium_webdav";
+
+/// The remote name the WebDAV lane rides under (#83): the `IUM_` prefix
+/// keeps the env-defined remote out of the user's own `rclone.conf`
+/// namespace (a user remote literally named `webdav` is never shadowed —
+/// env-config only wins for names rclone cannot find in the conf file, and
+/// `IUM_WEBDAV` is ours alone).
+pub const WEBDAV_REMOTE: &str = "IUM_WEBDAV";
+
 /// How the serve process is owned (D1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RcloneBridgeMode {
@@ -204,6 +217,105 @@ impl RcloneBridgeConfig {
                 .push(("RCLONE_CONFIG_MEGA_2FA".to_string(), code));
         }
         Ok(cfg)
+    }
+
+    /// WebDAV vendor normalization (#83): trim + lowercase; the empty
+    /// string stays empty (generic DAV — no vendor line is sent). Known
+    /// families (nextcloud, owncloud, sharepoint) pass through in rclone's
+    /// own spelling; unknown values are passed through UNTOUCHED — the UI
+    /// reflects the engine, it never invents vendors.
+    pub fn normalize_vendor(vendor: &str) -> String {
+        vendor.trim().to_ascii_lowercase()
+    }
+
+    /// The WebDAV lane's required-credential check (#83): url + user +
+    /// pass, each refusal naming the env var it expected (`AuthRequired` —
+    /// absence is honest, never guessed). Sync + pure so the missing-path
+    /// is testable without a process env or an rclone binary.
+    pub fn webdav_required(
+        url: Option<&str>,
+        user: Option<&str>,
+        pass: Option<&str>,
+    ) -> Result<(String, String, String), AdapterError> {
+        let url = url
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| AdapterError::AuthRequired("IUM_WEBDAV_URL not set".into()))?;
+        let user = user
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| AdapterError::AuthRequired("IUM_WEBDAV_USER not set".into()))?;
+        let pass = pass
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| AdapterError::AuthRequired("IUM_WEBDAV_PASS not set".into()))?;
+        Ok((url.to_string(), user.to_string(), pass.to_string()))
+    }
+
+    /// The WebDAV config builder (#83) — the PURE part of the constructor:
+    /// complete parts in, bridge config out. The pass arrives ALREADY
+    /// rclone-obscured (the async [`Self::webdav_from_env`] runs
+    /// [`Self::rclone_obscure`]); the env contract is rclone's own
+    /// env-config spelling over [`WEBDAV_REMOTE`], the vendor line is sent
+    /// only when a vendor was named, and the lane name is [`WEBDAV_LANE`].
+    pub fn webdav_config_from_parts(
+        url: &str,
+        user: &str,
+        obscured_pass: &str,
+        vendor: &str,
+        bucket: &str,
+        bin: &str,
+    ) -> Result<Self, AdapterError> {
+        let vendor = Self::normalize_vendor(vendor);
+        let mut cfg = Self::new(RcloneBridgeMode::Spawn, format!("{WEBDAV_REMOTE}:"))?;
+        cfg.rclone_bin = PathBuf::from(bin);
+        cfg.bucket = bucket.to_string();
+        cfg.lane_name = WEBDAV_LANE;
+        let mut env = vec![
+            (
+                format!("RCLONE_CONFIG_{WEBDAV_REMOTE}_TYPE"),
+                "webdav".to_string(),
+            ),
+            (
+                format!("RCLONE_CONFIG_{WEBDAV_REMOTE}_URL"),
+                url.to_string(),
+            ),
+            (
+                format!("RCLONE_CONFIG_{WEBDAV_REMOTE}_USER"),
+                user.to_string(),
+            ),
+            (
+                format!("RCLONE_CONFIG_{WEBDAV_REMOTE}_PASS"),
+                obscured_pass.to_string(),
+            ),
+        ];
+        if !vendor.is_empty() {
+            env.push((format!("RCLONE_CONFIG_{WEBDAV_REMOTE}_VENDOR"), vendor));
+        }
+        cfg.extra_env = env;
+        Ok(cfg)
+    }
+
+    /// The WebDAV lane constructor (#83): `IUM_WEBDAV_URL` +
+    /// `IUM_WEBDAV_USER` + `IUM_WEBDAV_PASS` (required —
+    /// [`AdapterError::AuthRequired`] when missing), optional
+    /// `IUM_WEBDAV_VENDOR` (nextcloud|owncloud|sharepoint|…), optional
+    /// `IUM_WEBDAV_BUCKET` (default `ium`), optional
+    /// `IUM_WEBDAV_RCLONE_BIN` (default `rclone`). The pass rides
+    /// `RCLONE_CONFIG_IUM_WEBDAV_PASS` **rclone-obscured** (the MEGA
+    /// practice: the subprocess argv exposure is rclone's own standard
+    /// preprocessing and is never logged or journaled). Everything
+    /// downstream is #63's, inherited unchanged.
+    pub async fn webdav_from_env() -> Result<Self, AdapterError> {
+        let (url, user, pass) = Self::webdav_required(
+            std::env::var("IUM_WEBDAV_URL").ok().as_deref(),
+            std::env::var("IUM_WEBDAV_USER").ok().as_deref(),
+            std::env::var("IUM_WEBDAV_PASS").ok().as_deref(),
+        )?;
+        let vendor = std::env::var("IUM_WEBDAV_VENDOR").unwrap_or_default();
+        let bucket = std::env::var("IUM_WEBDAV_BUCKET").unwrap_or_else(|_| "ium".to_string());
+        let bin = std::env::var("IUM_WEBDAV_RCLONE_BIN").unwrap_or_else(|_| "rclone".to_string());
+        let obscured = Self::rclone_obscure(&PathBuf::from(&bin), &pass).await?;
+        Self::webdav_config_from_parts(&url, &user, &obscured, &vendor, &bucket, &bin)
     }
 
     /// `rclone obscure <pass>` — the wire's credential preprocessing. The
@@ -895,5 +1007,90 @@ mod tests {
         assert!(reaped, "serve must be reaped after the spawn adapter drops");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ---- #83: the WebDAV lane — env contract + the pure config builder ----
+
+    #[test]
+    fn webdav_vendor_normalization() {
+        let v = |s| RcloneBridgeConfig::normalize_vendor(s);
+        assert_eq!(v(" Nextcloud "), "nextcloud");
+        assert_eq!(v("OWNCLOUD"), "owncloud");
+        assert_eq!(v("SharePoint"), "sharepoint");
+        assert_eq!(v(""), "", "empty stays generic DAV");
+        assert_eq!(v("my-dav"), "my-dav", "unknown vendors pass through");
+    }
+
+    #[test]
+    fn webdav_required_refuses_missing_credentials_loudly() {
+        // The pure path: every required var absent — no process env is
+        // touched (parallel tests share it; the vault test owns the real
+        // apply_env side effects).
+        let err = RcloneBridgeConfig::webdav_required(None, None, None)
+            .expect_err("missing credentials must refuse");
+        assert!(
+            matches!(err, AdapterError::AuthRequired(_)),
+            "expected AuthRequired, got: {err:?}"
+        );
+        // A partial set refuses just as loudly (which var is missing is in
+        // the sentence).
+        let err =
+            RcloneBridgeConfig::webdav_required(Some("https://dav.example.com"), None, Some("p"))
+                .expect_err("a missing username must refuse");
+        assert!(matches!(err, AdapterError::AuthRequired(ref m) if m.contains("IUM_WEBDAV_USER")));
+    }
+
+    #[test]
+    fn webdav_config_from_parts_carries_the_env_contract() {
+        let cfg = RcloneBridgeConfig::webdav_config_from_parts(
+            "https://dav.example.com/remote.php/dav",
+            "user@example.com",
+            "obscured-form",
+            "nextcloud",
+            "photos",
+            "rclone-bin-x",
+        )
+        .expect("the parts are complete");
+        assert_eq!(cfg.lane_name, WEBDAV_LANE);
+        assert_eq!(cfg.remote, "IUM_WEBDAV:");
+        assert_eq!(cfg.bucket, "photos");
+        assert_eq!(cfg.rclone_bin, PathBuf::from("rclone-bin-x"));
+        let env: std::collections::BTreeMap<_, _> = cfg.extra_env.iter().cloned().collect();
+        assert_eq!(env.get("RCLONE_CONFIG_IUM_WEBDAV_TYPE").unwrap(), "webdav");
+        assert_eq!(
+            env.get("RCLONE_CONFIG_IUM_WEBDAV_URL").unwrap(),
+            "https://dav.example.com/remote.php/dav"
+        );
+        assert_eq!(
+            env.get("RCLONE_CONFIG_IUM_WEBDAV_USER").unwrap(),
+            "user@example.com"
+        );
+        assert_eq!(
+            env.get("RCLONE_CONFIG_IUM_WEBDAV_PASS").unwrap(),
+            "obscured-form"
+        );
+        assert_eq!(
+            env.get("RCLONE_CONFIG_IUM_WEBDAV_VENDOR").unwrap(),
+            "nextcloud"
+        );
+    }
+
+    #[test]
+    fn webdav_config_from_parts_omits_an_empty_vendor() {
+        let cfg = RcloneBridgeConfig::webdav_config_from_parts(
+            "https://dav.example.com/dav",
+            "u",
+            "obscured-form",
+            "",
+            "ium",
+            "rclone",
+        )
+        .expect("the parts are complete");
+        assert!(
+            cfg.extra_env
+                .iter()
+                .all(|(k, _)| k != "RCLONE_CONFIG_IUM_WEBDAV_VENDOR"),
+            "generic DAV must not send a vendor line"
+        );
     }
 }
