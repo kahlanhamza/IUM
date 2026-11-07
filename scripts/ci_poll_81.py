@@ -3,7 +3,7 @@
 import json, time, urllib.request
 
 TOK = open(".secrets/gh_token").read().strip()
-SHA = "5debf2a"
+SHA = "c8f2213"
 FULL = None
 
 def get(u):
