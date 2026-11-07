@@ -69,3 +69,20 @@ export function canSave(rows: FieldRow[]): boolean {
     return r.present; // untouched: fine iff already saved
   });
 }
+
+/**
+ * The Test-connection payload (#81): stored values overridden by drafts.
+ * Untouched rows carry their stored value — Test tests what is actually
+ * saved; drafts test what would be saved. A secret that is neither stored
+ * nor drafted is absent (the shell answers honestly: the field is required
+ * for a test — masked values never leave the process, so the UI could not
+ * send a stored secret even if it wanted to).
+ */
+export function probeFields(rows: FieldRow[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    const v = r.draft !== null ? r.draft : r.value;
+    if (v !== null && v !== "") out[r.name] = v;
+  }
+  return out;
+}

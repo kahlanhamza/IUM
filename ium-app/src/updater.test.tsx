@@ -34,6 +34,10 @@ vi.mock("./api", () => ({
     credentialsGet: () => Promise.resolve({}),
     credentialsSet: () => Promise.resolve(),
     credentialsDelete: () => Promise.resolve(),
+    applyCredentials: () => Promise.resolve({ action: "replaced", lanes: [] }),
+    probeCredentials: () =>
+      Promise.resolve({ checked: false, ok: true, sentence: "", final: true }),
+    secretMode: () => Promise.resolve("keyring"),
     telemetryStatus: () =>
       Promise.resolve({ consent: true, count: 0, path: "/tmp/telemetry.jsonl" }),
     telemetrySetConsent: () => Promise.resolve(),

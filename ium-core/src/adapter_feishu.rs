@@ -155,6 +155,31 @@ impl FeishuAdapter {
         }
     }
 
+    /// The credential check behind the shell's Test-connection button (#81):
+    /// the two reads the "root" branch of probe() performs — the tenant
+    /// token fetch (bad app credentials fail HERE, AuthRequired) and the
+    /// root-folder meta read (the token actually works). NO file is created
+    /// — the check never touches the upload surface, so a Test button can
+    /// never orphan a real upload.
+    pub async fn check_credentials(&self) -> Result<(), AdapterError> {
+        self.tenant_token().await?;
+        let v = self
+            .call_json(
+                reqwest::Method::GET,
+                "/drive/explorer/v2/root_folder/meta",
+                None,
+            )
+            .await?;
+        let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+        if code != 0 {
+            return Err(Self::map_feishu_error(
+                code,
+                v.get("msg").and_then(|m| m.as_str()).unwrap_or("?"),
+            ));
+        }
+        Ok(())
+    }
+
     /// The journaled session token (D2): JSON so the manager's
     /// finalize-once machinery recognizes the shape and its crash-window
     /// repair can inject `final` = file_token before reattach.
@@ -821,6 +846,75 @@ mod tests {
         assert!(matches!(internal, AdapterError::Transient(_)));
         let odd = FeishuAdapter::map_feishu_error(999999, "mystery");
         assert!(matches!(odd, AdapterError::Unknown(_)));
+    }
+
+    // The #81 credentials check against a canned loopback wire: the check's
+    // two requests (tenant token, root meta) and their verdicts.
+    fn http200(body: &str, ct: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn canned(responses: Vec<String>) -> (String, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            for resp in responses {
+                let (mut sock, _) = listener.accept().unwrap();
+                use std::io::{Read, Write};
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf);
+                sock.write_all(resp.as_bytes()).unwrap();
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn check_credentials_accepts_valid_app_credentials() {
+        let (base, srv) = canned(vec![
+            http200(
+                r#"{"code":0,"tenant_access_token":"t-a1","expire":7200}"#,
+                "application/json",
+            ),
+            http200(r#"{"code":0,"data":{"token":"rooty"}}"#, "application/json"),
+        ]);
+        let a = FeishuAdapter::with_base(FeishuConfig::new("cli_x".into(), "sec".into()), base);
+        a.check_credentials().await.unwrap();
+        srv.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn check_credentials_rejects_bad_app_credentials() {
+        let (base, srv) = canned(vec![http200(
+            r#"{"code":10003,"msg":"invalid app_id"}"#,
+            "application/json",
+        )]);
+        let a = FeishuAdapter::with_base(FeishuConfig::new("cli_bad".into(), "sec".into()), base);
+        let err = a.check_credentials().await.unwrap_err();
+        assert!(matches!(err, AdapterError::AuthRequired(_)), "{err}");
+        srv.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn check_credentials_maps_the_meta_verdict() {
+        // Token ok, but the meta read says the credentials lack drive scope.
+        let (base, srv) = canned(vec![
+            http200(
+                r#"{"code":0,"tenant_access_token":"t-a1","expire":7200}"#,
+                "application/json",
+            ),
+            http200(
+                r#"{"code":1061073,"msg":"no permission"}"#,
+                "application/json",
+            ),
+        ]);
+        let a = FeishuAdapter::with_base(FeishuConfig::new("cli_x".into(), "sec".into()), base);
+        let err = a.check_credentials().await.unwrap_err();
+        assert!(matches!(err, AdapterError::AuthRequired(_)), "{err}");
+        srv.join().unwrap();
     }
 
     #[test]

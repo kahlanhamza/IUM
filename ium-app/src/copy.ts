@@ -138,6 +138,18 @@ export const APP_COPY = {
   // replaced at the call site; the install control lives in Settings → About.
   updateAvailable:
     "IUM {version} is available — Settings → About has the install control.",
+  // #81: the credentials lanes re-register live — the restart sentences are
+  // gone; these state what actually happens now.
+  authSavedLive: "Credentials saved — the transfer lane re-registered, no restart needed.",
+  authRemovedLive: "Credentials removed — the transfer lane is gone from the registry.",
+  // #81: where the secret VALUES actually live on this machine (the honesty
+  // marker the footer prints; the fallback keeps the 0600 vault file).
+  secretsKeychain:
+    "Secrets are stored in your OS keychain — the vault file carries non-secret fields only.",
+  secretsFileFallback:
+    "Your OS keychain service is unavailable — secrets are stored in the 0600 vault file instead.",
+  authFooterEnv: "A real environment variable always wins over a saved value.",
+  authFooterLive: "Saving re-registers the transfer lane immediately — no restart.",
 } as const;
 
 /**

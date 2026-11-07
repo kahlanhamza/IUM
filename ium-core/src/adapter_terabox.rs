@@ -313,6 +313,51 @@ impl TeraboxAdapter {
         Ok(t)
     }
 
+    /// The credential check behind the shell's Test-connection button (#81):
+    /// the same authenticated gate the lane itself uses (jsToken self-serve —
+    /// a dead ndus fails HERE with the honest re-extract sentence), then one
+    /// authenticated metadata read (`/api/quota`; errno 0 = the cookie is
+    /// alive). NO upload session is created — the check never touches the
+    /// precreate surface, so a Test button can never orphan a real upload.
+    pub async fn check_credentials(&self) -> Result<(), AdapterError> {
+        let jt = self.js_token().await?;
+        let resp = self
+            .http
+            .get(format!(
+                "{}/api/quota?checkfree=1&checkexist=1&{}",
+                self.cfg.base,
+                self.api_query(&jt)
+            ))
+            .header("Cookie", self.cookie())
+            .header("User-Agent", USER_AGENT)
+            .send()
+            .await
+            .map_err(|e| AdapterError::Transient(format!("terabox /api/quota: {e}")))?;
+        let status = resp.status();
+        let raw = resp
+            .bytes()
+            .await
+            .map_err(|e| AdapterError::Transient(format!("terabox /api/quota body: {e}")))?;
+        if !status.is_success() {
+            return Err(Self::map_status(
+                status.as_u16(),
+                "/api/quota (credentials check)",
+            ));
+        }
+        let v: serde_json::Value = serde_json::from_slice(&raw)
+            .map_err(|e| AdapterError::Unknown(format!("terabox /api/quota envelope: {e}")))?;
+        let errno = v.get("errno").and_then(|e| e.as_i64()).unwrap_or(-1);
+        if errno == 0 {
+            Ok(())
+        } else {
+            Err(Self::map_errno(
+                errno,
+                v.get("errmsg").and_then(|m| m.as_str()).unwrap_or("?"),
+                "credentials check",
+            ))
+        }
+    }
+
     /// One authenticated form POST to an `/api/*` endpoint → the parsed JSON
     /// envelope (the errno field is the real verdict).
     async fn api_form(
@@ -1044,6 +1089,82 @@ mod tests {
         // always >= 32 hex chars).
         assert_eq!(TeraboxAdapter::extract_js_token("fn(\"tooshort\")"), None);
         assert_eq!(TeraboxAdapter::extract_js_token("no token here"), None);
+    }
+
+    // The #81 credentials check against a canned loopback wire: the check's
+    // two requests (/main jsToken, /api/quota) and their verdicts.
+    fn http200(body: &str, ct: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn canned(responses: Vec<String>) -> (String, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            for resp in responses {
+                let (mut sock, _) = listener.accept().unwrap();
+                use std::io::{Read, Write};
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf);
+                sock.write_all(resp.as_bytes()).unwrap();
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn check_credentials_accepts_a_live_cookie() {
+        let html = "html…fn%28%22A1B2C3D4A1B2C3D4A1B2C3D4A1B2C3D4%22%29…tail";
+        let (base, srv) = canned(vec![
+            http200(html, "text/html"),
+            http200(r#"{"errno":0,"errmsg":""}"#, "application/json"),
+        ]);
+        let cfg = TeraboxConfig {
+            ndus: "NDUS".into(),
+            app_id: "250528".into(),
+            base: base.clone(),
+        };
+        let a = TeraboxAdapter::new(cfg);
+        a.check_credentials().await.unwrap();
+        srv.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn check_credentials_says_re_extract_on_a_dead_cookie() {
+        // /main carries no jsToken → the honest AuthRequired sentence
+        // (the same verdict the lane itself would hit on first upload).
+        let (base, srv) = canned(vec![http200("<html>no token</html>", "text/html")]);
+        let cfg = TeraboxConfig {
+            ndus: "DEAD".into(),
+            app_id: "250528".into(),
+            base,
+        };
+        let a = TeraboxAdapter::new(cfg);
+        let err = a.check_credentials().await.unwrap_err();
+        assert!(matches!(err, AdapterError::AuthRequired(_)), "{err}");
+        srv.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn check_credentials_maps_errno_minus_six_to_auth() {
+        // jsToken ok, but the quota read says the cookie is not logged in.
+        let html = "fn(\"0123456789abcdef0123456789abcdef\")";
+        let (base, srv) = canned(vec![
+            http200(html, "text/html"),
+            http200(r#"{"errno":-6,"errmsg":"not login"}"#, "application/json"),
+        ]);
+        let cfg = TeraboxConfig {
+            ndus: "STALE".into(),
+            app_id: "250528".into(),
+            base,
+        };
+        let a = TeraboxAdapter::new(cfg);
+        let err = a.check_credentials().await.unwrap_err();
+        assert!(matches!(err, AdapterError::AuthRequired(_)), "{err}");
+        srv.join().unwrap();
     }
 
     #[test]

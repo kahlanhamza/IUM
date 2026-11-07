@@ -217,6 +217,26 @@ impl JobManager {
         self.registry.register(adapter);
     }
 
+    /// Hot lane registration (#81): upsert by [`TransferAdapter::name`] —
+    /// a KNOWN name swaps the lane's config in place (returns `true`), an
+    /// UNKNOWN name appends the lane (returns `false`; the first credential
+    /// entry for a lane boot never registered). In-flight jobs keep the Arc
+    /// they resolved at `create_job` — the swap is never retroactive; jobs
+    /// created after it resolve the fresh config. Works on `&self` because
+    /// the supervisor hands the manager out as an `Arc<JobManager>` and the
+    /// shell's credential commands have no `&mut` path back.
+    pub fn replace_adapter(&self, adapter: Arc<dyn TransferAdapter>) -> bool {
+        self.registry.replace(adapter)
+    }
+
+    /// Remove a lane by registry key (#81: removing its credentials removes
+    /// the lane — "a machine without credentials for a lane simply has no
+    /// such entry in the registry"). Returns whether a lane was removed.
+    /// Same non-retroactive contract as [`JobManager::replace_adapter`].
+    pub fn remove_adapter(&self, name: &str) -> bool {
+        self.registry.remove(name)
+    }
+
     /// Replace the retry policy (spec §5's per-error-class decisions).
     pub fn set_policy(&mut self, policy: RetryPolicy) {
         self.policy = policy;

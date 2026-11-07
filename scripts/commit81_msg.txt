@@ -1,0 +1,48 @@
+feat(app,core): painless auth — keychain secrets, hot lanes, Test connection (Closes #81)
+
+The owner's bar: "how users authenticate to the supported platforms for
+uploads — it should not be painful, it should be so easy." The #69 vault
+existed (masked IPC, explicit-clear semantics) but three gaps remained,
+each measured: secret values sat as PLAINTEXT JSON in the config dir
+(spec §Secrets pins the keyring crate; zero keyring anywhere), every save
+demanded an app restart (the registry was a plain Vec behind &mut self,
+unreachable through Arc<JobManager>), and users saved blind (no check
+between Save and the first upload's AuthRequired).
+
+Keychain: the SecretStore seam (vault.rs stays pure-std — the standalone
+rustc --test harness keeps working; the keyring-crate impl rides lib.rs,
+compile proof rides CI per the #61 contract). Secret values go to the OS
+keychain (service "ium", one entry per adapter.field); no secret service
+available = the honest 0600-file fallback with the secret_mode marker the
+Settings footer prints. Legacy plaintext migrates at the first save.
+
+Hot lanes: the registry behind an RwLock — replace_adapter/remove_adapter
+upsert through the SHARED Arc (in-flight jobs keep the Arc they resolved
+at create_job; the swap is never retroactive — contract tests in
+tests/hot_registry.rs). apply_credentials rebuilds the lane from vault+env
+through the shared build_adapter factory (boot + apply = one code path);
+the three restart sentences are dead from the codebase.
+
+Test connection: check_credentials on terabox (jsToken gate + one quota
+read; errno -6 = the honest re-extract sentence) and feishu (tenant token
++ root meta) — metadata reads ONLY, no upload session a Test button could
+orphan; the bridge families prove serve spawn + readiness and say exactly
+what that proves; the s3 family answers "verified on the first upload" —
+never a fake green check. Probes build configs from DRAFTS in memory
+(never persisted, never env; rclone_obscure now pub). Failures speak the
+#70 copy table, raw preserved.
+
+RED: E0599 (no replace_adapter through the Arc) + ERR_MODULE_NOT_FOUND
+./auth at HEAD f665090 (comment 6711213801). En route the standalone vault
+harness caught 2 real defects pre-commit (a format! typo; the migration
+test's own tmpdir wiped its seed — test bug, not product). The M12#1 and
+M11#11 session-log rows sat inside the defect-audit table — restored to
+the session log where they belong.
+
+Gates: vitest 84/84 (75+9), tsc strict, vite build 197.98 KB, fmt clean,
+clippy -D warnings, core 284 green (+6 check_credentials, +3
+hot_registry), vault harness 13/13, gate.sh on the committed tree. The
+shell Rust compile proof rides CI.
+
+Closes #81
+Refs: #69 #66 #67 #70 #63 #61 #80

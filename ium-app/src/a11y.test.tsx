@@ -159,6 +159,10 @@ describe("a11y: the full shell (header, pill, form, table, empty state)", () => 
           }),
         credentialsSet: () => Promise.resolve(),
         credentialsDelete: () => Promise.resolve(),
+        applyCredentials: () => Promise.resolve({ action: "replaced", lanes: [] }),
+        probeCredentials: () =>
+          Promise.resolve({ checked: false, ok: true, sentence: "", final: true }),
+        secretMode: () => Promise.resolve("keyring"),
         // The telemetry Privacy card (#75): the audit sees the consent
         // switch ON with a populated local buffer — the trust surface.
         telemetryStatus: () =>

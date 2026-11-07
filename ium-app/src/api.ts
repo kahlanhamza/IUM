@@ -64,6 +64,21 @@ export interface TelemetryStatus {
   path: string;
 }
 
+/** What a hot apply did (#81): the registry after the upsert/remove. */
+export interface ApplyOutcome {
+  action: "replaced" | "added" | "removed";
+  lanes: string[];
+}
+
+/** What Test-connection learned (#81). `final` sentences render as-is;
+ * the rest route through the copy table with the raw preserved. */
+export interface ProbeResult {
+  checked: boolean;
+  ok: boolean;
+  sentence: string;
+  final: boolean;
+}
+
 export const api = {
   engineStatus: (): Promise<string> => invoke("engine_status"),
   /** Registry names for the adapter select — the UI reflects the engine. */
@@ -94,6 +109,17 @@ export const api = {
     invoke("credentials_set", { adapter, fields }),
   credentialsDelete: (adapter: string): Promise<void> =>
     invoke("credentials_delete", { adapter }),
+  // --- painless auth (#81) -------------------------------------------------
+  /** Save/remove side effect: rebuild the lane from vault+env and upsert
+   *  it — the next job uses the fresh config, no restart. */
+  applyCredentials: (adapter: string): Promise<ApplyOutcome> =>
+    invoke("apply_credentials", { adapter }),
+  /** Read-only credential check against the DRAFTS (never persisted, no
+   *  upload session created — a Test button cannot orphan a real upload). */
+  probeCredentials: (adapter: string, fields: Record<string, string>): Promise<ProbeResult> =>
+    invoke("probe_credentials", { adapter, fields }),
+  /** Where the secret values actually live on this machine (footer marker). */
+  secretMode: (): Promise<"keyring" | "file"> => invoke("secret_mode"),
   // --- privacy: the telemetry stance (#66 lane 7, #75) ----------------------
   /** Consent switch state + the local buffer's count and absolute path. */
   telemetryStatus: (): Promise<TelemetryStatus> => invoke("telemetry_status"),

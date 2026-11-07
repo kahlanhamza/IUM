@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::chunk::Lease;
 use crate::JobSpec;
@@ -364,9 +364,16 @@ pub trait TransferAdapter: Send + Sync {
 
 /// Registry — the plugin point community contributors use to add protocols
 /// (e.g. a new `ium-adapter-tus` crate) without touching the core.
-#[derive(Default, Clone)]
+///
+/// The list sits behind an `RwLock` so a lane can be hot-registered AFTER
+/// the manager is shared (#81): the supervisor hands the manager out as an
+/// `Arc<JobManager>`, and the shell's credential commands have no `&mut`
+/// path back. Saving credentials upserts the lane in place; jobs created
+/// BEFORE the swap keep the `Arc` they resolved at `create_job` (the engine
+/// resolves adapters at job creation — a swap is never retroactive).
+#[derive(Default)]
 pub struct AdapterRegistry {
-    adapters: Vec<Arc<dyn TransferAdapter>>,
+    adapters: RwLock<Vec<Arc<dyn TransferAdapter>>>,
 }
 
 impl AdapterRegistry {
@@ -376,19 +383,59 @@ impl AdapterRegistry {
     }
 
     /// Add an adapter; its [`TransferAdapter::name`] becomes its registry key.
+    /// Boot-time path (`&mut self` — the manager is still unshared).
     pub fn register(&mut self, adapter: Arc<dyn TransferAdapter>) {
-        self.adapters.push(adapter);
+        self.adapters
+            .write()
+            .expect("registry lock poisoned")
+            .push(adapter);
+    }
+
+    /// Upsert by [`TransferAdapter::name`] (#81, the hot path): a KNOWN name
+    /// swaps the lane's config in place and returns `true`; an UNKNOWN name
+    /// is appended — the first credential entry for a lane boot never
+    /// registered (no env credentials at boot) — and returns `false`.
+    /// Registration order is preserved for the UI's adapter select.
+    pub fn replace(&self, adapter: Arc<dyn TransferAdapter>) -> bool {
+        let mut guard = self.adapters.write().expect("registry lock poisoned");
+        if let Some(slot) = guard.iter_mut().find(|a| a.name() == adapter.name()) {
+            *slot = adapter;
+            true
+        } else {
+            guard.push(adapter);
+            false
+        }
+    }
+
+    /// Remove a lane by registry key (#81: removing its credentials removes
+    /// the lane — "a machine without credentials for a lane simply has no
+    /// such entry in the registry"). Returns whether a lane was removed.
+    pub fn remove(&self, name: &str) -> bool {
+        let mut guard = self.adapters.write().expect("registry lock poisoned");
+        let before = guard.len();
+        guard.retain(|a| a.name() != name);
+        guard.len() != before
     }
 
     /// Resolve by registry key (`JobSpec.adapter`).
     pub fn get(&self, name: &str) -> Option<Arc<dyn TransferAdapter>> {
-        self.adapters.iter().find(|a| a.name() == name).cloned()
+        self.adapters
+            .read()
+            .expect("registry lock poisoned")
+            .iter()
+            .find(|a| a.name() == name)
+            .cloned()
     }
 
     /// All registered keys, in registration order (the UI's adapter select
     /// reflects this list — #16; the UI never hard-codes protocols).
     pub fn names(&self) -> Vec<&'static str> {
-        self.adapters.iter().map(|a| a.name()).collect()
+        self.adapters
+            .read()
+            .expect("registry lock poisoned")
+            .iter()
+            .map(|a| a.name())
+            .collect()
     }
 }
 

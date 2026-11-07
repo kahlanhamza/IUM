@@ -14,12 +14,13 @@
 mod telemetry;
 mod vault;
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use ium_core::{
     HttpOneShotAdapter, JobManager, JobRecord, JobSnapshot, JobSpec, S3MultipartAdapter,
-    S3MultipartConfig, Supervisor, TeraboxAdapter, TeraboxConfig, TusAdapter,
+    S3MultipartConfig, Supervisor, TeraboxAdapter, TeraboxConfig, TransferAdapter, TusAdapter,
 };
 use tauri::{Emitter, Manager, State};
 
@@ -64,73 +65,156 @@ fn vault_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
     dir
 }
 
+/// The vault constructor (#81): the OS keychain is probed once; an available
+/// secret service carries every SECRET field value (the 0600 file keeps
+/// non-secrets only), an unavailable one falls back to the file with the
+/// honest marker. Either way the JSON records the mode the UI prints.
+fn vault(app: &tauri::AppHandle) -> vault::Vault {
+    vault::Vault::open_keychain(&vault_dir(app), keychain_store())
+}
+
+/// Is the OS secret service usable? Probed once per process: an entry read
+/// that answers `NoEntry` proves the service is ALIVE (the keychain works,
+/// nothing is stored yet); any other error means no usable service — the
+/// honest file fallback.
+fn keychain_available() -> bool {
+    static PROBE: OnceLock<bool> = OnceLock::new();
+    *PROBE.get_or_init(|| match keyring::Entry::new("ium", "__probe") {
+        Ok(entry) => matches!(entry.get_password(), Ok(_) | Err(keyring::Error::NoEntry)),
+        Err(_) => false,
+    })
+}
+
+fn keychain_store() -> Option<Box<dyn vault::SecretStore>> {
+    if keychain_available() {
+        Some(Box::new(KeyringStore))
+    } else {
+        None
+    }
+}
+
+/// The real OS keychain (spec §Secrets): one entry per `{adapter}.{field}`,
+/// service "ium" — Windows Credential Manager / macOS Keychain / Linux
+/// Secret Service per the keyring crate's platform features. Its compile
+/// proof rides CI per the #61 contract (the sandbox has no WebKitGTK).
+struct KeyringStore;
+
+impl vault::SecretStore for KeyringStore {
+    fn set(&self, account: &str, value: &str) -> Result<(), String> {
+        keyring::Entry::new("ium", account)
+            .map_err(|e| e.to_string())?
+            .set_password(value)
+            .map_err(|e| e.to_string())
+    }
+    fn get(&self, account: &str) -> Result<Option<String>, String> {
+        match keyring::Entry::new("ium", account)
+            .map_err(|e| e.to_string())?
+            .get_password()
+        {
+            Ok(v) => Ok(Some(v)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+    fn delete(&self, account: &str) -> Result<(), String> {
+        match keyring::Entry::new("ium", account)
+            .map_err(|e| e.to_string())?
+            .delete_credential()
+        {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
 fn engine_error(e: ium_core::EngineError) -> String {
     e.to_string()
 }
 
-/// Register the protocol adapters this build ships with. Credentials come
-/// from the process env — which the vault has already filled from the
-/// settings UI by the time this runs (env wins: real env vars are never
-/// overwritten). A machine without credentials for a lane simply has no
-/// such entry in the registry — the UI reflects the registry, it never
-/// assumes.
+/// The one adapter factory (#81): boot registration and the settings UI's
+/// hot apply share it. Credentials come from the process env — which the
+/// vault has already filled from the settings UI (env wins: real env vars
+/// are never overwritten). A lane without credentials is `None` — absence
+/// is honest, never guessed.
+fn build_adapter(id: &str) -> Option<Arc<dyn TransferAdapter>> {
+    match id {
+        "s3_multipart" => match S3MultipartConfig::from_env() {
+            Ok(config) => match S3MultipartAdapter::new(config) {
+                Ok(adapter) => Some(Arc::new(adapter)),
+                Err(e) => {
+                    tracing::warn!("s3_multipart unavailable: {e}");
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!("s3_multipart not configured (no env credentials): {e}");
+                None
+            }
+        },
+        "terabox" => match TeraboxConfig::from_env() {
+            Ok(config) => Some(Arc::new(TeraboxAdapter::new(config))),
+            Err(e) => {
+                tracing::warn!("terabox not configured (no ndus cookie): {e}");
+                None
+            }
+        },
+        // Feishu Drive (#56) — core-proven since M9; the vault/env gives it a
+        // product surface now (#69). FeishuAdapter::new is infallible (base is
+        // a constant here) — only the env check decides the lane.
+        "feishu" => match ium_core::adapter_feishu::FeishuConfig::from_env() {
+            Ok(config) => Some(Arc::new(ium_core::adapter_feishu::FeishuAdapter::new(
+                config,
+            ))),
+            Err(e) => {
+                tracing::warn!("feishu not configured (no tenant creds): {e}");
+                None
+            }
+        },
+        // The rclone family (#63): serve spawn + readiness is async, setup
+        // is sync, both under the app runtime (same shape as boot).
+        "rclone_bridge" | "mega" => {
+            let built = tauri::async_runtime::block_on(async {
+                let cfg = if id == "mega" {
+                    ium_core::adapter_rclone::RcloneBridgeConfig::mega_from_env().await
+                } else {
+                    ium_core::adapter_rclone::RcloneBridgeConfig::from_env()
+                };
+                match cfg {
+                    Ok(cfg) => ium_core::adapter_rclone::RcloneBridgeAdapter::start(cfg)
+                        .await
+                        .map(Some)
+                        .map_err(|e| e.to_string()),
+                    Err(_) => Ok(None), // no env credentials — no lane, honestly
+                }
+            });
+            match built {
+                Ok(Some(adapter)) => Some(Arc::new(adapter)),
+                Ok(None) => {
+                    tracing::warn!("{id} not configured (no env credentials)");
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!("{id} lane unavailable: {e}");
+                    None
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Register the protocol adapters this build ships with. The always-on
+/// lanes first, then the credential-gated families through the shared
+/// factory. A machine without credentials for a lane simply has no such
+/// entry in the registry — the UI reflects the registry, it never assumes.
 fn register_adapters(manager: &mut JobManager) {
     manager.register_adapter(Arc::new(HttpOneShotAdapter::new().expect("http client")));
     manager.register_adapter(Arc::new(TusAdapter::new()));
-    match S3MultipartConfig::from_env() {
-        Ok(config) => match S3MultipartAdapter::new(config) {
-            Ok(adapter) => manager.register_adapter(Arc::new(adapter)),
-            Err(e) => tracing::warn!("s3_multipart unavailable: {e}"),
-        },
-        Err(e) => tracing::warn!("s3_multipart not configured (no env credentials): {e}"),
-    }
-    match TeraboxConfig::from_env() {
-        Ok(config) => manager.register_adapter(Arc::new(TeraboxAdapter::new(config))),
-        Err(e) => tracing::warn!("terabox not configured (no ndus cookie): {e}"),
-    }
-    // Feishu Drive (#56) — core-proven since M9; the vault/env gives it a
-    // product surface now (#69). FeishuAdapter::new is infallible (base is
-    // a constant here) — only the env check decides the lane.
-    match ium_core::adapter_feishu::FeishuConfig::from_env() {
-        Ok(config) => manager.register_adapter(Arc::new(
-            ium_core::adapter_feishu::FeishuAdapter::new(config),
-        )),
-        Err(e) => tracing::warn!("feishu not configured (no tenant creds): {e}"),
-    }
-    // The generic rclone bridge (#63 — 74 backends day one). Same async
-    // constructor shape as the mega seam below: serve spawn + readiness is
-    // async, setup is sync, both under the app runtime.
-    let rclone = tauri::async_runtime::block_on(async {
-        match ium_core::adapter_rclone::RcloneBridgeConfig::from_env() {
-            Ok(cfg) => ium_core::adapter_rclone::RcloneBridgeAdapter::start(cfg)
-                .await
-                .map(Some)
-                .map_err(|e| e.to_string()),
-            Err(_) => Ok(None), // no remote configured — no lane, honestly
-        }
-    });
-    match rclone {
-        Ok(Some(adapter)) => manager.register_adapter(Arc::new(adapter)),
-        Ok(None) => tracing::warn!("rclone_bridge not configured (no remote)"),
-        Err(e) => tracing::warn!("rclone_bridge lane unavailable: {e}"),
-    }
-    // The MEGA lane (#61) rides the rclone bridge: the constructor AND the
-    // start are async (serve spawn + readiness + mkdir, bounded ~15 s) and
-    // setup is sync — both run under the app runtime. A machine without the
-    // env vars pays one env check and has no `mega` in its registry.
-    let mega = tauri::async_runtime::block_on(async {
-        match ium_core::adapter_rclone::RcloneBridgeConfig::mega_from_env().await {
-            Ok(cfg) => ium_core::adapter_rclone::RcloneBridgeAdapter::start(cfg)
-                .await
-                .map(Some)
-                .map_err(|e| e.to_string()),
-            Err(_) => Ok(None), // no env credentials — no lane, honestly
-        }
-    });
-    match mega {
-        Ok(Some(adapter)) => manager.register_adapter(Arc::new(adapter)),
-        Ok(None) => tracing::warn!("mega not configured (no env credentials)"),
-        Err(e) => tracing::warn!("mega lane unavailable: {e}"),
+    for id in ["s3_multipart", "terabox", "feishu", "rclone_bridge", "mega"] {
+        if let Some(adapter) = build_adapter(id) {
+            manager.register_adapter(adapter);
+        } // the factory already warned; absence is the honest state
     }
 }
 
@@ -154,7 +238,7 @@ fn credentials_schema() -> Vec<vault::AdapterSchema> {
 fn credentials_get(
     app: tauri::AppHandle,
 ) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, FieldView>> {
-    let data = vault::Vault::open(&vault_dir(&app)).load();
+    let data = vault(&app).load();
     let mut out = std::collections::BTreeMap::new();
     for a in vault::schema() {
         let stored = data.adapters.get(a.adapter);
@@ -200,12 +284,238 @@ fn credentials_set(
             return Err(format!("unknown field for {adapter}: {k}"));
         }
     }
-    vault::Vault::open(&vault_dir(&app)).set(&adapter, fields)
+    vault(&app).set(&adapter, fields)
 }
 
 #[tauri::command]
 fn credentials_delete(app: tauri::AppHandle, adapter: String) -> Result<(), String> {
-    vault::Vault::open(&vault_dir(&app)).delete(&adapter)
+    vault(&app).delete(&adapter)
+}
+
+/// What a hot apply did (#81): `replaced` (a known lane swapped config in
+/// place), `added` (a first credential entry registered a lane boot never
+/// had), or `removed` (credentials gone → the lane is gone). `lanes` is
+/// the registry AFTER the apply — the UI's adapter select reflects it.
+#[derive(serde::Serialize)]
+struct ApplyOutcome {
+    action: &'static str,
+    lanes: Vec<String>,
+}
+
+/// The hot apply (#81): called by the settings UI right after a save or a
+/// removal. The lane is rebuilt from vault+env through the shared factory
+/// and upserted — the NEXT job uses the fresh config; in-flight jobs keep
+/// the Arc they resolved at create_job (the engine's non-retroactive
+/// contract). No restart. Removing credentials removes the lane.
+#[tauri::command]
+fn apply_credentials(
+    engine: State<Engine>,
+    app: tauri::AppHandle,
+    adapter: String,
+) -> Result<ApplyOutcome, String> {
+    vault(&app).apply_env();
+    let action = match build_adapter(&adapter) {
+        Some(a) => {
+            if engine.0.manager().replace_adapter(a) {
+                "replaced"
+            } else {
+                "added"
+            }
+        }
+        None => {
+            engine.0.manager().remove_adapter(&adapter);
+            "removed"
+        }
+    };
+    Ok(ApplyOutcome {
+        action,
+        lanes: engine
+            .0
+            .manager()
+            .adapter_names()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    })
+}
+
+/// What Test-connection learned (#81). `checked = false` is the honest
+/// "verified on the first upload" answer — never a fake green check.
+/// `final = true` means `sentence` is already human copy (a missing field);
+/// `false` means it is the RAW engine string, for the UI's copy table.
+#[derive(serde::Serialize)]
+struct ProbeOutcome {
+    checked: bool,
+    ok: bool,
+    sentence: String,
+    /// `final` is a reserved Rust keyword — the wire name stays `final`
+    /// (the TS contract) via the rename.
+    #[serde(rename = "final")]
+    final_copy: bool,
+}
+
+fn probe_ok() -> ProbeOutcome {
+    ProbeOutcome {
+        checked: true,
+        ok: true,
+        sentence: "The server accepted the credentials.".into(),
+        final_copy: true,
+    }
+}
+
+fn probe_missing(sentence: &str) -> ProbeOutcome {
+    ProbeOutcome {
+        checked: true,
+        ok: false,
+        sentence: sentence.into(),
+        final_copy: true,
+    }
+}
+
+fn probe_raw(r: Result<(), ium_core::adapter::AdapterError>) -> ProbeOutcome {
+    match r {
+        Ok(()) => probe_ok(),
+        Err(e) => ProbeOutcome {
+            checked: true,
+            ok: false,
+            sentence: e.to_string(),
+            final_copy: false,
+        },
+    }
+}
+
+/// The Test-connection check (#81): builds the family's config from the
+/// DRAFTS in memory — never persisted, never env — and runs that family's
+/// read-only credential check (metadata reads only; NO upload session is
+/// created, so a Test button can never orphan a real upload). Families
+/// whose endpoint is per-job (the s3 family) answer honestly: not checked.
+#[tauri::command]
+async fn probe_credentials(adapter: String, fields: BTreeMap<String, String>) -> ProbeOutcome {
+    let draft = |k: &str| {
+        fields
+            .get(k)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    match adapter.as_str() {
+        "terabox" => {
+            let Some(ndus) = draft("ndus") else {
+                return probe_missing("The ndus cookie is required for a test — paste it first.");
+            };
+            let cfg = TeraboxConfig {
+                ndus,
+                app_id: draft("app_id").unwrap_or_else(|| "250528".into()),
+                base: draft("base").unwrap_or_else(|| "https://dm.terabox.com".into()),
+            };
+            probe_raw(TeraboxAdapter::new(cfg).check_credentials().await)
+        }
+        "feishu" => {
+            let (Some(app_id), Some(app_secret)) = (draft("app_id"), draft("app_secret")) else {
+                return probe_missing(
+                    "Both the app id and the app secret are required for a test.",
+                );
+            };
+            let a = ium_core::adapter_feishu::FeishuAdapter::new(
+                ium_core::adapter_feishu::FeishuConfig::new(app_id, app_secret),
+            );
+            probe_raw(a.check_credentials().await)
+        }
+        "mega" => {
+            let (Some(user), Some(pass)) = (draft("user"), draft("pass")) else {
+                return probe_missing("Your MEGA email and password are required for a test.");
+            };
+            let obscured = ium_core::adapter_rclone::RcloneBridgeAdapter::rclone_obscure(
+                &std::path::PathBuf::from("rclone"),
+                &pass,
+            )
+            .await;
+            let Ok(obscured) = obscured else {
+                return probe_missing(
+                    "The rclone binary is required for a test — install it or point the bridge lane's bin field at it.",
+                );
+            };
+            let Ok(mut cfg) = ium_core::adapter_rclone::RcloneBridgeConfig::new(
+                ium_core::adapter_rclone::RcloneBridgeMode::Spawn,
+                "mega:",
+            ) else {
+                return probe_missing("The MEGA remote name is required for a test.");
+            };
+            cfg.bucket = draft("bucket").unwrap_or_else(|| "ium".into());
+            cfg.lane_name = ium_core::adapter_rclone::MEGA_LANE;
+            cfg.extra_env = vec![
+                ("RCLONE_CONFIG_MEGA_TYPE".into(), "mega".into()),
+                ("RCLONE_CONFIG_MEGA_USER".into(), user),
+                ("RCLONE_CONFIG_MEGA_PASS".into(), obscured),
+            ];
+            if let Some(code) = draft("twofa") {
+                cfg.extra_env.push(("RCLONE_CONFIG_MEGA_2FA".into(), code));
+            }
+            bridge_probe(cfg).await
+        }
+        "rclone_bridge" => {
+            let Some(remote) = draft("remote") else {
+                return probe_missing("The remote name is required for a test.");
+            };
+            let Ok(mut cfg) = ium_core::adapter_rclone::RcloneBridgeConfig::new(
+                ium_core::adapter_rclone::RcloneBridgeMode::Spawn,
+                remote,
+            ) else {
+                return probe_missing("The remote name is required for a test.");
+            };
+            cfg.rclone_bin =
+                std::path::PathBuf::from(draft("bin").unwrap_or_else(|| "rclone".into()));
+            cfg.bucket = draft("bucket").unwrap_or_else(|| "ium".into());
+            if let Some(extra) = draft("extra_env") {
+                for line in extra.lines() {
+                    let line = line.trim();
+                    if let Some((k, v)) = line.split_once('=') {
+                        // The vault's own rule: only rclone's env-config
+                        // namespace travels (foreign keys are refused).
+                        if k.starts_with("RCLONE_CONFIG_") {
+                            cfg.extra_env.push((k.to_string(), v.to_string()));
+                        }
+                    }
+                }
+            }
+            bridge_probe(cfg).await
+        }
+        // The s3 family (and any family without a no-job checkable
+        // endpoint): the honest not-checked answer.
+        _ => ProbeOutcome {
+            checked: false,
+            ok: true,
+            sentence: "Not checked here — this lane verifies itself on the first upload.".into(),
+            final_copy: true,
+        },
+    }
+}
+
+/// The bridge families' test: the serve must spawn, reach readiness and
+/// expose the bucket — that proves the binary, the config lines and the
+/// remote wiring. The remote's own credentials answer on the first upload;
+/// the sentence says exactly that (never a fake green check).
+async fn bridge_probe(cfg: ium_core::adapter_rclone::RcloneBridgeConfig) -> ProbeOutcome {
+    match ium_core::adapter_rclone::RcloneBridgeAdapter::start(cfg).await {
+        Ok(_) => ProbeOutcome {
+            checked: true,
+            ok: true,
+            sentence: "The bridge is up — the remote answers on the first upload.".into(),
+            final_copy: true,
+        },
+        Err(e) => ProbeOutcome {
+            checked: true,
+            ok: false,
+            sentence: e.to_string(),
+            final_copy: false,
+        },
+    }
+}
+
+/// The footer's honesty marker (#81): which store actually holds the
+/// secret values on this machine.
+#[tauri::command]
+fn secret_mode(app: tauri::AppHandle) -> String {
+    vault(&app).mode().to_string()
 }
 
 #[tauri::command]
@@ -447,6 +757,9 @@ pub fn run() {
             credentials_get,
             credentials_set,
             credentials_delete,
+            apply_credentials,
+            probe_credentials,
+            secret_mode,
             telemetry_status,
             telemetry_set_consent,
             telemetry_clear,

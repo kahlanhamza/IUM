@@ -28,6 +28,34 @@ prose. An entry without verifiable issue numbers does not belong here.
   protocol: `mockIPC` + `mockWindows` + `plugin:event|emit` delivery) over
   journal-shaped fixtures, and captures the six product shots into
   `docs/screenshots/` for the README (#77).
+- Auto-update, end to end (#80, refs #65 #71): the updater runtime
+  (`tauri-plugin-updater` + `tauri-plugin-process`, registered with the
+  capability grants — the #40 lesson) checks the `latest.json` endpoint
+  silently 4 s after boot (failures stay silent) and installs only on the
+  user's click in Settings → About (the consent rule; six honest states);
+  the release pipeline collects the signed updater bundles and builds the
+  tauri v2 manifest (`scripts/build_latest_json.py`: unsigned bundle =
+  build failure, pairing self-test rides CI).
+- Test-connection, the read-only credential check (#81): `check_credentials`
+  on the terabox (jsToken gate + one quota read) and feishu (tenant token +
+  root-folder meta) adapters proves credentials BEFORE the first upload —
+  metadata reads only, no upload session a Test button could orphan; the
+  bridge families prove the serve spawn and say exactly what that proves;
+  the s3 family answers honestly "verified on the first upload". Wired into
+  Settings as a per-lane Test control whose failures speak the copy table
+  with the raw preserved.
+- Hot lane registration (#81): `AdapterRegistry` moved behind an `RwLock` —
+  `JobManager::replace_adapter`/`remove_adapter` upsert through the shared
+  `Arc<JobManager>` (in-flight jobs keep the adapter they resolved at
+  create_job; the swap is never retroactive). A first credential entry
+  registers a lane boot never had; removing credentials removes the lane.
+- The keychain-backed vault (#81, spec §Secrets): the `SecretStore` seam
+  carries secret values to the OS keychain (Credential Manager / Keychain /
+  Secret Service via the `keyring` crate); when no secret service exists the
+  0600 file stays the honest fallback and the mode is marked in the JSON and
+  printed in Settings. Legacy plaintext migrates at the first save; the
+  masked-IPC contract is untouched (vault.rs remains pure-std, tested via
+  the standalone `rustc --test` harness).
 
 - The telemetry stance: `docs/11_Telemetry_Stance.md` is the WRITTEN privacy
   contract — anonymous diagnostics (terminal-state events + panic captures)
@@ -58,6 +86,10 @@ prose. An entry without verifiable issue numbers does not belong here.
   per-OS in release.yml and self-tested in ci.yml (#72).
 
 ### Changed
+- Saving credentials applies live (#81): save/remove calls the new
+  `apply_credentials` command — the lane re-registers from vault+env through
+  the shared adapter factory without a restart; "takes effect the next time
+  IUM starts" no longer exists anywhere in the shell.
 - The chrome is quiet (#77, refs #66): the header pill renders dot + two
   words (`Connected` / `Connecting…` / `Engine unreachable`) with the
   engine's full sentence demoted to tooltip and About; the brand block

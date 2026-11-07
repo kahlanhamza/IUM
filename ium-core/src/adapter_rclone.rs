@@ -209,7 +209,9 @@ impl RcloneBridgeConfig {
     /// `rclone obscure <pass>` — the wire's credential preprocessing. The
     /// output is the obscured form; BOTH the argument and the output stay
     /// out of every log and journal (errors carry the stderr only).
-    async fn rclone_obscure(bin: &PathBuf, pass: &str) -> Result<String, AdapterError> {
+    /// Public since #81: the shell's Test-connection probe builds the MEGA
+    /// config from DRAFTS (never env) and needs the same preprocessing.
+    pub async fn rclone_obscure(bin: &PathBuf, pass: &str) -> Result<String, AdapterError> {
         let out = tokio::process::Command::new(bin)
             .args(["obscure", pass])
             .output()

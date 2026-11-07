@@ -11,6 +11,14 @@
 //! the process already has — CI/dev machines keep today's behavior; the
 //! vault fills the gaps. The single source of truth for the mapping is the
 //! core constructors' env contract (`*_from_env`).
+//!
+//! SECRET VALUES (#81): the spec pins the OS keychain (docs/02 §Secrets —
+//! Credential Manager / Keychain / Secret Service). The [`SecretStore`]
+//! seam carries secret values; the real impl (the `keyring` crate) lives
+//! in lib.rs so this module stays pure-std, and tests inject an in-memory
+//! double to pin the contract deterministically. When the OS has no secret
+//! service (headless Linux, CI), the vault falls back to the 0600 file and
+//! the JSON carries the honest `secret_mode` marker the UI prints.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -101,30 +109,105 @@ pub fn schema() -> Vec<AdapterSchema> {
     ]
 }
 
+/// Where secret VALUES live (spec §Secrets): "keyring" = the OS keychain
+/// via the [`SecretStore`] seam; "file" = the honest 0600-file fallback
+/// (the OS secret service is unavailable — headless Linux, CI). The marker
+/// rides the vault JSON so the UI can say which one is real.
+pub const MODE_KEYRING: &str = "keyring";
+pub const MODE_FILE: &str = "file";
+
+/// The keychain seam (#81): only SECRET field values ever cross it — one
+/// entry per `{adapter}.{field}`. The real impl is the OS keychain (the
+/// `keyring` crate, wired in lib.rs so this module stays pure-std); tests
+/// inject an in-memory double. `get` on a missing entry is `Ok(None)`, not
+/// an error — absence is a fact, not a failure.
+pub trait SecretStore: Send + Sync {
+    /// Store (or overwrite) the secret for one `{adapter}.{field}` account.
+    fn set(&self, account: &str, value: &str) -> Result<(), String>;
+    /// The secret, or `None` when the keychain has no entry for it.
+    fn get(&self, account: &str) -> Result<Option<String>, String>;
+    /// Remove the entry; deleting an absent entry is an honest `Ok`.
+    fn delete(&self, account: &str) -> Result<(), String>;
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone, Debug)]
 pub struct VaultData {
     pub adapters: BTreeMap<String, BTreeMap<String, String>>,
+    /// The secret-store mode this file was last written under — the UI's
+    /// honesty marker ("Secrets live in your OS keychain" vs the fallback
+    /// sentence). `None` = a pre-#81 file (plaintext era, reads still work).
+    #[serde(default)]
+    pub secret_mode: Option<String>,
 }
 
 pub struct Vault {
     path: PathBuf,
+    /// The keychain seam. `None` = the honest file fallback (pure-std
+    /// default — the `rustc --test vault.rs` path); `Some` = secret values
+    /// ride the store and NEVER touch the file.
+    store: Option<Box<dyn SecretStore>>,
 }
 
 impl Vault {
+    /// The file fallback (pure-std default). The product entry point is
+    /// [`Vault::open_keychain`] — lib.rs probes the OS secret service and
+    /// passes the real store or `None`.
     pub fn open(dir: &Path) -> Self {
         Self {
             path: dir.join(VAULT_FILE),
+            store: None,
+        }
+    }
+
+    /// The product constructor (#81): `Some(store)` = keychain mode (secret
+    /// values never land in the file); `None` = the 0600-file fallback with
+    /// the honest marker (the OS secret service is unavailable).
+    pub fn open_keychain(dir: &Path, store: Option<Box<dyn SecretStore>>) -> Self {
+        Self {
+            path: dir.join(VAULT_FILE),
+            store,
+        }
+    }
+
+    /// `"keyring"` when secret values ride the keychain seam, `"file"` for
+    /// the fallback — the UI's honesty sentence is built from this.
+    pub fn mode(&self) -> &'static str {
+        if self.store.is_some() {
+            MODE_KEYRING
+        } else {
+            MODE_FILE
         }
     }
 
     /// A missing file is an empty vault, not an error; a corrupted file is
     /// an empty vault too — credentials are re-enterable, panic is not an
-    /// option in a startup path.
+    /// option in a startup path. In keychain mode the secret fields are
+    /// overlaid FROM the store (never the file); a legacy plaintext copy in
+    /// the file still answers while the keychain has no entry — the lazy
+    /// migration: old values keep working until the first save, then the
+    /// file is scrubbed.
     pub fn load(&self) -> VaultData {
-        std::fs::read_to_string(&self.path)
+        let mut data: VaultData = std::fs::read_to_string(&self.path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if let Some(store) = &self.store {
+            for a in schema() {
+                for f in a.fields {
+                    if !f.secret {
+                        continue;
+                    }
+                    let account = format!("{}.{}", a.adapter, f.name);
+                    if let Ok(Some(v)) = store.get(&account) {
+                        data.adapters
+                            .entry(a.adapter.to_string())
+                            .or_default()
+                            .insert(f.name.to_string(), v);
+                    }
+                }
+            }
+        }
+        data
     }
 
     /// Atomic write: tmp file in the same dir + rename; 0600 best-effort.
@@ -140,12 +223,48 @@ impl Vault {
         std::fs::rename(&tmp, &self.path).map_err(|e| e.to_string())
     }
 
-    /// Partial merge: absent field = keep, empty value = delete.
+    /// Partial merge: absent field = keep, empty value = delete. Secret
+    /// fields go to the keychain seam FIRST (a failed keychain write fails
+    /// loud BEFORE the file is touched — nothing is lost); in keychain mode
+    /// any legacy plaintext secret for this adapter is scrubbed from the
+    /// file (the lazy migration completes at the first save).
     pub fn set(&self, adapter: &str, fields: BTreeMap<String, String>) -> Result<(), String> {
+        let schema = schema();
+        let Some(a) = schema.iter().find(|s| s.adapter == adapter) else {
+            return Err(format!("unknown adapter: {adapter}"));
+        };
+        for k in fields.keys() {
+            if !a.fields.iter().any(|f| f.name == *k) {
+                return Err(format!("unknown field for {adapter}: {k}"));
+            }
+        }
+        let secret_names: Vec<&str> = a
+            .fields
+            .iter()
+            .filter(|f| f.secret)
+            .map(|f| f.name)
+            .collect();
+        if let Some(store) = &self.store {
+            for (k, v) in &fields {
+                if !secret_names.contains(&k.as_str()) {
+                    continue;
+                }
+                let account = format!("{adapter}.{k}");
+                if v.is_empty() {
+                    store.delete(&account)?; // explicit clear
+                } else {
+                    store.set(&account, v)?;
+                }
+            }
+        }
         let mut data = self.load();
         let entry = data.adapters.entry(adapter.to_string()).or_default();
         for (k, v) in fields {
-            if v.is_empty() {
+            if secret_names.contains(&k.as_str()) && self.store.is_some() {
+                // The keychain owns this value now — the file copy (if any
+                // legacy plaintext survived) is scrubbed, never shadowed.
+                entry.remove(&k);
+            } else if v.is_empty() {
                 entry.remove(&k);
             } else {
                 entry.insert(k, v);
@@ -154,13 +273,26 @@ impl Vault {
         if entry.is_empty() {
             data.adapters.remove(adapter);
         }
+        data.secret_mode = Some(self.mode().to_string());
         self.save(&data)
     }
 
-    /// Idempotent — deleting an absent adapter is honest Ok.
+    /// Idempotent — deleting an absent adapter is honest Ok. Keychain
+    /// entries for the adapter's secret fields are removed too (absent =
+    /// fine).
     pub fn delete(&self, adapter: &str) -> Result<(), String> {
+        if let Some(store) = &self.store {
+            if let Some(a) = schema().iter().find(|s| s.adapter == adapter) {
+                for f in &a.fields {
+                    if f.secret {
+                        let _ = store.delete(&format!("{adapter}.{}", f.name));
+                    }
+                }
+            }
+        }
         let mut data = self.load();
         data.adapters.remove(adapter);
+        data.secret_mode = Some(self.mode().to_string());
         self.save(&data)
     }
 
@@ -285,6 +417,7 @@ mod tests {
         vault
             .save(&VaultData {
                 adapters: BTreeMap::new(),
+                secret_mode: None,
             })
             .expect("save");
         let meta = std::fs::metadata(dir.join(VAULT_FILE)).unwrap();
@@ -413,5 +546,138 @@ mod tests {
             .flat_map(|a| a.fields.iter().map(|f| f.name))
             .collect();
         assert!(all.contains(&"ndus") && all.contains(&"remote") && all.contains(&"app_secret"));
+    }
+
+    // ---- #81: the SecretStore seam (keychain mode vs the honest fallback) ----
+
+    /// In-memory keychain double — deterministic everywhere, including CI.
+    #[derive(Default)]
+    struct MemoryStore(std::sync::Mutex<BTreeMap<String, String>>);
+
+    impl SecretStore for MemoryStore {
+        fn set(&self, account: &str, value: &str) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(account.to_string(), value.to_string());
+            Ok(())
+        }
+        fn get(&self, account: &str) -> Result<Option<String>, String> {
+            Ok(self.0.lock().unwrap().get(account).cloned())
+        }
+        fn delete(&self, account: &str) -> Result<(), String> {
+            self.0.lock().unwrap().remove(account);
+            Ok(())
+        }
+    }
+
+    fn keychain_vault(tag: &str) -> (std::path::PathBuf, Vault) {
+        let dir = tmpdir(tag);
+        let v = Vault::open_keychain(&dir, Some(Box::new(MemoryStore::default())));
+        assert_eq!(v.mode(), MODE_KEYRING);
+        (dir, v)
+    }
+
+    #[test]
+    fn keychain_mode_never_writes_secret_values_to_the_file() {
+        let (dir, v) = keychain_vault("kr");
+        let mut fields = BTreeMap::new();
+        fields.insert("access_key".to_string(), "AK".to_string());
+        fields.insert("secret_key".to_string(), "SK".to_string());
+        fields.insert("region".to_string(), "us".to_string());
+        v.set("s3_multipart", fields).unwrap();
+
+        let file = std::fs::read_to_string(dir.join(VAULT_FILE)).unwrap();
+        assert!(file.contains(MODE_KEYRING), "the marker must say keyring");
+        assert!(
+            !file.contains("SK") && !file.contains("AK"),
+            "secret values must NEVER land in the file (access_key is a secret in \
+             the schema too), got: {file}"
+        );
+        assert!(file.contains("us"), "non-secrets stay in the file");
+
+        // load() reassembles the full view (secrets from the seam, masked
+        // later at the IPC boundary — values never reach the UI).
+        let data = v.load();
+        assert_eq!(data.adapters["s3_multipart"]["secret_key"], "SK");
+        assert_eq!(data.adapters["s3_multipart"]["access_key"], "AK");
+
+        // Explicit clear removes from the seam too.
+        let mut clear = BTreeMap::new();
+        clear.insert("secret_key".to_string(), String::new());
+        v.set("s3_multipart", clear).unwrap();
+        let data = v.load();
+        assert!(
+            !data.adapters["s3_multipart"].contains_key("secret_key"),
+            "empty value = delete, keychain included"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_mode_is_the_honest_fallback_with_a_marker() {
+        let dir = tmpdir("fb");
+        let v = Vault::open_keychain(&dir, None); // no secret service available
+        assert_eq!(v.mode(), MODE_FILE);
+        let mut fields = BTreeMap::new();
+        fields.insert("access_key".to_string(), "AK".to_string());
+        fields.insert("secret_key".to_string(), "SK".to_string());
+        v.set("s3_multipart", fields).unwrap();
+
+        let file = std::fs::read_to_string(dir.join(VAULT_FILE)).unwrap();
+        assert!(file.contains(MODE_FILE), "the marker must say file");
+        assert!(
+            file.contains("SK"),
+            "the fallback keeps today's behavior — secrets in the 0600 file, marked"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_plaintext_migrates_at_the_first_save() {
+        let dir = tmpdir("mig");
+        // Seed the file the pre-#81 way (plaintext secret era).
+        Vault::open(&dir)
+            .set("s3_multipart", {
+                let mut m = BTreeMap::new();
+                m.insert("secret_key".to_string(), "OLD".to_string());
+                m.insert("region".to_string(), "us".to_string());
+                m
+            })
+            .unwrap();
+
+        // Same dir, keychain mode — the product upgrade path.
+        let v = Vault::open_keychain(&dir, Some(Box::new(MemoryStore::default())));
+        assert_eq!(v.mode(), MODE_KEYRING);
+        // Reads still serve the legacy value — nothing breaks, nothing lost.
+        let data = v.load();
+        assert_eq!(data.adapters["s3_multipart"]["secret_key"], "OLD");
+        assert_eq!(data.adapters["s3_multipart"]["region"], "us");
+
+        // The first save moves the secret to the keychain and scrubs BOTH
+        // the old and the new plaintext from the file.
+        let mut fields = BTreeMap::new();
+        fields.insert("secret_key".to_string(), "NEW".to_string());
+        v.set("s3_multipart", fields).unwrap();
+        let file = std::fs::read_to_string(dir.join(VAULT_FILE)).unwrap();
+        assert!(!file.contains("OLD"), "legacy plaintext scrubbed");
+        assert!(!file.contains("NEW"), "new plaintext never written");
+        let data = v.load();
+        assert_eq!(data.adapters["s3_multipart"]["secret_key"], "NEW");
+        assert_eq!(data.adapters["s3_multipart"]["region"], "us", "kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delete_clears_the_keychain_entries_too() {
+        let (dir, v) = keychain_vault("del");
+        let mut fields = BTreeMap::new();
+        fields.insert("app_id".to_string(), "FA".to_string());
+        fields.insert("app_secret".to_string(), "FS".to_string());
+        v.set("feishu", fields).unwrap();
+        v.delete("feishu").unwrap();
+        let data = v.load();
+        assert!(!data.adapters.contains_key("feishu"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

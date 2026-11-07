@@ -1,20 +1,22 @@
 /**
- * The settings dialog (#66 Lane 2, #69): the credentials vault as a product
- * surface. Built from the #67 primitives; audited by the a11y gate.
+ * The settings dialog (#66 Lane 2, #69, #81): the credentials vault as a
+ * product surface. Built from the #67 primitives; audited by the a11y gate.
  *
  * The secret rule is enforced by construction: the IPC view never carries
  * secret values (`present` travels, bytes never leave the shell process),
- * and only explicit drafts are saved (settings.ts changedFields). The
- * honest cost of a save is printed in the footer: credentials are read at
- * startup — changes take effect after IUM restarts.
+ * and only explicit drafts are saved (settings.ts changedFields). #81 made
+ * saves live: a save (or removal) re-registers the transfer lane through
+ * apply_credentials — no restart — and a Test connection control answers
+ * BEFORE the first upload, read-only, never creating an upload session.
  *
  * e2e seam: the header gear button is `#app-settings` (in the e2e locator
  * inventory); this dialog itself is not driven by the lane yet.
  */
 import { useCallback, useEffect, useState } from "react";
-import { api, type AdapterSchema, type TelemetryStatus } from "../api";
-import { canSave, changedFields, toRows, type FieldRow } from "../settings";
-import { TELEMETRY_COPY } from "../copy";
+import { api, type AdapterSchema, type ProbeResult, type TelemetryStatus } from "../api";
+import { canSave, changedFields, probeFields, toRows, type FieldRow } from "../settings";
+import { APP_COPY, TELEMETRY_COPY } from "../copy";
+import { probeCopy, probeFailCopy, type ProbeState } from "../auth";
 import { IconAlert, IconCheck, IconX, Logomark } from "./icons";
 import { Button, Chip, cx, TextInput } from "./ui";
 import {
@@ -45,6 +47,18 @@ export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }
   const [sections, setSections] = useState<AdapterSection[]>([]);
   const [busy, setBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  /** Per-adapter Test-connection state (#81): one entry per schema id. */
+  const [probe, setProbe] = useState<Record<string, { state: ProbeState; result?: ProbeResult }>>({});
+  /** Where the secret values actually live (the footer's honesty marker). */
+  const [secrets, setSecrets] = useState<"keyring" | "file" | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    api
+      .secretMode()
+      .then(setSecrets)
+      .catch(() => setSecrets(null)); // the footer then stays neutral
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -84,9 +98,10 @@ export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }
     setBusy(true);
     try {
       await api.credentialsSet(section.schema.adapter, fields);
-      onSaved(
-        `${section.schema.label} credentials saved — they take effect the next time IUM starts.`,
-      );
+      // The live apply (#81): rebuild the lane from vault+env and upsert it
+      // — the next job uses the fresh config, no restart.
+      await api.applyCredentials(section.schema.adapter);
+      onSaved(APP_COPY.authSavedLive);
       // Re-pull the masked views so the saved chips tell the truth.
       const views = await api.credentialsGet();
       const rows = toRows(views);
@@ -109,7 +124,9 @@ export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }
     setBusy(true);
     try {
       await api.credentialsDelete(section.schema.adapter);
-      onSaved(`${section.schema.label} credentials removed — takes effect after restart.`);
+      // No credentials = no lane (the registry reflects the vault, #81).
+      await api.applyCredentials(section.schema.adapter);
+      onSaved(APP_COPY.authRemovedLive);
       setSections((cur) =>
         cur.map((s) => ({
           ...s,
@@ -125,6 +142,30 @@ export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }
     }
   }
 
+  /** The read-only credential check (#81): stored values overridden by
+   *  drafts — Test tests what is actually saved, drafts what would be. */
+  async function testConnection(section: AdapterSection) {
+    const id = section.schema.adapter;
+    setProbe((cur) => ({ ...cur, [id]: { state: "testing" as ProbeState } }));
+    try {
+      const result = await api.probeCredentials(id, probeFields(section.rows));
+      const state: ProbeState = !result.checked
+        ? "unchecked"
+        : result.ok
+          ? "ok"
+          : "fail";
+      setProbe((cur) => ({ ...cur, [id]: { state, result } }));
+    } catch (e) {
+      setProbe((cur) => ({
+        ...cur,
+        [id]: {
+          state: "fail" as ProbeState,
+          result: { checked: true, ok: false, sentence: String(e), final: true },
+        },
+      }));
+    }
+  }
+
   if (!open) return null;
 
   return (
@@ -134,7 +175,7 @@ export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }
         <div className="drawer-head">
           <div style={{ minWidth: 0 }}>
             <h2 className="drawer-title">Settings</h2>
-            <div className="drawer-sub">Credentials the engine reads at startup</div>
+            <div className="drawer-sub">Credentials the engine reads live</div>
           </div>
           <Button variant="ghost" size="icon" aria-label="Close settings" onClick={onClose}>
             <IconX size={14} />
@@ -166,6 +207,15 @@ export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }
                 <Button
                   variant="ghost"
                   size="sm"
+                  disabled={busy}
+                  onClick={() => void testConnection(s)}
+                  aria-label={`Test ${s.schema.label} connection`}
+                >
+                  {probeCopy(probe[s.schema.adapter]?.state ?? "idle")}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   disabled={busy || s.rows.every((r) => !r.saved && r.draft === null)}
                   onClick={() => void remove(s)}
                 >
@@ -179,14 +229,49 @@ export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }
                   Save
                 </Button>
               </div>
+              {/* The probe's answer (#81): one honest line — the acceptance
+                  sentence, the not-checked sentence, or the copy table's
+                  verdict with the raw truth kept in view. */}
+              {(() => {
+                const p = probe[s.schema.adapter];
+                if (!p || p.state === "idle" || p.state === "testing") return null;
+                const r = p.result;
+                if (p.state === "ok") {
+                  return (
+                    <p className="settings-note" role="status">
+                      {probeCopy("ok", r)}
+                    </p>
+                  );
+                }
+                if (p.state === "unchecked") {
+                  return (
+                    <p className="settings-note" role="status">
+                      {probeCopy("unchecked", r)}
+                    </p>
+                  );
+                }
+                if (!r) return null;
+                const copy = probeFailCopy(r);
+                return (
+                  <p className="settings-note" role="alert">
+                    {copy.title}
+                    {copy.hint ? ` ${copy.hint}` : ""}
+                    {r.final ? "" : ` The engine said: ${copy.raw}`}
+                  </p>
+                );
+              })()}
             </section>
           );
         })}
 
         <p className="settings-footer" role="note">
           <IconAlert size={13} />
-          Credentials are read when IUM starts — changes take effect the next time it starts.
-          A real environment variable always wins over a saved value.
+          {secrets === "keyring"
+            ? APP_COPY.secretsKeychain
+            : secrets === "file"
+              ? APP_COPY.secretsFileFallback
+              : "Secrets are stored locally; their exact home is reported once the shell answers. "}
+          {APP_COPY.authFooterEnv} {APP_COPY.authFooterLive}
         </p>
 
         {/* About (#77): the version and the engine's own words have a home —
