@@ -1,0 +1,12 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- 04 · Monogram — the signature.
+       Custom IU ligature: the I is a solid blue bar with a single 45-degree
+       chamfer cut (precision); the U is a stroked ink glyph sharing the same
+       52-unit stroke and baseline. Lettermark craft, Stripe/Linear school. -->
+  <rect x="2" y="2" width="508" height="508" rx="113" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="4"/>
+  <!-- I — chamfered top-left corner, full optical height of the U -->
+  <path d="M 128 164 L 154 138 L 180 138 L 180 354 L 128 354 Z" fill="#2563EB"/>
+  <!-- U — stroked glyph, same optical top and baseline, clear gap from the I -->
+  <path d="M 255 164 V 276 A 52 52 0 0 0 359 276 V 164"
+        fill="none" stroke="#0F172A" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,11 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- 02 · Strata — the queue in motion.
+       Three stacked bars (the file stack); the top bar is accent blue and lifted
+       with a wider gap — the file that is leaving. Calm, honest, light craft. -->
+  <rect x="2" y="2" width="508" height="508" rx="113" fill="#F7F7F8" stroke="#E4E4E7" stroke-width="4"/>
+  <!-- bottom + middle: ink -->
+  <rect x="146" y="322" width="220" height="46" rx="23" fill="#0F172A"/>
+  <rect x="146" y="250" width="220" height="46" rx="23" fill="#0F172A"/>
+  <!-- top: accent blue, lifted (wider gap = motion) -->
+  <rect x="146" y="150" width="220" height="46" rx="23" fill="#2563EB"/>
+</svg>
