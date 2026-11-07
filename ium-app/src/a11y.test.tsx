@@ -150,11 +150,11 @@ describe("a11y: the full shell (header, pill, form, table, empty state)", () => 
         credentialsGet: () =>
           Promise.resolve({
             mega: {
-              user: { label: "Email", secret: false, required: true, present: true, value: "u@x" },
-              pass: { label: "Password", secret: true, required: true, present: true, value: null },
+              user: { label: "Email", secret: false, required: true, present: true, value: "u@x", hidden: false },
+              pass: { label: "Password", secret: true, required: true, present: true, value: null, hidden: false },
             },
             terabox: {
-              ndus: { label: "ndus cookie", secret: true, required: true, present: false, value: null },
+              ndus: { label: "ndus cookie", secret: true, required: true, present: false, value: null, hidden: false },
             },
           }),
         credentialsSet: () => Promise.resolve(),

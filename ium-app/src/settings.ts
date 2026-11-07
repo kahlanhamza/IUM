@@ -15,6 +15,9 @@ export interface FieldView {
   required: boolean;
   present: boolean;
   value: string | null;
+  /** No input renders — the #84 OAuth lanes' token row is a saved-state
+   *  chip: the browser sign-in writes it, the UI only hears the outcome. */
+  hidden: boolean;
 }
 
 export type AdapterViews = Record<string, Record<string, FieldView>>;
@@ -32,6 +35,9 @@ export interface FieldRow {
   value: string | null;
   /** null = untouched; "" = explicit clear; otherwise a new value. */
   draft: string | null;
+  /** No input renders (the #84 OAuth token rows). Still counts for the
+   *  connection state and canSave — presence IS the state. */
+  hidden: boolean;
 }
 
 export function toRows(views: AdapterViews): Record<string, FieldRow[]> {
@@ -46,6 +52,7 @@ export function toRows(views: AdapterViews): Record<string, FieldRow[]> {
       saved: f.present,
       value: f.value,
       draft: null,
+      hidden: f.hidden ?? false,
     }));
   }
   return out;

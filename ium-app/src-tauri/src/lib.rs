@@ -176,12 +176,17 @@ fn build_adapter(id: &str) -> Option<Arc<dyn TransferAdapter>> {
         // is sync, both under the app runtime (same shape as boot). The
         // webdav lane (#83) rides the same family — its constructor reads
         // the vault-filled IUM_WEBDAV_* envs and obscures the password.
-        "rclone_bridge" | "mega" | "webdav" => {
+        // The google_drive lane (#84) rides it too — its token was written
+        // by the browser sign-in (rclone's own OAuth client); no obscure
+        // dance, the token is already rclone's own JSON.
+        "rclone_bridge" | "mega" | "webdav" | "google_drive" => {
             let built = tauri::async_runtime::block_on(async {
                 let cfg = if id == "mega" {
                     ium_core::adapter_rclone::RcloneBridgeConfig::mega_from_env().await
                 } else if id == "webdav" {
                     ium_core::adapter_rclone::RcloneBridgeConfig::webdav_from_env().await
+                } else if id == "google_drive" {
+                    ium_core::adapter_rclone::RcloneBridgeConfig::google_drive_from_env()
                 } else {
                     ium_core::adapter_rclone::RcloneBridgeConfig::from_env()
                 };
@@ -223,6 +228,7 @@ fn register_adapters(manager: &mut JobManager) {
         "rclone_bridge",
         "mega",
         "webdav",
+        "google_drive",
     ] {
         if let Some(adapter) = build_adapter(id) {
             manager.register_adapter(adapter);
@@ -239,6 +245,10 @@ struct FieldView {
     required: bool,
     present: bool,
     value: Option<String>,
+    /// No input renders (#84): the OAuth lanes' token row is a saved-state
+    /// chip — the sign-in writes it inside the process, the UI never sees
+    /// a token byte, its PRESENCE is the state.
+    hidden: bool,
 }
 
 #[tauri::command]
@@ -270,6 +280,7 @@ fn credentials_get(
                     required: f.required,
                     present,
                     value,
+                    hidden: f.hidden,
                 },
             );
         }
@@ -420,8 +431,22 @@ async fn authorize_oauth(
         "rclone_bridge",
         BTreeMap::from([("extra_env".to_string(), merged)]),
     )?;
+    // The first-class lanes (#84): the sign-in also writes the token under
+    // the lane's own secret — the hidden token row's presence IS the
+    // lane's connection state, and apply_env hands it to the core
+    // constructor (IUM_GOOGLE_DRIVE_TOKEN). No token byte crosses the UI.
+    if backend == "drive" {
+        vault(&app).set(
+            "google_drive",
+            BTreeMap::from([("token".to_string(), token)]),
+        )?;
+    }
     vault(&app).apply_env();
-    hot_apply(&engine, "rclone_bridge")
+    let applied = hot_apply(&engine, "rclone_bridge")?;
+    if backend == "drive" {
+        hot_apply(&engine, "google_drive")?;
+    }
+    Ok(applied)
 }
 
 /// What Test-connection learned (#81). `checked = false` is the honest
@@ -475,7 +500,11 @@ fn probe_raw(r: Result<(), ium_core::adapter::AdapterError>) -> ProbeOutcome {
 /// created, so a Test button can never orphan a real upload). Families
 /// whose endpoint is per-job (the s3 family) answer honestly: not checked.
 #[tauri::command]
-async fn probe_credentials(adapter: String, fields: BTreeMap<String, String>) -> ProbeOutcome {
+async fn probe_credentials(
+    app: tauri::AppHandle,
+    adapter: String,
+    fields: BTreeMap<String, String>,
+) -> ProbeOutcome {
     let draft = |k: &str| {
         fields
             .get(k)
@@ -567,6 +596,56 @@ async fn probe_credentials(adapter: String, fields: BTreeMap<String, String>) ->
                 return probe_missing("The WebDAV configuration was refused.");
             };
             bridge_probe(cfg).await
+        }
+        "google_drive" => {
+            // The token is a hidden row: no draft exists, the test reads
+            // the SAVED sign-in (vault first, the generic bridge's merged
+            // env lines second — one credential, two honest seats).
+            let data = vault(&app).load();
+            let token = data
+                .adapters
+                .get("google_drive")
+                .and_then(|m| m.get("token"))
+                .cloned()
+                .or_else(|| {
+                    data.adapters
+                        .get("rclone_bridge")
+                        .and_then(|m| m.get("extra_env"))
+                        .and_then(|extra| {
+                            extra
+                                .lines()
+                                .find(|l| l.starts_with("RCLONE_CONFIG_IUM_DRIVE_TOKEN="))
+                                .map(|l| l.split_once('=').unwrap().1.to_string())
+                        })
+                });
+            let Some(token) = token else {
+                return probe_missing(
+                    "No Google sign-in yet — connect Google Drive once and the token lives in your keychain.",
+                );
+            };
+            let bin = fields
+                .get("bin")
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    data.adapters
+                        .get("rclone_bridge")
+                        .and_then(|m| m.get("bin"))
+                        .cloned()
+                })
+                .unwrap_or_else(|| "rclone".into());
+            let bucket = data
+                .adapters
+                .get("google_drive")
+                .and_then(|m| m.get("bucket"))
+                .cloned()
+                .unwrap_or_else(|| "ium".into());
+            match ium_core::adapter_rclone::RcloneBridgeConfig::google_drive_config_from_parts(
+                &token, &bucket, &bin,
+            ) {
+                Ok(cfg) => bridge_probe(cfg).await,
+                Err(e) => probe_missing(&e.to_string()),
+            }
         }
         "rclone_bridge" => {
             let Some(remote) = draft("remote") else {

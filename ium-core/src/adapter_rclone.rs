@@ -74,6 +74,16 @@ pub const WEBDAV_LANE: &str = "ium_webdav";
 /// `IUM_WEBDAV` is ours alone).
 pub const WEBDAV_REMOTE: &str = "IUM_WEBDAV";
 
+/// The Google Drive lane's registry key (#84): a named bridge instance over
+/// the `drive` backend. The lane's credential IS the browser sign-in (#82's
+/// flow, rclone's own embedded OAuth client) — one click, no fields.
+pub const GOOGLE_DRIVE_LANE: &str = "google_drive";
+
+/// The remote name the Google Drive lane rides under (#84): the `IUM_`
+/// prefix keeps the env-defined remote out of the user's own
+/// `rclone.conf` namespace (same discipline as [`WEBDAV_REMOTE`]).
+pub const GOOGLE_DRIVE_REMOTE: &str = "IUM_DRIVE";
+
 /// How the serve process is owned (D1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RcloneBridgeMode {
@@ -316,6 +326,69 @@ impl RcloneBridgeConfig {
         let bin = std::env::var("IUM_WEBDAV_RCLONE_BIN").unwrap_or_else(|_| "rclone".to_string());
         let obscured = Self::rclone_obscure(&PathBuf::from(&bin), &pass).await?;
         Self::webdav_config_from_parts(&url, &user, &obscured, &vendor, &bucket, &bin)
+    }
+
+    /// The Google Drive lane's required-token check (#84): the browser
+    /// sign-in's token config (the `rclone authorize` JSON, stored as the
+    /// vault's hidden `token` secret). Absence refuses loudly — the lane's
+    /// credential IS the sign-in, never a pasted value.
+    pub fn google_drive_required(token: Option<&str>) -> Result<String, AdapterError> {
+        let token = token
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AdapterError::AuthRequired(
+                    "no Google sign-in yet — connect Google Drive once and the token lives here"
+                        .into(),
+                )
+            })?;
+        Ok(token.to_string())
+    }
+
+    /// The Google Drive config builder (#84) — the PURE part of the
+    /// constructor: the signed-in token config in, bridge config out. The
+    /// token rides `RCLONE_CONFIG_IUM_DRIVE_TOKEN` VERBATIM (it is
+    /// rclone's own token-config JSON — rclone refreshes it itself, no
+    /// obscure dance needed); the remote is [`GOOGLE_DRIVE_REMOTE`] + `:`
+    /// (Drive is a bucket-less backend: the bridge serves the root with a
+    /// top-level folder as the bucket — the MEGA topology fact) and the
+    /// lane name is [`GOOGLE_DRIVE_LANE`].
+    pub fn google_drive_config_from_parts(
+        token_json: &str,
+        bucket: &str,
+        bin: &str,
+    ) -> Result<Self, AdapterError> {
+        let token_json = Self::google_drive_required(Some(token_json))?;
+        let mut cfg = Self::new(RcloneBridgeMode::Spawn, format!("{GOOGLE_DRIVE_REMOTE}:"))?;
+        cfg.rclone_bin = PathBuf::from(bin);
+        cfg.bucket = bucket.to_string();
+        cfg.lane_name = GOOGLE_DRIVE_LANE;
+        cfg.extra_env = vec![
+            (
+                format!("RCLONE_CONFIG_{GOOGLE_DRIVE_REMOTE}_TYPE"),
+                "drive".to_string(),
+            ),
+            (
+                format!("RCLONE_CONFIG_{GOOGLE_DRIVE_REMOTE}_TOKEN"),
+                token_json,
+            ),
+        ];
+        Ok(cfg)
+    }
+
+    /// The Google Drive lane constructor (#84):
+    /// `IUM_GOOGLE_DRIVE_TOKEN` (required — the vault's hidden secret
+    /// filled by the browser sign-in), optional `IUM_GOOGLE_DRIVE_BUCKET`
+    /// (default `ium`), optional `IUM_GOOGLE_DRIVE_RCLONE_BIN` (default
+    /// `rclone`). Sync (no obscure dance — the token is already rclone's
+    /// own JSON). Everything downstream is #63's, inherited unchanged.
+    pub fn google_drive_from_env() -> Result<Self, AdapterError> {
+        let token =
+            Self::google_drive_required(std::env::var("IUM_GOOGLE_DRIVE_TOKEN").ok().as_deref())?;
+        let bucket = std::env::var("IUM_GOOGLE_DRIVE_BUCKET").unwrap_or_else(|_| "ium".to_string());
+        let bin =
+            std::env::var("IUM_GOOGLE_DRIVE_RCLONE_BIN").unwrap_or_else(|_| "rclone".to_string());
+        Self::google_drive_config_from_parts(&token, &bucket, &bin)
     }
 
     /// `rclone obscure <pass>` — the wire's credential preprocessing. The
@@ -1092,5 +1165,39 @@ mod tests {
                 .all(|(k, _)| k != "RCLONE_CONFIG_IUM_WEBDAV_VENDOR"),
             "generic DAV must not send a vendor line"
         );
+    }
+
+    // ---- #84: the Google Drive lane — a browser-signed-in token → a LIVE bridge lane ----
+
+    #[test]
+    fn google_drive_config_from_parts_carries_the_env_contract() {
+        let cfg = RcloneBridgeConfig::google_drive_config_from_parts(
+            r#"{"access_token":"a","refresh_token":"r"}"#,
+            "photos",
+            "rclone-bin-x",
+        )
+        .expect("the parts are complete");
+        assert_eq!(cfg.lane_name, GOOGLE_DRIVE_LANE);
+        assert_eq!(cfg.remote, "IUM_DRIVE:");
+        assert_eq!(cfg.bucket, "photos");
+        assert_eq!(cfg.rclone_bin, PathBuf::from("rclone-bin-x"));
+        let env: std::collections::BTreeMap<_, _> = cfg.extra_env.iter().cloned().collect();
+        assert_eq!(env.get("RCLONE_CONFIG_IUM_DRIVE_TYPE").unwrap(), "drive");
+        assert!(
+            env.get("RCLONE_CONFIG_IUM_DRIVE_TOKEN")
+                .unwrap()
+                .contains("refresh_token"),
+            "the token config rides verbatim (rclone refreshes it itself)"
+        );
+    }
+
+    #[test]
+    fn google_drive_required_refuses_an_empty_token() {
+        let err = RcloneBridgeConfig::google_drive_required(None)
+            .expect_err("an absent token must refuse");
+        assert!(matches!(err, AdapterError::AuthRequired(_)));
+        let err = RcloneBridgeConfig::google_drive_required(Some("   "))
+            .expect_err("a blank token must refuse");
+        assert!(matches!(err, AdapterError::AuthRequired(_)));
     }
 }

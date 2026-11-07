@@ -1,9 +1,10 @@
 /**
- * The connect-state contracts (#82): the one-click connect surface speaks
- * per-lane truth from the same rows the settings math produces. The OAuth
- * backend list pins the owner's shelving: Google types appear nowhere
- * (#59/#60 stay shelved) — the obvious browser-sign-in platforms only.
- * No Tauri imports — plain vitest (the #69 pattern).
+ * The connect-state contracts (#82) + the Google Drive lane (#84): the
+ * one-click connect surface speaks per-lane truth from the same rows the
+ * settings math produces. The OAuth backend list now carries DRIVE — the
+ * owner lifted the shelving this session ("go ahead with the WebDAV, also
+ * with Google drive and YouTube"); YouTube stays OUT (no rclone backend —
+ * #85's own native flow). No Tauri imports — plain vitest (the #69 pattern).
  */
 import { describe, expect, it } from "vitest";
 import { connectionState, isOAuthBackend, OAUTH_BACKENDS } from "./connect";
@@ -18,6 +19,7 @@ function row(partial: Partial<FieldRow> & { name: string }): FieldRow {
     saved: false,
     value: null,
     draft: null,
+    hidden: false,
     ...partial,
   };
 }
@@ -54,21 +56,29 @@ describe("connectionState — the chip tells the per-lane truth", () => {
   });
 });
 
-describe("the OAuth backend list — the obvious ones, Google stays shelved", () => {
-  it("exactly the four obvious browser-sign-in platforms", () => {
-    expect(OAUTH_BACKENDS.map((b) => b.id)).toEqual(["pcloud", "dropbox", "onedrive", "box"]);
+describe("the OAuth backend list — the obvious ones, drive joined (#84)", () => {
+  it("exactly the five obvious browser-sign-in platforms — drive rides rclone authorize", () => {
+    expect(OAUTH_BACKENDS.map((b) => b.id)).toEqual([
+      "pcloud",
+      "dropbox",
+      "onedrive",
+      "box",
+      "drive",
+    ]);
   });
 
-  it("no Google type appears — #59/#60 are owner-shelved", () => {
+  it("drive is allowlisted; youtube is NOT — rclone has no such backend (#85's own flow)", () => {
     const ids = OAUTH_BACKENDS.map((b) => b.id);
-    for (const shelved of ["drive", "gdrive", "youtube", "gphotos", "google"]) {
-      expect(ids).not.toContain(shelved);
+    expect(ids).toContain("drive");
+    for (const absent of ["youtube", "gphotos", "google"]) {
+      expect(ids).not.toContain(absent);
     }
   });
 
   it("isOAuthBackend refuses free-form ids (no injection surface)", () => {
     expect(isOAuthBackend("pcloud")).toBe(true);
-    expect(isOAuthBackend("drive")).toBe(false);
+    expect(isOAuthBackend("drive")).toBe(true);
+    expect(isOAuthBackend("youtube")).toBe(false);
     expect(isOAuthBackend("$(rm -rf)")).toBe(false);
     expect(isOAuthBackend("")).toBe(false);
   });
@@ -78,5 +88,27 @@ describe("the OAuth backend list — the obvious ones, Google stays shelved", ()
       expect(b.label.length).toBeGreaterThan(0);
       expect(b.note.endsWith(".")).toBe(true);
     }
+  });
+});
+
+describe("the Google Drive lane — one hidden token row (#84)", () => {
+  const token = {
+    name: "token",
+    label: "Google sign-in",
+    secret: true,
+    required: true,
+    hidden: true,
+    present: false,
+    saved: false,
+    value: null,
+    draft: null,
+  } as unknown as FieldRow;
+
+  it("not set up until the browser sign-in stores the token", () => {
+    expect(connectionState([token])).toBe("empty");
+  });
+
+  it("connected the moment the signed-in token is saved — no field wall, ever", () => {
+    expect(connectionState([{ ...token, present: true, saved: true }])).toBe("connected");
   });
 });

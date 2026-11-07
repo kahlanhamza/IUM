@@ -12,6 +12,10 @@ export interface FieldView {
   required: boolean;
   present: boolean;
   value: string | null;
+  /** No input renders (#84): the OAuth lanes' token row is a saved-state
+   *  chip — the sign-in writes it inside the process, the UI never sees a
+   *  token byte, its PRESENCE is the state. */
+  hidden: boolean;
 }
 
 export type AdapterViews = Record<string, Record<string, FieldView>>;

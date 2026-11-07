@@ -352,6 +352,11 @@ function ConnectSheet({
 }: ConnectSheetProps) {
   const { schema, rows } = section;
   const isBridge = schema.adapter === "rclone_bridge";
+  // The first-class OAuth lane (#84): its sheet is the sign-in itself —
+  // no picker, no fields (the token row is hidden; its presence is the
+  // state). The drawer closes itself on a green answer (the reflex).
+  const driveLock = schema.adapter === "google_drive" ? "drive" : undefined;
+  const visibleRows = rows.filter((r) => !r.hidden);
   const binDraft = rows.find((r) => r.name === "bin")?.draft ?? null;
   return (
     <section className="card" aria-label={schema.label}>
@@ -371,8 +376,18 @@ function ConnectSheet({
           onVaultChanged={onVaultChanged}
         />
       )}
+      {driveLock && (
+        <BrowserSignIn
+          binDraft={binDraft}
+          busy={busy}
+          locked={driveLock}
+          onError={onError}
+          onConnected={onConnected}
+          onVaultChanged={onVaultChanged}
+        />
+      )}
       <div className="form-grid">
-        {rows.map((r) => (
+        {visibleRows.map((r) => (
           <SecretField
             key={r.name}
             section={schema.adapter}
@@ -448,24 +463,30 @@ function ConnectSheet({
  * opens it, they sign in as normal (2FA and consent screens included),
  * and the shell captures the token, merges it into the bridge lane's
  * extra_env INSIDE the process, and hot-applies the lane. The UI never
- * sees a token byte; it only hears the outcome. Google types appear
- * nowhere (#59/#60 are owner-shelved) — the list is the allowlist.
+ * sees a token byte; it only hears the outcome. The list is the allowlist;
+ * DRIVE joined it when the owner lifted the shelving (#84) and the
+ * first-class Google Drive lane signs in with a LOCKED backend — no picker.
  */
 function BrowserSignIn({
   binDraft,
   busy,
+  locked,
   onError,
   onConnected,
   onVaultChanged,
 }: {
   binDraft: string | null;
   busy: boolean;
+  /** Fixed backend (#84): the first-class lanes' sheets render NO picker —
+   *  the Google Drive sheet signs in with Google, full stop. */
+  locked?: string;
   onError: (message: string) => void;
   onConnected: (message: string) => void;
   onVaultChanged: () => Promise<void>;
 }) {
-  const [backend, setBackend] = useState(OAUTH_BACKENDS[0].id);
+  const [picked, setPicked] = useState(OAUTH_BACKENDS[0].id);
   const [waiting, setWaiting] = useState(false);
+  const backend = locked ?? picked;
   const chosen = OAUTH_BACKENDS.find((b) => b.id === backend) ?? OAUTH_BACKENDS[0];
 
   async function connect() {
@@ -483,20 +504,22 @@ function BrowserSignIn({
 
   return (
     <div className="oauth-block" aria-label="Browser sign-in">
-      <div className="field">
-        <label className="field-label" htmlFor="oauth-backend">Platform</label>
-        <Select
-          id="oauth-backend"
-          value={backend}
-          disabled={busy || waiting}
-          onChange={(e) => setBackend(e.target.value)}
-        >
-          {OAUTH_BACKENDS.map((b) => (
-            <option key={b.id} value={b.id}>{b.label}</option>
-          ))}
-        </Select>
-        <p className="settings-note" style={{ margin: "4px 0 0" }}>{chosen.note}</p>
-      </div>
+      {locked ? null : (
+        <div className="field">
+          <label className="field-label" htmlFor="oauth-backend">Platform</label>
+          <Select
+            id="oauth-backend"
+            value={picked}
+            disabled={busy || waiting}
+            onChange={(e) => setPicked(e.target.value)}
+          >
+            {OAUTH_BACKENDS.map((b) => (
+              <option key={b.id} value={b.id}>{b.label}</option>
+            ))}
+          </Select>
+        </div>
+      )}
+      <p className="settings-note" style={{ margin: "4px 0 0" }}>{chosen.note}</p>
       <div className="cell-actions" style={{ justifyContent: "flex-start", marginTop: 4 }}>
         <Button disabled={busy || waiting} onClick={() => void connect()}>
           {waiting ? "Signing in…" : `Connect ${chosen.label}`}

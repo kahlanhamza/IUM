@@ -32,6 +32,11 @@ pub struct FieldSchema {
     pub label: &'static str,
     pub secret: bool,
     pub required: bool,
+    /// No input renders (#84): the OAuth lanes' token row is a saved-state
+    /// chip — the browser sign-in writes it INSIDE the process, the UI only
+    /// hears the outcome. Presence still counts for the connection state.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -51,6 +56,19 @@ pub fn schema() -> Vec<AdapterSchema> {
             label,
             secret,
             required,
+            hidden: false,
+        }
+    }
+    /// The hidden required secret (#84): written by the browser sign-in
+    /// inside the process, never rendered as an input, never read back by
+    /// the UI — its PRESENCE is the lane's connection state.
+    fn h(name: &'static str, label: &'static str) -> FieldSchema {
+        FieldSchema {
+            name,
+            label,
+            secret: true,
+            required: true,
+            hidden: true,
         }
     }
     vec![
@@ -117,6 +135,12 @@ pub fn schema() -> Vec<AdapterSchema> {
                 f("vendor", "Vendor (nextcloud, owncloud, sharepoint — optional)", false, false),
                 f("bucket", "Target folder", false, false),
             ],
+        },
+        AdapterSchema {
+            adapter: "google_drive",
+            label: "Google Drive",
+            note: "Sign in with your Google account in the browser — no fields to fill. The sign-in token lives in your OS keychain.",
+            fields: vec![h("token", "Google sign-in")],
         },
     ]
 }
@@ -335,6 +359,7 @@ impl Vault {
             ("webdav.password", "IUM_WEBDAV_PASS"),
             ("webdav.vendor", "IUM_WEBDAV_VENDOR"),
             ("webdav.bucket", "IUM_WEBDAV_BUCKET"),
+            ("google_drive.token", "IUM_GOOGLE_DRIVE_TOKEN"),
         ];
         let mut set = 0;
         for (key, var) in direct {
@@ -549,7 +574,15 @@ mod tests {
     fn schema_covers_every_constructor_surface_and_masks_secrets() {
         let schema = schema();
         let names: Vec<&str> = schema.iter().map(|a| a.adapter).collect();
-        for want in ["s3_multipart", "terabox", "mega", "rclone_bridge", "feishu"] {
+        for want in [
+            "s3_multipart",
+            "terabox",
+            "mega",
+            "rclone_bridge",
+            "feishu",
+            "webdav",
+            "google_drive",
+        ] {
             assert!(names.contains(&want), "schema misses {want}: {names:?}");
         }
         let s3 = schema.iter().find(|a| a.adapter == "s3_multipart").unwrap();
@@ -616,6 +649,42 @@ mod tests {
             std::env::remove_var(var); // leave the shared process env clean
         }
         assert_eq!(n, 5, "the five webdav fields map to env vars");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #84 — the Google Drive lane is ONE hidden token row: the browser
+    /// sign-in writes it inside the process, the UI renders no input, and
+    /// its presence IS the connection state. The apply_env mapping hands
+    /// the token to the core constructor (`IUM_GOOGLE_DRIVE_TOKEN`).
+    #[test]
+    fn google_drive_lane_is_one_hidden_token_row() {
+        let schema = schema();
+        let g = schema
+            .iter()
+            .find(|a| a.adapter == "google_drive")
+            .expect("the google_drive lane must exist in the schema");
+        assert_eq!(g.fields.len(), 1, "no field wall — the sign-in IS the lane");
+        let token = &g.fields[0];
+        assert_eq!(token.name, "token");
+        assert!(
+            token.required,
+            "presence is the state — the row must be required"
+        );
+        assert!(token.secret, "the token is a keychain secret (#81)");
+        assert!(token.hidden, "no input renders — the sign-in writes it");
+        // The mapping hands the token to the core constructor.
+        let dir = tmpdir("gdrive-map");
+        let v = Vault::open(&dir);
+        let mut fields = BTreeMap::new();
+        fields.insert("token".to_string(), "{\"type\":\"drive\"}".to_string());
+        v.set("google_drive", fields).unwrap();
+        let n = v.apply_env();
+        assert!(
+            std::env::var("IUM_GOOGLE_DRIVE_TOKEN").is_ok(),
+            "apply_env must map the token"
+        );
+        std::env::remove_var("IUM_GOOGLE_DRIVE_TOKEN"); // leave the shared env clean
+        assert_eq!(n, 1, "the one token maps to one env var");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

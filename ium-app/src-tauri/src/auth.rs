@@ -10,16 +10,19 @@
 //! local `rustc --test auth.rs` harness stays honest, while the embedding
 //! crate takes its compile proof from CI.
 //!
-//! The allowlist is the injection contract: only the four obvious OAuth
+//! The allowlist is the injection contract: only the obvious OAuth
 //! backends may pass through to a spawned command line — a typed string
-//! never becomes an argument. Google types are absent by owner ruling
-//! (#59/#60 shelved).
+//! never becomes an argument. Google DRIVE rides the same rclone authorize
+//! flow since the owner lifted the shelving (#84 → #59); YouTube has NO
+//! rclone backend and rides its own native flow (#85).
 
 /// The obvious OAuth backends — an allowlist, not a free-form field. The
 /// TS picker renders exactly this list (`connect.ts` enforces the same
-/// set); the shell refuses anything else before spawning.
+/// set); the shell refuses anything else before spawning. Google DRIVE
+/// joined when the owner lifted the shelving (#84); YouTube stays OUT —
+/// rclone has no such backend, its sign-in is #85's own loopback flow.
 pub fn is_oauth_backend(id: &str) -> bool {
-    matches!(id, "pcloud" | "dropbox" | "onedrive" | "box")
+    matches!(id, "pcloud" | "dropbox" | "onedrive" | "box" | "drive")
 }
 
 /// The remote name a browser-signed-in backend rides under: `IUM_<BACKEND>`
@@ -198,13 +201,24 @@ Paste the following into your remote machine --->
     }
 
     #[test]
-    fn the_allowlist_is_the_four_obvious_ones() {
-        for id in ["pcloud", "dropbox", "onedrive", "box"] {
+    fn the_allowlist_is_the_obvious_oauth_ones_drive_included() {
+        for id in ["pcloud", "dropbox", "onedrive", "box", "drive"] {
             assert!(is_oauth_backend(id));
         }
-        assert!(!is_oauth_backend("drive"));
+        // YouTube is NOT here — rclone has no such backend; its sign-in is
+        // #85's own loopback flow, never a free-form spawn id.
+        assert!(!is_oauth_backend("youtube"));
         assert!(!is_oauth_backend(""));
         assert!(!is_oauth_backend("$(x)"));
+    }
+
+    #[test]
+    fn drive_env_lines_follow_the_ium_drive_remote() {
+        let lines = env_lines("drive", "{}");
+        assert_eq!(lines[0].0, "RCLONE_CONFIG_IUM_DRIVE_TYPE");
+        assert_eq!(lines[0].1, "drive");
+        assert_eq!(lines[1].0, "RCLONE_CONFIG_IUM_DRIVE_TOKEN");
+        assert_eq!(lines[1].1, "{}");
     }
 
     #[test]

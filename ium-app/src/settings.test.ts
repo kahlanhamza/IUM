@@ -9,12 +9,12 @@ import { canSave, changedFields, toRows, type AdapterViews } from "./settings";
 
 const views: AdapterViews = {
   mega: {
-    user: { label: "Email", secret: false, required: true, present: true, value: "u@x" },
-    pass: { label: "Password", secret: true, required: true, present: true, value: null },
-    twofa: { label: "2FA code", secret: true, required: false, present: false, value: null },
+    user: { label: "Email", secret: false, required: true, present: true, value: "u@x", hidden: false },
+    pass: { label: "Password", secret: true, required: true, present: true, value: null, hidden: false },
+    twofa: { label: "2FA code", secret: true, required: false, present: false, value: null, hidden: false },
   },
   terabox: {
-    ndus: { label: "ndus cookie", secret: true, required: true, present: false, value: null },
+    ndus: { label: "ndus cookie", secret: true, required: true, present: false, value: null, hidden: false },
   },
 };
 
@@ -85,5 +85,37 @@ describe("canSave — the required-field contract", () => {
     const rows = toRows(views);
     rows.mega.find((r) => r.name === "user")!.draft = "kept";
     expect(canSave(rows.mega)).toBe(true);
+  });
+});
+
+describe("hidden rows — the #84 Google Drive token is a chip, not an input", () => {
+  const driveViews: AdapterViews = {
+    google_drive: {
+      token: {
+        label: "Google sign-in",
+        secret: true,
+        required: true,
+        present: true,
+        value: null,
+        hidden: true,
+      },
+    },
+  };
+
+  it("toRows carries the hidden flag from the view", () => {
+    const rows = toRows(driveViews);
+    const token = rows.google_drive.find((r) => r.name === "token")!;
+    expect(token.hidden).toBe(true);
+    expect(token.present).toBe(true);
+    expect(token.value).toBeNull(); // a secret: the value never travels
+  });
+
+  it("a hidden required row counts for canSave exactly like any row", () => {
+    const rows = toRows(driveViews);
+    expect(canSave(rows.google_drive)).toBe(true); // present = savable
+    const cleared = toRows(driveViews);
+    cleared.google_drive.find((r) => r.name === "token")!.present = false;
+    cleared.google_drive.find((r) => r.name === "token")!.saved = false;
+    expect(canSave(cleared.google_drive)).toBe(false); // absent + no draft = blocked
   });
 });
