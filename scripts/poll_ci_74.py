@@ -11,7 +11,7 @@ H = {
     "User-Agent": "ium-loop",
 }
 REPO = "https://api.github.com/repos/kahlanhamza/IUM"
-SHA = "c170ded"
+SHA = "1c0c041"
 
 
 def find_run():

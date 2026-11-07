@@ -92,7 +92,23 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           npm ci --no-audit --no-fund
+          # lane 8 (#76): remap the registry prefix — dep panic locations
+          # otherwise embed the build host's absolute registry path; the
+          # --bin gate below verifies the output and fails the release on
+          # any surviving /home// /Users// C:\Users\ string.
+          export RUSTFLAGS="${RUSTFLAGS:-} $(bash ../scripts/rustflags_remap.sh)"
           npm run tauri build -- --bundles "${{ matrix.bundles }}"
+      # ---- product bar #66 lane 8 (#76): the RE-resistance binary gate ----
+      # The shipped binary must be stripped, carry no credential VALUES and
+      # no build-machine paths — a FAIL stops this job before collect/upload
+      # can ship it (amendment items 1 + 3; the checklist is doc 12).
+      - name: RE-resistance binary gate
+        working-directory: ium-app
+        shell: bash
+        run: |
+          BIN="../target/release/ium-app"
+          if [ -f "$BIN.exe" ]; then BIN="$BIN.exe"; fi
+          bash ../scripts/re_resistance_check.sh --bin "$BIN"
       - name: Collect artifacts + sha256 + measured sizes
         working-directory: ium-app
         run: bash ../scripts/release_collect.sh

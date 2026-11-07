@@ -48,6 +48,16 @@ jobs:
       - name: Installer-size gate (self-test)
         if: runner.os == 'Linux'
         run: python3 scripts/installer_size_gate.py --self-test
+      # Product bar #66 lane 8 (#76): the RE-resistance repo pins stay alive
+      # between releases — the [profile.release] strip pin, the checklist
+      # doc and the source panic-path audit, plus the synthetic detector
+      # self-test, on every push (cheap, Linux-only, no new job — the
+      # CI-economics rule).
+      - name: RE-resistance gate (repo pins + self-test)
+        if: runner.os == 'Linux'
+        run: |
+          bash scripts/re_resistance_check.sh --selftest
+          bash scripts/re_resistance_check.sh --repo
       # Issue #19 (M5 API freeze): the public surface stays documented —
       # rustdoc must build warning-free on every push.
       - name: Docs (warnings as errors)

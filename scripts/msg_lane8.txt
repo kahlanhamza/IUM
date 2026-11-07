@@ -1,0 +1,40 @@
+feat(repo): the RE-resistance bar — stripped releases, no leaks, the flip checklist (Closes #76)
+
+Lane 8 of #66, owner-approved for all lanes (amendment comment
+6673366729). The four amendment pins, built and verified:
+
+1. STRIPPED RELEASES: [profile.release] strip = "symbols" in the root
+   Cargo.toml (workspace-wide). Cargo's default was strip="none" — the
+   symbol table shipped until now. Verified on a real release-profile
+   build (drill-child: file reports "stripped").
+2. NO PANIC PATHS PRINT INTERNAL PATHS: the source audit (in --repo,
+   every push) fails on any panic!/expect!/unwrap! message interpolating
+   a path (.display()/{:?}); clean today. The telemetry panic location
+   distinction is documented (compile-time workspace-relative, LOCAL
+   buffer — not a user or build-machine path).
+3. SECRETS NEVER EMBEDDED: scripts/re_resistance_check.sh --bin scans
+   the built binary for credential VALUE shapes (GitHub/AWS/sk-/xox/PEM/
+   terabox cookie values) — never printing matched values; protocol
+   NAMES (csrfToken, jsToken, ndus, browserid) are vocabulary, not
+   secrets, and the selftest proves the distinction.
+4. THE FLIP CHECKLIST: docs/12_RE_Resistance_Checklist.md — the four
+   pins with mechanism + verification + status, plus the ordered
+   private-flip procedure and the honest not-promised list.
+
+THE GATE'S FIRST REAL CATCH: the first release-profile build leaked
+/home/ into the binary — registry-dep panic locations embed the build
+host's absolute registry path as Location strings. Stable fix:
+scripts/rustflags_remap.sh computes the CARGO_HOME registry prefix the
+way cargo resolves it (env, not the rustup sysroot — the first cut was
+wrong and the gate caught it twice) and emits separator variants;
+release.yml exports it into RUSTFLAGS; cargo's trim-paths is
+nightly-only and was rejected. After the remap the same binary is
+GREEN: stripped, no secret values, no build paths.
+
+WIRING: ci.yml core job (Linux step, no new job — the CI-economics
+rule) runs --selftest + --repo on every push; release.yml runs the
+--bin gate per-OS after build, BEFORE collect/upload — a FAIL stops the
+release. Selftest verdicts: secrets / stripped / repo-pins, six real
+self-defects caught pre-ship. RED evidence: comment 6699954232.
+
+Closes #76.

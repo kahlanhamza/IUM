@@ -11,6 +11,22 @@ edition = "2021"
 license = "MIT"
 authors = ["IUM community"]
 
+# RE-resistance pin (issue #66 amendment, lane 8 #76, amendment item 1):
+# release builds ship STRIPPED — no symbol table, no debug info recoverable
+# from the shipped binary. Verified per-release by
+# scripts/re_resistance_check.sh --bin (release.yml) and pinned in-tree by
+# --repo (ci.yml). NOT planned: obfuscation (breaks crash triage).
+#
+# NOTE: registry-dependency panic locations embed ABSOLUTE build-host paths
+# (/home/…, /Users/…, C:\Users\…) — caught by the --bin gate on the first
+# real release-profile build (s3_drill_child, lane 8 evidence). The stable
+# fix is --remap-path-prefix (computed per machine by
+# scripts/rustflags_remap.sh, wired into the release.yml build step);
+# cargo's `trim-paths` profile option is nightly-only on the stable
+# toolchain and must not be used here.
+[profile.release]
+strip = "symbols"
+
 [workspace.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }
