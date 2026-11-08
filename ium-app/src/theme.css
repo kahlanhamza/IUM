@@ -954,6 +954,147 @@ button.sitem:hover {
   }
 }
 
+/* ------------------------------------------------- command palette (#91)
+   The keyboard-first surface: the Settings modal's width token (640 px)
+   anchored 96 px from the window top over its own smoke scrim. 36 px rows
+   (the content-row rhythm), the ink active row, mono keycaps, hairline
+   footer. Shadows ride ONLY this floating surface (the shadow law). */
+.cmdk-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  z-index: 40;
+  animation: fade-in var(--dur) var(--ease);
+}
+
+.cmdk {
+  position: fixed;
+  left: 50%;
+  top: 96px;
+  transform: translateX(-50%);
+  width: 640px;
+  max-width: min(92vw, 640px);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-3);
+  z-index: 41;
+  overflow: hidden;
+  animation: cmdk-in var(--dur) var(--ease);
+}
+
+@keyframes cmdk-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px);
+  }
+}
+
+.cmdk-input {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+}
+
+.cmdk-input input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+.cmdk-input input::placeholder {
+  color: var(--text-3);
+}
+
+.keycap {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2.5px 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface-2);
+  line-height: 1;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.cmdk-chip .keycap {
+  margin-left: 2px;
+}
+
+.cmdk-list {
+  padding: 6px 8px 10px;
+  max-height: min(48vh, 420px);
+  overflow-y: auto;
+}
+
+.cmdk-label {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 10px 8px 6px;
+}
+
+.cmdk-row {
+  height: 36px;
+  border-radius: var(--r-ctl);
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 8px;
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: default;
+}
+
+.cmdk-row.active {
+  background: var(--accent-subtle);
+  color: var(--text);
+  font-weight: 550;
+}
+
+.cmdk-row-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cmdk-keys {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.cmdk-empty {
+  padding: 22px 10px 26px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.cmdk-foot {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* --------------------------------------------------------- modal internals */
+
 .mhead {
   padding: 16px 18px 10px;
   display: flex;

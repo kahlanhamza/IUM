@@ -12,9 +12,10 @@
  * about what the engine says. The anatomy changes presentation only — the
  * event math, the honest badges, and the e2e seams are untouched.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, type AdapterSchema, type JobRecord, type JobSnapshot } from "./api";
+import { CommandPalette, modGlyph, type Command } from "./components/CommandPalette";
 import { CreateJobForm } from "./components/CreateJobForm";
 import { InspectorDrawer } from "./components/InspectorDrawer";
 import { JobsTable, type JobView } from "./components/JobsTable";
@@ -102,6 +103,7 @@ export default function App() {
   const [inspected, setInspected] = useState<JobSnapshot | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [lanes, setLanes] = useState<Lane[]>([]);
   const [themePref, setThemePref] = useThemePref();
@@ -236,6 +238,88 @@ export default function App() {
     document.getElementById("upload-path")?.focus();
   }, []);
 
+  // --- the ⌘K command palette (#91) — every command is REAL ----------------
+  // The honest batch verbs: one engine call per job, results counted, and a
+  // zero-candidate run says so (the palette never pretends).
+  const pauseAllActive = useCallback(() => {
+    const active = jobs.filter((r) => inFilter("active", r.state));
+    if (active.length === 0) {
+      pushToast("ok", APP_COPY.noActiveUploads);
+      return;
+    }
+    Promise.allSettled(active.map((r) => api.pauseJob(r.id))).then((results) => {
+      refreshJobs();
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed > 0) onError(`pause failed: ${failed} of ${active.length} job(s)`);
+    });
+  }, [jobs, refreshJobs, pushToast, onError]);
+
+  const resumeAllPaused = useCallback(() => {
+    const paused = jobs.filter((r) => r.state === "paused");
+    if (paused.length === 0) {
+      pushToast("ok", APP_COPY.noPausedUploads);
+      return;
+    }
+    Promise.allSettled(paused.map((r) => api.resumeSignal(r.id))).then((results) => {
+      refreshJobs();
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed > 0) onError(`resume failed: ${failed} of ${paused.length} job(s)`);
+    });
+  }, [jobs, refreshJobs, pushToast, onError]);
+
+  // The user-initiated update check speaks BOTH ways (#80's boot check stays
+  // silent on failure; a command the user ran must answer).
+  const checkUpdatesNow = useCallback(() => {
+    checkForUpdate()
+      .then((info) =>
+        pushToast(
+          "ok",
+          info
+            ? APP_COPY.updateAvailable.replace("{version}", info.version)
+            : APP_COPY.upToDate,
+        ),
+      )
+      .catch((e) => pushToast("error", humanizeError(`update check failed: ${e}`).title));
+  }, [pushToast]);
+
+  const commands = useMemo<Command[]>(
+    () => [
+      { id: "new-upload", label: "New upload…", group: "Actions", keys: [modGlyph(), "N"], run: focusNewUpload },
+      { id: "pause-all", label: "Pause all active uploads", group: "Actions", run: pauseAllActive },
+      { id: "resume-all", label: "Resume all paused uploads", group: "Actions", run: resumeAllPaused },
+      { id: "check-updates", label: "Check for updates", group: "Actions", run: checkUpdatesNow },
+      { id: "goto-all", label: "All uploads", group: "Go to", keys: [modGlyph(), "1"], run: () => setFilter("all") },
+      { id: "connect", label: "Connect a destination…", group: "Go to", keys: [modGlyph(), "3"], run: () => setSettingsOpen(true) },
+      { id: "settings", label: "Open Settings", group: "Go to", keys: [modGlyph(), ","], run: () => setSettingsOpen(true) },
+    ],
+    [focusNewUpload, pauseAllActive, resumeAllPaused, checkUpdatesNow],
+  );
+
+  // The global reflexes (#91): ⌘K toggles the palette, ⌘N and ⌘, are the two
+  // standard desktop shortcuts that work with the palette closed too. Window
+  // listener — while IUM is focused, these never fall through to a web
+  // reflex; Tauri owns the window.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === "k") {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+      } else if (key === "n") {
+        e.preventDefault();
+        setPaletteOpen(false);
+        focusNewUpload();
+      } else if (key === ",") {
+        e.preventDefault();
+        setPaletteOpen(false);
+        setSettingsOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [focusNewUpload]);
+
   const views: JobView[] = jobs
     .filter((r) => inFilter(filter, r.state))
     .map((record) => ({
@@ -263,6 +347,17 @@ export default function App() {
         </button>
         <span className="tb-sep" aria-hidden="true" />
         <span className="spacer" />
+        {/* The ⌘K entry point (#91) — the chip teaches the shortcut, the
+            palette does the work. A real button, platform-true glyph. */}
+        <button
+          className="btn btn--ghost cmdk-chip"
+          aria-label="Commands — open the command palette"
+          title="Commands"
+          onClick={() => setPaletteOpen(true)}
+        >
+          <span aria-hidden="true">Commands</span>
+          <span className="keycap" aria-hidden="true">{modGlyph()}K</span>
+        </button>
         <ThemeToggle value={themePref} onChange={setThemePref} />
         <span className="tb-sep" aria-hidden="true" />
         {/* The credentials vault (#69): a product surface, not env vars.
@@ -412,6 +507,12 @@ export default function App() {
         onError={onError}
         onSaved={(message) => pushToast("ok", message)}
         engineDetail={engine.kind === "connecting" ? undefined : engine.detail}
+      />
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        commands={commands}
       />
 
       <div className="toast-stack" role="status" aria-live="polite">

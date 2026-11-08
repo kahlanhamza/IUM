@@ -165,3 +165,12 @@ export function IconCloud(props: P) {
     </svg>
   );
 }
+
+export function IconSearch(props: P) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m15.8 15.8 4.4 4.4" />
+    </svg>
+  );
+}

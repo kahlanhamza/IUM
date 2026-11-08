@@ -165,6 +165,12 @@ export const APP_COPY = {
   oauthWaiting:
     "Your browser opened — sign in to the platform there. IUM finishes by itself when you do.",
   oauthDone: "Connected — the token lives in your OS keychain.",
+  // #91: the command palette's honest answers. The batch commands report
+  // reality — a zero-candidate run says so instead of pretending; a user
+  // initiated update check speaks even when the answer is "no".
+  noActiveUploads: "No active uploads to pause.",
+  noPausedUploads: "No paused uploads to resume.",
+  upToDate: "IUM is up to date.",
 } as const;
 
 /**
