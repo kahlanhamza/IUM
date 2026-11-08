@@ -207,24 +207,98 @@ impl Wd {
         .map(|_| ())
     }
 
+    /// Native typing under the suite's explicit-poll contract (the ca8d04b
+    /// CI lesson, #87): WebKit refused an interaction microseconds into a
+    /// fresh reveal under xvfb ("element not interactable"), so a 400 of
+    /// that class is retried inside a bounded budget before it fails — and
+    /// a final failure carries the interactability forensics so the next
+    /// RED names its culprit instead of offering a guess.
     async fn send_keys(&self, eid: &str, text: &str) -> Result<(), String> {
-        self.call(
-            reqwest::Method::POST,
-            &format!("/element/{eid}/value"),
-            json!({"text": text, "value": text.chars().collect::<Vec<_>>()}),
-        )
-        .await
-        .map(|_| ())
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match self
+                .call(
+                    reqwest::Method::POST,
+                    &format!("/element/{eid}/value"),
+                    json!({"text": text, "value": text.chars().collect::<Vec<_>>()}),
+                )
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) if e.contains("not interactable") && Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                Err(e) => {
+                    if e.contains("not interactable") {
+                        let report = self.interactability_report(eid).await;
+                        return Err(format!("{e} — forensics: {report}"));
+                    }
+                    return Err(e);
+                }
+            }
+        }
     }
 
+    /// Clearing under the same explicit-poll contract as `send_keys` — the
+    /// operation the ca8d04b CI run actually tripped on.
     async fn clear(&self, eid: &str) -> Result<(), String> {
-        self.call(
-            reqwest::Method::POST,
-            &format!("/element/{eid}/clear"),
-            json!({}),
-        )
-        .await
-        .map(|_| ())
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match self
+                .call(
+                    reqwest::Method::POST,
+                    &format!("/element/{eid}/clear"),
+                    json!({}),
+                )
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(e) if e.contains("not interactable") && Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                Err(e) => {
+                    if e.contains("not interactable") {
+                        let report = self.interactability_report(eid).await;
+                        return Err(format!("{e} — forensics: {report}"));
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    /// The interactability forensics (the #87 CI lesson): on a final
+    /// "not interactable" refusal, ask the PAGE — not the driver — what it
+    /// sees: the element's box, its displayed/disabled/readonly state, and
+    /// which element actually sits at its click point. Rides execute/sync,
+    /// which has no interactability gate, so it answers even while the
+    /// input path refuses.
+    async fn interactability_report(&self, eid: &str) -> String {
+        let script = "\
+            const el = arguments[0];\
+            const r = el.getBoundingClientRect();\
+            const cx = r.left + r.width / 2, cy = r.top + r.height / 2;\
+            const top = document.elementFromPoint(cx, cy);\
+            const name = (n) => n ? n.tagName.toLowerCase() + (n.id ? '#' + n.id : '') : null;\
+            return JSON.stringify({\
+              displayed: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length),\
+              disabled: el.disabled === true,\
+              readonly: el.readOnly === true,\
+              rect: {x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height)},\
+              topAtPoint: name(top),\
+              topIsSelfOrInside: !!(top && (el.contains(top) || top.contains(el)))\
+            });";
+        match self
+            .call(
+                reqwest::Method::POST,
+                "/execute/sync",
+                json!({"script": script, "args": [{ (VALUE_ELEMENT_KEY): eid }]}),
+            )
+            .await
+        {
+            Ok(v) => v.as_str().unwrap_or("?").to_string(),
+            Err(e) => format!("forensics unavailable: {e}"),
+        }
     }
 
     async fn text(&self, eid: &str) -> Result<String, String> {
@@ -489,6 +563,16 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         source.len(),
         source.chars().take(400).collect::<String>()
     );
+
+    // ---- the handoff marker (#87) ------------------------------------------
+    // The main window is born HIDDEN — the launch window's design. The shell
+    // sets `data-revealed="1"` on <html> in reveal_main: the splash handed
+    // off (engine answered or refused) or the 8 s watchdog fired. Waiting
+    // for the marker IS waiting for the handoff — mechanical, not a sleep —
+    // and a wedged boot fails HERE with a sentence that says so.
+    wd.wait_for_element("html[data-revealed='1']", Duration::from_secs(30))
+        .await
+        .expect("handoff marker — the shell never revealed the main window");
 
     // ---- app booted: the form reflects the engine registry -----------------
     // The Upload button is disabled until `list_adapters` resolved and a path

@@ -1,0 +1,30 @@
+fix(shell,e2e): the handoff marker + interactability polls — the lane waits for the reveal (refs #87)
+
+The push of ca8d04b gave app-e2e its first look at the launch window and
+CI caught the seam (run 42441459949, job 128611379156): 7/8 green, then
+the WebDriver lane's clear() refused with "element not interactable" on
+#upload-connections — after two native send_keys had succeeded, seconds
+after the 8 s watchdog had long revealed the main window. Wire facts and
+the fix design are on the issue (comment 6716644548).
+
+THE FIX — two structural changes, zero app-behavior change:
+
+1. The handoff marker: reveal_main now declares the reveal in the page
+   itself (main.eval sets data-revealed="1" on <html>), so the e2e waits
+   for html[data-revealed='1'] (30 s budget) before its first
+   interaction — "the WebDriver lane drives the main window after
+   handoff" becomes a mechanical wait, not an assumption. Idempotent by
+   construction: both the splash handoff and the watchdog call
+   reveal_main.
+
+2. Interactability is now an explicit poll: send_keys/clear gain the
+   doctrine wait_for_element always had — a 400 "not interactable" is
+   retried inside a bounded budget (10 s), and a final failure carries
+   the page's own forensics (box, displayed/disabled/readonly, and
+   document.elementFromPoint at the click point, via the gate-free
+   execute/sync) so a recurrence NAMES its culprit.
+
+Gates: cargo fmt --all -- --check clean; cargo check -p ium-e2e --tests
+clean (the e2e crate compiles); the WebKit verdict itself is CI's to
+give — the re-run is the lane's green. Evidence files for the #86/#87
+RED reproductions ride this commit.

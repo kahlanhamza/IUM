@@ -890,6 +890,11 @@ fn reveal_main(app: &tauri::AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.show();
         let _ = main.set_focus();
+        // The handoff marker (#87): the shell declares the reveal in the
+        // page itself, so a harness (the WebDriver lane) can wait for the
+        // handoff mechanically instead of assuming timings. Idempotent —
+        // reveal_main is called by both the splash and the watchdog.
+        let _ = main.eval("document.documentElement.dataset.revealed = '1';");
     }
     if let Some(splash) = app.get_webview_window("splash") {
         let _ = splash.close();
