@@ -892,7 +892,11 @@ fn secret_mode(app: tauri::AppHandle) -> String {
 /// chrome tokens under `data-material="mica"`; the text tokens never move).
 ///
 /// The build number parser is platform-free so the unit tests run on every
-/// CI runner; only the caller touches `cmd /c ver`.
+/// CI runner. On non-Windows the lib target has no caller (only the tests
+/// reference it) — the dead-code silence is the design, not an accident;
+/// `expect` would backfire on the lib-test target where the lint never
+/// fires (the tests DO use it).
+#[cfg_attr(all(not(target_os = "windows"), not(test)), allow(dead_code))]
 fn parse_windows_build(ver: &str) -> u32 {
     ver.split(['[', ']', '\r', '\n'])
         .find_map(|seg| {
