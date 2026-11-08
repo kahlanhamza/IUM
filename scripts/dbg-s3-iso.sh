@@ -18,7 +18,7 @@ URL="https://github.com/seaweedfs/seaweedfs/releases/download/${VERSION}/${ASSET
 WEED="$(ls -t /tmp/*/weed /tmp/weed 2>/dev/null | head -1 || true)"
 if [ -z "$WEED" ] || [ ! -x "$WEED" ]; then
   echo "[dbg] downloading SeaweedFS $VERSION"
-  curl -sL --retry 3 -o "$WORK/$ASSET" "$URL"
+  curl -fsL --retry 3 --retry-delay 2 -o "$WORK/$ASSET" "$URL" || { echo "[dbg] download failed (upstream error?)"; exit 1; }
   tar -xzf "$WORK/$ASSET" -C "$WORK" weed
   WEED="$WORK/weed"
 fi

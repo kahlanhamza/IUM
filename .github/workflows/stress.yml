@@ -60,13 +60,14 @@ jobs:
 
       - name: Fetch real film assets
         run: |
-          curl -sL --retry 3 -o /tmp/bbb_1080p.mp4 \
+          # -f is the #90 guard: an upstream error page must never become the film
+          curl -fsL --retry 3 --retry-delay 2 -o /tmp/bbb_1080p.mp4 \
             "https://archive.org/download/big_buck_bunny_1080p_stereo/big_buck_bunny_1080p_stereo.mp4"
           echo "5b3c5575ce6248421272aae3f6da87fdeb48b5bfb7e8e99551d8e98b58012885  /tmp/bbb_1080p.mp4" | sha256sum -c -
-          curl -sL --retry 3 -o /tmp/bbb_30mb.mp4 \
+          curl -fsL --retry 3 --retry-delay 2 -o /tmp/bbb_30mb.mp4 \
             "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_30MB.mp4"
+          echo "5b603ec1db36cc15d5e48ab9ea6e72ffd6a65e325f2bb218e9ed298974b453bc  /tmp/bbb_30mb.mp4" | sha256sum -c -
           [ "$(stat -c%s /tmp/bbb_1080p.mp4)" = "322866076" ]
-          [ "$(stat -c%s /tmp/bbb_30mb.mp4)" -ge 10000000 ]
 
       # S1–S5 with the pinned real films: the 308 MiB film carries the size
       # proof (S1) and joins the fleet (S5); the failure-mode scenarios

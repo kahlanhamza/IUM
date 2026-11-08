@@ -51,10 +51,11 @@ case "$os" in
   *) die "unsupported OS: $os" ;;
 esac
 say "pinned server: tusd ${VERSION} (${ASSET})"
-curl -sSL --retry 3 -o "$WORK/$ASSET" "$BASE_URL/$ASSET" || die "download $ASSET"
-curl -sSL --retry 3 -o "$WORK/$ASSET.sha256" "$BASE_URL/$ASSET.sha256" || die "download sha256"
+curl -fsSL --retry 3 --retry-delay 2 -o "$WORK/$ASSET" "$BASE_URL/$ASSET" || die "download $ASSET — upstream error"
+curl -fsSL --retry 3 --retry-delay 2 -o "$WORK/$ASSET.sha256" "$BASE_URL/$ASSET.sha256" || die "download sha256 — upstream error"
 actual="$(sha256sum "$WORK/$ASSET" | cut -d' ' -f1)"
 expected="$(cut -d' ' -f1 < "$WORK/$ASSET.sha256")"
+echo "$expected" | grep -Eq '^[0-9a-fA-F]{64}$' || die "sha256 sidecar is not a digest — upstream served an error page?"
 [ "$actual" = "$expected" ] || die "sha256 mismatch (expected $expected, got $actual)"
 say "sha256 verified"
 case "$ASSET" in

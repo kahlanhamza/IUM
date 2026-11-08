@@ -222,8 +222,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: SBOM — fetch pinned syft (checksum-verified, in-logs)
         run: |
-          curl -sSLO "https://github.com/anchore/syft/releases/download/v1.57.0/syft_1.57.0_linux_amd64.tar.gz"
-          curl -sSLO "https://github.com/anchore/syft/releases/download/v1.57.0/syft_1.57.0_checksums.txt"
+          curl -fsSLO --retry 3 --retry-delay 2 "https://github.com/anchore/syft/releases/download/v1.57.0/syft_1.57.0_linux_amd64.tar.gz"
+          curl -fsSLO --retry 3 --retry-delay 2 "https://github.com/anchore/syft/releases/download/v1.57.0/syft_1.57.0_checksums.txt"
           grep 'linux_amd64.tar.gz$' syft_1.57.0_checksums.txt | sha256sum -c -
           tar xzf syft_1.57.0_linux_amd64.tar.gz syft
           ./syft version

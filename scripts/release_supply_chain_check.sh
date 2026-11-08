@@ -101,7 +101,8 @@ for a in json.load(open('$ASSETS_JSON')):
         print(a['browser_download_url'])")
   FILE="$TMP/$name"
   echo "verifying provenance: $name"
-  curl -sSL -H "Authorization: Bearer $TOKEN" -o "$FILE" "$URL"
+  curl -fsSL -H "Authorization: Bearer $TOKEN" -o "$FILE" "$URL" \
+    || fail "$name — asset download failed (upstream/API error)"
   DIGEST=$(sha256sum "$FILE" | cut -d' ' -f1)
   # The API wants the digest ALGORITHM-PREFIXED ("sha256:<hex>") — bare hex
   # always 404s (false negative proven live on the v0.1.1 attestations).
