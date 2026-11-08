@@ -96,10 +96,15 @@ check_stripped() {
 fallback_stripped() {
   local bin="$1"
   if command -v nm >/dev/null 2>&1; then
-    if nm "$bin" >/dev/null 2>&1; then
-      fail "$bin still has a symbol table (nm succeeds)"
+    # The verdict is the SYMBOL COUNT, not the exit status: BSD nm (macOS)
+    # exits 0 even for a stripped binary — "no name list" goes to stderr
+    # and stdout stays empty — so exit-status-only checking false-positives
+    # on every honestly-stripped Mach-O (release #13 proved it: strip(1)
+    # succeeded and the count-based verdict still failed it).
+    if [ "$(nm "$bin" 2>/dev/null | wc -l)" -gt 0 ]; then
+      fail "$bin still lists symbols via nm"
     fi
-    echo "RE-CHECK: $bin — no symbol table (nm fails) — stripped"
+    echo "RE-CHECK: $bin — zero symbols via nm — stripped"
   elif grep -aq RSDS "$bin" 2>/dev/null; then
     fail "$bin carries the RSDS codeview marker (debug data present)"
   else
