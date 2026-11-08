@@ -8,7 +8,14 @@ All notable changes to IUM are documented here. Format follows
 Every entry cites its issue numbers — evidence lives in the tracker, not in
 prose. An entry without verifiable issue numbers does not belong here.
 
-## [Unreleased]
+## [0.2.0] — 2026-11-08
+
+The design-and-manners cut: the Ink program's completion (palette, launch window,
+chrome anatomy, logo ladder), the owner-ordered follow-ups (⌘K palette, Windows 11
+Mica, OS notifications, the global speed cap), the destination lanes (WebDAV,
+Google Drive, YouTube — connect-by-account), painless auth (keychain vault, hot
+lanes, test-connection), signed auto-update, and the supply-chain curl hardening.
+Every entry cites its issue; evidence lives in the tracker.
 
 ### Added
 - The global speed cap (#94): one knob in Settings → Speed — bytes/sec

@@ -27,7 +27,7 @@ vi.mock("./updater", () => updaterMock);
 vi.mock("./api", () => ({
   api: {
     engineStatus: () =>
-      Promise.resolve("ium-core v0.1.1 ready — adapters: http_one_shot, s3_multipart, tus"),
+      Promise.resolve("ium-core v0.2.0 ready — adapters: http_one_shot, s3_multipart, tus"),
     listAdapters: () => Promise.resolve([]),
     listJobs: () => Promise.resolve([]),
     credentialsSchema: () => Promise.resolve([]),

@@ -34,7 +34,7 @@ async function expectAccessible(el: HTMLElement): Promise<void> {
 }
 
 const ENGINE_SENTENCE =
-  "ium-core v0.1.1 ready — adapters: http_one_shot, s3_multipart, tus";
+  "ium-core v0.2.0 ready — adapters: http_one_shot, s3_multipart, tus";
 
 const jobRecord = (id: string, state: string) => ({
   id,

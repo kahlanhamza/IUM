@@ -16,7 +16,7 @@ crashes and reboots — with *honest* badges where physics says a protocol canno
 [![nightly](https://github.com/kahlanhamza/IUM/actions/workflows/nightly.yml/badge.svg)](https://github.com/kahlanhamza/IUM/actions/workflows/nightly.yml)
 [![stress](https://github.com/kahlanhamza/IUM/actions/workflows/stress.yml/badge.svg)](https://github.com/kahlanhamza/IUM/actions/workflows/stress.yml)
 ![rust](https://img.shields.io/badge/rust-stable%201.99-blue)
-![tests](https://img.shields.io/badge/tests-313%20core%20%2B%20129%20UI-brightgreen)
+![tests](https://img.shields.io/badge/tests-321%20core%20%2B%20163%20UI-brightgreen)
 ![platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
 </div>
@@ -41,7 +41,7 @@ window), never in the chrome.
 | | |
 |---|---|
 | ![The main window — toolbar, library sidebar, intake, the dense upload list, the status bar](docs/screenshots/01-main-window.png) | ![The intake filled — a stat'ed file, destination, protocol](docs/screenshots/02-create-upload-filled.png) |
-| ![The docked inspector — the chunk grid, the job summary, the live journal](docs/screenshots/03-inspector-chunks.png) | ![Settings — the centered modal: the Privacy card leads, the vault lanes follow](docs/screenshots/04-settings-privacy.png) |
+| ![The docked inspector — the chunk grid, the job summary, the live journal](docs/screenshots/03-inspector-chunks.png) | ![Settings — the centered modal: Appearance, Notifications and Speed lead, the Privacy stance follows](docs/screenshots/04-settings-privacy.png) |
 | ![Settings — the credentials vault and About](docs/screenshots/05-settings-credentials.png) | ![The light scheme — the logo ink on paper white](docs/screenshots/06-main-window-light.png) |
 
 Every progress percent you see is journal truth — a paused, done or failed row shows
@@ -212,29 +212,32 @@ checksum-verified. Report vulnerabilities via a private GitHub security advisory
 
 ## Status & roadmap
 
-Milestones **M0–M9 are complete**: the engine (chunk algebra, journal, supervisor,
+Milestones **M0–M13 are complete**: the engine (chunk algebra, journal, supervisor,
 three transports), the speed architecture (link prober, adaptive fleet, lane floors,
-idle-progress timeouts), the KB/s ladder, the FEC and compression lanes, and the
-real-shell e2e. The **product bar** (#66) closed lane by lane with the same loop: the
-design system, the credentials vault, the error-copy table, the brand sheet and voice
-gate, the `.gitattributes` pin, the **written telemetry stance** (opt-out, local-only —
-#75), and the RE-resistance release bar (#76).
+idle-progress timeouts), the KB/s ladder, the FEC and compression lanes, the
+real-shell e2e, and the full Ink design program. The **product bar** (#66) closed lane
+by lane with the same loop: the design system, the credentials vault, the error-copy
+table, the brand sheet and voice gate, the `.gitattributes` pin, the **written
+telemetry stance** (opt-out, local-only — #75), and the RE-resistance release bar
+(#76).
 
 Since then: the **destination lanes** — WebDAV (#83), Google Drive one-click (#84 →
 #59), and YouTube with native resumable upload + the loopback Google sign-in (#85 →
 #60) — upload by **connecting the account**, plus painless auth (#81: OS-keychain
 secrets, hot lane registration, test-connection) and one-click connect sheets (#82).
 Signed auto-update (#80) ships in the shell. The **Ink program** is complete (#86 →
-#88): the two-ink palette with the logo-size ladder as repo law, the launch window
-(the dart at 96 px at first paint), and the four-pane chrome anatomy — the app looks
-like the mockups because the mockups' metrics are pinned by tests.
+#88), and its owner-ordered follow-ups landed: the **⌘K command palette** (#91 —
+keyboard-first, every command real), **Windows 11 Mica** behind the Ink chrome
+(#92 — build-gated: the OS verdict, not the API's opinion), **OS notifications**
+for the two terminal job states (#93 — focus-aware, basename-only, guarded), and
+the **global speed cap** (#94 — one knob, the sum across every upload and lane,
+hot, eviction-safe by construction).
 
-**Next (owner decides the order)**: keyboard-first polish (⌘K palette, shortcut map,
-hover row actions) and the materials pass (Windows 11 Mica, native menus) are queued
-design lanes. The release bar (#65) — per-OS installers — waits on the code-signing
-certificate, which only the owner can pin; the OAuth client id/secret for the Google
-lanes are likewise registered by the owner before the next release. Everything else
-currently open is polish under the standing product bar (#66).
+**Next (owner-pinned waits)**: the release bar (#65) — per-OS installers — waits on
+the code-signing certificate, which only the owner can pin; the OAuth client
+id/secret for the Google lanes are likewise registered by the owner before the next
+release. Everything else currently open is polish under the standing product bar
+(#66).
 
 ---
 

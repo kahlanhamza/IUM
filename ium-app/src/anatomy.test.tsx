@@ -36,7 +36,7 @@ function* ruleLines(): Generator<[string, string]> {
 }
 
 const ENGINE_SENTENCE =
-  "ium-core v0.1.1 ready — adapters: http_one_shot, s3_multipart, tus";
+  "ium-core v0.2.0 ready — adapters: http_one_shot, s3_multipart, tus";
 
 vi.mock("./api", () => ({
   api: {
@@ -189,7 +189,7 @@ describe("the anatomy in the rendered shell (#88)", () => {
     const { container } = render(<App />);
     await waitFor(() => expect(container.querySelector(".statusbar")).not.toBeNull());
     const bar = container.querySelector(".statusbar")!.textContent ?? "";
-    expect(bar).toContain("v0.1.1");
+    expect(bar).toContain("v0.2.0");
     expect(bar).not.toContain("adapters:");
     expect(bar).not.toMatch(/ium-core v/);
   });
@@ -198,7 +198,7 @@ describe("the anatomy in the rendered shell (#88)", () => {
 describe("parseVersion — the status bar's one piece of presentation math", () => {
   it("reads the engine's own sentence, or admits it cannot", async () => {
     const { parseVersion } = await import("./logic");
-    expect(parseVersion(ENGINE_SENTENCE)).toBe("v0.1.1");
+    expect(parseVersion(ENGINE_SENTENCE)).toBe("v0.2.0");
     expect(parseVersion("no version in here")).toBeNull();
     expect(parseVersion("ium-core v10.20.30 ready")).toBe("v10.20.30");
   });
