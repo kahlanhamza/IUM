@@ -1,0 +1,360 @@
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+@font-face{font-family:'Inter';font-weight:400;font-style:normal;
+  src:url('node_modules/@fontsource/inter/files/inter-latin-400-normal.woff2') format('woff2')}
+@font-face{font-family:'Inter';font-weight:500;font-style:normal;
+  src:url('node_modules/@fontsource/inter/files/inter-latin-500-normal.woff2') format('woff2')}
+@font-face{font-family:'Inter';font-weight:600;font-style:normal;
+  src:url('node_modules/@fontsource/inter/files/inter-latin-600-normal.woff2') format('woff2')}
+@font-face{font-family:'JetBrains Mono';font-weight:400;font-style:normal;
+  src:url('node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2') format('woff2')}
+@font-face{font-family:'JetBrains Mono';font-weight:500;font-style:normal;
+  src:url('node_modules/@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2') format('woff2')}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%}
+body{
+  font-family:'Inter',system-ui,sans-serif;
+  font-feature-settings:"calt","kern","liga","ss03";
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  background:linear-gradient(140deg,var(--desk1),var(--desk2));
+  display:grid;place-items:center;overflow:hidden;user-select:none;
+}
+:root, [data-theme="light"]{
+  --desk1:#EAEDF2; --desk2:#D8DDE5;
+  --chrome:#F5F6F8; --content:#FFFFFF; --panel:#FAFBFC;
+  --text:#0F172A; --text2:#4A5670; --text3:#8C96A8;
+  --line:#E7EAF0; --line2:#D3D9E2;
+  --wash:rgba(15,23,42,.055); --track:rgba(15,23,42,.085);
+  --fill:#0F172A; --fill-text:#FFFFFF;
+  --red:#C43A2B; --red-soft:rgba(196,58,43,.09);
+  --scrim:rgba(15,23,42,.35);
+  --keycap:rgba(15,23,42,.045);
+  --search-bg:#FFFFFF;
+  --win-sh:0 42px 90px rgba(15,23,42,.26),0 10px 28px rgba(15,23,42,.10);
+  --modal-sh:0 30px 80px rgba(15,23,42,.24),0 6px 20px rgba(15,23,42,.10);
+  --gclose:rgba(15,23,42,.06);
+}
+[data-theme="dark"]{
+  --desk1:#1A1E25; --desk2:#0E1116;
+  --chrome:#0B101A; --content:#0E1521; --panel:#121A29;
+  --text:#EDF1F8; --text2:rgba(237,241,248,.64); --text3:rgba(237,241,248,.38);
+  --line:rgba(255,255,255,.075); --line2:rgba(255,255,255,.16);
+  --wash:rgba(237,241,248,.07); --track:rgba(237,241,248,.11);
+  --fill:#E9EEF6; --fill-text:#0B101A;
+  --red:#FF8F86; --red-soft:rgba(255,143,134,.12);
+  --scrim:rgba(3,7,13,.55);
+  --keycap:rgba(237,241,248,.06);
+  --search-bg:rgba(237,241,248,.045);
+  --win-sh:0 42px 90px rgba(0,0,0,.55),0 10px 28px rgba(0,0,0,.35);
+  --modal-sh:0 30px 80px rgba(0,0,0,.55),0 6px 20px rgba(0,0,0,.4);
+  --gclose:rgba(237,241,248,.08);
+}
+
+/* ------------------------------------------------------------ window */
+.win{width:1280px;height:800px;border-radius:10px;overflow:hidden;
+  border:1px solid var(--line2);box-shadow:var(--win-sh);
+  display:flex;flex-direction:column;background:var(--content);position:relative}
+
+/* ------------------------------------------------- titlebar / toolbar */
+.titlebar{height:48px;flex:none;display:flex;align-items:center;
+  padding:0 14px;background:var(--chrome);border-bottom:1px solid var(--line)}
+.tl{display:flex;gap:8px;margin-right:20px}
+.tl i{width:12px;height:12px;border-radius:50%;display:block;box-shadow:inset 0 0 0 1px rgba(0,0,0,.14)}
+.tl i:nth-child(1){background:#FF5F57}.tl i:nth-child(2){background:#FEBC2E}.tl i:nth-child(3){background:#28C840}
+.tb{display:flex;align-items:center}
+.btn{height:28px;border-radius:6px;display:inline-flex;align-items:center;gap:7px;
+  font-size:12.5px;font-weight:500;padding:0 10px;border:1px solid transparent;
+  color:var(--text2);background:transparent;white-space:nowrap}
+.btn.primary{background:var(--fill);color:var(--fill-text);padding:0 13px;font-weight:500}
+.btn.sm{height:24px;font-size:12px;padding:0 10px}
+.btn.sm.primary{padding:0 12px}
+.btn.ghost{border-color:var(--line2)}
+.sep{width:1px;height:18px;background:var(--line);margin:0 9px}
+.spacer{flex:1}
+.search{width:228px;height:28px;border:1px solid var(--line2);border-radius:6px;
+  background:var(--search-bg);display:flex;align-items:center;gap:7px;
+  padding:0 6px 0 9px;color:var(--text3);font-size:12.5px}
+.key{font-family:'JetBrains Mono';font-size:10px;padding:2.5px 5px;border:1px solid var(--line2);
+  border-radius:4px;background:var(--keycap);line-height:1;color:var(--text3)}
+
+/* ------------------------------------------------------------ sidebar */
+.main{flex:1;display:flex;min-height:0}
+.sidebar{width:210px;flex:none;background:var(--chrome);border-right:1px solid var(--line);
+  padding:10px 8px;display:flex;flex-direction:column;gap:1px;overflow:hidden}
+.slabel{font-size:10px;font-weight:600;letter-spacing:.9px;color:var(--text3);
+  padding:12px 10px 5px;text-transform:uppercase}
+.sitem{height:28px;border-radius:6px;display:flex;align-items:center;gap:9px;
+  padding:0 8px;color:var(--text2);font-size:13px;flex:none}
+.sitem svg{flex:none}
+.sitem.active{background:var(--wash);color:var(--text);font-weight:500}
+.scount{margin-left:auto;font-family:'JetBrains Mono';font-size:10.5px;color:var(--text3)}
+.sdot-on{margin-left:auto;width:6px;height:6px;border-radius:50%;background:var(--fill)}
+.sdot-off{margin-left:auto;width:6px;height:6px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--text3)}
+.sadd{color:var(--text3)}
+
+/* ------------------------------------------------------------ content */
+.content{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--content)}
+.chead,.row{display:grid;grid-template-columns:minmax(0,1fr) 86px 106px 148px 90px 88px;
+  gap:12px;align-items:center;padding:0 16px}
+.chead{flex:none;height:30px;border-bottom:1px solid var(--line);
+  font-size:10px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--text3)}
+.chead .h{display:flex;align-items:center;gap:4px}
+.chead .r{text-align:right}
+.rows{flex:1;overflow:hidden}
+.row{height:36px;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:none}
+.row.sel{background:var(--wash)}
+.name{display:flex;align-items:center;gap:9px;min-width:0}
+.name svg{color:var(--text3);flex:none}
+.nm{font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+.num{font-family:'JetBrains Mono';font-size:11px;color:var(--text2);text-align:right;
+  font-variant-numeric:tabular-nums}
+.dest{font-size:12px;color:var(--text2);white-space:nowrap}
+.prog{display:flex;align-items:center;gap:8px}
+.track{width:86px;height:4px;border-radius:2px;background:var(--track);overflow:hidden;flex:none}
+.fill{height:100%;border-radius:2px;background:var(--fill)}
+.pct{font-family:'JetBrains Mono';font-size:10.5px;color:var(--text3);width:32px;text-align:right}
+.state{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text2);white-space:nowrap}
+.dot7{width:7px;height:7px;border-radius:50%;flex:none}
+.state.up .dot7{background:var(--fill)}
+.state.up .st{color:var(--text);font-weight:500}
+.state.queue .dot7{box-shadow:inset 0 0 0 1.5px var(--text3)}
+.state.fail{color:var(--red)}.state.fail .st{font-weight:500}
+
+/* ---------------------------------------------------------- statusbar */
+.status{flex:none;height:28px;display:flex;align-items:center;gap:12px;padding:0 14px;
+  border-top:1px solid var(--line);background:var(--chrome);font-size:11.5px;color:var(--text2)}
+.status .mono{font-family:'JetBrains Mono';font-size:10.5px;color:var(--text3);font-variant-numeric:tabular-nums}
+.stsep{width:1px;height:12px;background:var(--line)}
+.stgroup{display:flex;align-items:center;gap:8px}
+.stright{margin-left:auto;display:flex;align-items:center;gap:10px}
+.edot{width:6px;height:6px;border-radius:50%;background:var(--fill)}
+.red{color:var(--red)}
+
+/* ---------------------------------------------------------- inspector */
+.inspector{flex:none;height:150px;border-top:1px solid var(--line);background:var(--panel);
+  padding:11px 16px 12px;display:flex;flex-direction:column;gap:9px}
+.ihead{display:flex;align-items:center;gap:10px}
+.iname{font-size:13px;font-weight:600;color:var(--text)}
+.ipath{font-family:'JetBrains Mono';font-size:10.5px;color:var(--text3)}
+.iclose{margin-left:auto;color:var(--text3);display:flex}
+.icols{display:grid;grid-template-columns:290px 1fr 300px;gap:26px;flex:1;min-height:0}
+.cap{font-size:10px;font-weight:600;letter-spacing:.8px;color:var(--text3);
+  text-transform:uppercase;margin-bottom:7px}
+.mline{font-family:'JetBrains Mono';font-size:11px;color:var(--text2);
+  font-variant-numeric:tabular-nums;line-height:1.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jseq{color:var(--text3)}
+.chunks{display:grid;grid-template-columns:repeat(16,8px);grid-auto-rows:8px;gap:2.5px}
+.c{width:8px;height:8px;border-radius:2px;background:var(--track)}
+.c.done{background:var(--fill)}
+.c.act{background:var(--fill);opacity:.45}
+
+/* -------------------------------------------------------------- modal */
+.scrim{position:absolute;inset:0;background:var(--scrim)}
+.modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:640px;background:var(--content);border:1px solid var(--line2);
+  border-radius:10px;box-shadow:var(--modal-sh);overflow:hidden}
+.mhead{padding:16px 18px 10px;display:flex;align-items:flex-start;justify-content:space-between}
+.mtitle{font-size:15px;font-weight:600;color:var(--text)}
+.msub{font-size:12px;color:var(--text3);margin-top:3px;line-height:1.45}
+.iclosebtn{color:var(--text3);display:flex;padding:3px;border-radius:5px}
+.mlist{padding:2px 10px 8px}
+.mrow{height:46px;display:flex;align-items:center;gap:11px;padding:0 8px;
+  border-bottom:1px solid var(--line)}
+.mrow:last-child{border-bottom:none}
+.micon{color:var(--text3);display:flex;flex:none}
+.mnames{min-width:0}
+.mname{font-size:13px;font-weight:500;color:var(--text)}
+.mhost{font-family:'JetBrains Mono';font-size:10px;color:var(--text3);margin-top:1.5px}
+.mright{margin-left:auto;display:flex;align-items:center;gap:12px}
+.mstate{font-size:12px;color:var(--text2)}
+.mstate.dim{color:var(--text3)}
+.msection{border-top:1px solid var(--line)}
+.mfoot{display:flex;align-items:center;padding:11px 18px;border-top:1px solid var(--line);gap:8px}
+.mhint{font-size:11px;color:var(--text3);display:flex;align-items:center;gap:6px}
+.sw{width:34px;height:20px;border-radius:10px;background:var(--track);position:relative;flex:none}
+.sw i{position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;
+  background:var(--content);box-shadow:inset 0 0 0 1px var(--line2)}
+
+/* ------------------------------------------------- per-OS window chrome */
+.w-mac{border-radius:10px}
+.w-win{border-radius:8px}
+.w-gnome{border-radius:12px;border:none}
+.caps{display:flex;align-items:center;margin-right:-14px;margin-left:6px}
+.capbtn{width:44px;height:30px;display:grid;place-items:center;color:var(--text2)}
+.gtitle{position:absolute;left:0;right:0;text-align:center;font-size:13.5px;
+  font-weight:600;color:var(--text);pointer-events:none}
+.gclose{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+  color:var(--text2);background:var(--gclose);margin-left:auto}
+
+/* ---------------------------------------------------------- launch page */
+body.launch{display:block;background:var(--chrome);overflow:auto}
+.lp{max-width:1120px;margin:0 auto;padding:0 44px}
+.lpnav{height:64px;display:flex;align-items:center;gap:30px}
+.lpbrand{display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px;color:var(--text)}
+.lplinks{display:flex;gap:24px;font-size:13px;color:var(--text2)}
+.btn-lg{height:40px;padding:0 20px;border-radius:8px;font-size:14px}
+.lphero{text-align:center;padding:56px 0 0}
+.chip{display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:10.5px;
+  color:var(--text2);border:1px solid var(--line2);border-radius:999px;padding:5px 12px}
+.chip i{width:5px;height:5px;border-radius:50%;background:var(--fill);display:block}
+.lph1{font-size:52px;font-weight:600;letter-spacing:-1.4px;color:var(--text);margin:22px 0 12px}
+.lpsub{font-size:16px;color:var(--text2);line-height:1.55}
+.ctas{display:flex;gap:10px;justify-content:center;margin-top:28px}
+.lpmeta{margin-top:16px;font-family:'JetBrains Mono';font-size:11px;color:var(--text3)}
+.lptile{width:76px;height:76px;border-radius:20px;background:var(--panel);border:1px solid var(--line2);
+  display:grid;place-items:center;margin:46px auto 56px;
+  box-shadow:0 0 110px 36px rgba(233,238,246,0.055)}
+.lpmx{border-top:1px solid var(--line);padding:38px 0 44px;display:grid;
+  grid-template-columns:300px 1fr;gap:64px}
+.mxt{font-size:20px;font-weight:600;color:var(--text)}
+.mxs{font-size:13px;color:var(--text2);margin-top:6px;line-height:1.5}
+.mxn{font-family:'JetBrains Mono';font-size:10.5px;color:var(--text3);margin-top:14px;line-height:1.6}
+.mxcols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:30px}
+.mxh{font-size:10.5px;font-weight:600;letter-spacing:.9px;text-transform:uppercase;
+  color:var(--text3);padding-bottom:9px;border-bottom:1px solid var(--line2)}
+.mxrow{height:37px;display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--line);font-size:13px;color:var(--text);white-space:nowrap}
+.lptrust{border-top:1px solid var(--line);padding:22px 0;display:flex;gap:40px;
+  font-size:12.5px;color:var(--text2)}
+.lptrust span{display:flex;align-items:center;gap:8px}
+.lptrust svg{color:var(--fill)}
+.lpfoot{border-top:1px solid var(--line);padding:20px 0 30px;display:flex;align-items:center;
+  font-size:12px;color:var(--text3)}
+.lpfoot .r{margin-left:auto;display:flex;gap:20px}
+
+/* ---------------------------------------------------- command palette */
+.pal{position:absolute;left:50%;top:96px;transform:translateX(-50%);
+  width:640px;background:var(--content);border:1px solid var(--line2);
+  border-radius:10px;box-shadow:var(--modal-sh);overflow:hidden}
+.palinput{height:48px;display:flex;align-items:center;gap:10px;padding:0 14px;
+  border-bottom:1px solid var(--line)}
+.palinput svg{color:var(--text3);flex:none}
+.palcaret{display:inline-block;width:1.5px;height:16px;background:var(--text);
+  vertical-align:-3.5px}
+.palplaceholder{font-size:13.5px;color:var(--text3)}
+.pallist{padding:6px 8px 10px}
+.pallabel{font-size:10px;font-weight:600;letter-spacing:.9px;text-transform:uppercase;
+  color:var(--text3);padding:10px 8px 6px}
+.palrow{height:36px;border-radius:6px;display:flex;align-items:center;gap:11px;
+  padding:0 8px;color:var(--text2);font-size:13px}
+.palrow svg{color:var(--text3);flex:none}
+.palrow.active{background:var(--wash);color:var(--text);font-weight:500}
+.palrow.active svg{color:var(--text)}
+.palkeys{margin-left:auto;display:flex;gap:4px}
+.palfoot{display:flex;align-items:center;gap:16px;padding:8px 14px;
+  border-top:1px solid var(--line);font-size:11px;color:var(--text3)}
+.palfoot span{display:flex;align-items:center;gap:6px}
+</style></head>
+<body data-theme="light"><div class="win w-mac" data-theme="light">
+<div class="titlebar">
+<div class="tl"><i></i><i></i><i></i></div>
+<div class="tb">
+<button class="btn primary"><svg class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5V4.5M7.5 9L12 4.5L16.5 9M5 15.5v3h14v-3"/></svg>New Upload</button>
+<div class="sep"></div>
+<button class="btn"><svg class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 5.8v12.4L18.5 12z" fill="currentColor" stroke="none"/></svg>Start</button>
+<button class="btn"><svg class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 5.5v13M15.5 5.5v13"/></svg>Pause</button>
+<button class="btn"><svg class="" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M10 4.5h4M6.8 7l.8 12.5h8.8L17.2 7M10 10.5v6M14 10.5v6"/></svg>Remove</button>
+</div><div class="spacer"></div>
+<div class="search"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M15.6 15.6L20 20"/></svg>Search uploads<span class="spacer"></span><span class="key">⌘K</span></div>
+<div class="sep"></div>
+<button class="btn" style="padding:0 8px"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="14.5" cy="7" r="2.1" fill="var(--chrome)"/><circle cx="8" cy="12" r="2.1" fill="var(--chrome)"/><circle cx="16.5" cy="17" r="2.1" fill="var(--chrome)"/></svg></button>
+</div>
+<div class="main">
+<div class="sidebar"><div class="slabel">Library</div><div class="sitem active"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span>All uploads</span><span class="scount">18</span></div><div class="sitem"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 5.8v12.4L18.5 12z" fill="currentColor" stroke="none"/></svg><span>Active</span><span class="scount">2</span></div><div class="sitem"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5l7.5 13h-15z" fill="currentColor" stroke="none"/></svg><span>Queued</span><span class="scount">1</span></div><div class="sitem"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span>Completed</span><span class="scount">14</span></div><div class="sitem"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg><span style="color:var(--red)">Failed</span><span class="scount">1</span></div><div class="slabel">Destinations</div><div class="sitem"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.3 17.5h9.2a3.9 3.9 0 0 0 .7-7.74 5.4 5.4 0 0 0-10.4-1.2A4 4 0 0 0 7.3 17.5z"/></svg><span>Google Drive</span><span class="sdot-on"></span></div><div class="sitem"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="6" width="17" height="12" rx="2.8"/><path d="M10.5 9.6v4.8l4.2-2.4z" fill="currentColor" stroke="none"/></svg><span>YouTube</span><span class="sdot-on"></span></div><div class="sitem"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4.5" width="16" height="6" rx="1.6"/><rect x="4" y="13.5" width="16" height="6" rx="1.6"/><circle cx="7.3" cy="7.5" r="0.4" fill="currentColor"/><circle cx="7.3" cy="16.5" r="0.4" fill="currentColor"/></svg><span>WebDAV</span><span class="sdot-off"></span></div><div class="sitem"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.8" rx="7" ry="2.7"/><path d="M5 5.8v12.4c0 1.5 3.1 2.7 7 2.7s7-1.2 7-2.7V5.8"/><path d="M5 12c0 1.5 3.1 2.7 7 2.7s7-1.2 7-2.7"/></svg><span>Amazon S3</span><span class="sdot-off"></span></div><div class="sitem sadd"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5.5v13M5.5 12h13"/></svg><span>Connect destination…</span></div></div>
+<div class="content">
+<div class="chead">
+<div class="h">Name <svg class="" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 10.2l4-4.2 4 4.2z" fill="currentColor" stroke="none"/></svg></div><div class="h r">Size</div><div class="h">Destination</div>
+<div class="h">Progress</div><div class="h r">Speed</div><div class="h">State</div></div>
+<div class="rows"><div class="row sel">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">quarterly-report.pdf</span></div>
+<span class="num">1.8 GB</span><span class="dest">Google Drive</span>
+<div class="prog"><div class="track"><div class="fill" style="width:62%"></div></div><span class="pct">62%</span></div><span class="num">11.3 MB/s</span>
+<div class="state up"><span class="dot7"></span><span class="st">Uploading</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">backup-2026-11-07.img</span></div>
+<span class="num">24.1 GB</span><span class="dest">Amazon S3</span>
+<div class="prog"><div class="track"><div class="fill" style="width:8%"></div></div><span class="pct">8%</span></div><span class="num">41.2 MB/s</span>
+<div class="state up"><span class="dot7"></span><span class="st">Uploading</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.4"/><path d="M10.6 9.6v4.8l4.3-2.4z" fill="currentColor" stroke="none"/></svg><span class="nm">keynote-master-v3.mov</span></div>
+<span class="num">4.4 GB</span><span class="dest">YouTube</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state queue"><span class="dot7"></span><span class="st">Queued</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">assets-bundle.zip</span></div>
+<span class="num">860 MB</span><span class="dest">WebDAV</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state fail"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg><span class="st">Failed</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">dataset-customers.csv.gz</span></div>
+<span class="num">312 MB</span><span class="dest">Google Drive</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">thesis-final-v2.docx</span></div>
+<span class="num">2.1 MB</span><span class="dest">Google Drive</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">ui-kit-library.fig</span></div>
+<span class="num">148 MB</span><span class="dest">Amazon S3</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">invoice-1024.pdf</span></div>
+<span class="num">640 KB</span><span class="dest">WebDAV</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">logo-set-monochrome.svg</span></div>
+<span class="num">88 KB</span><span class="dest">Google Drive</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.4"/><path d="M10.6 9.6v4.8l4.3-2.4z" fill="currentColor" stroke="none"/></svg><span class="nm">standup-recording-1108.mp3</span></div>
+<span class="num">96 MB</span><span class="dest">YouTube</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">photos-archive.tar.zst</span></div>
+<span class="num">6.7 GB</span><span class="dest">Amazon S3</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">nginx-access-11-07.log</span></div>
+<span class="num">44 MB</span><span class="dest">WebDAV</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">brand-guidelines-v4.pdf</span></div>
+<span class="num">18 MB</span><span class="dest">Google Drive</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.4"/><path d="M10.6 9.6v4.8l4.3-2.4z" fill="currentColor" stroke="none"/></svg><span class="nm">promo-cut-15s.mp4</span></div>
+<span class="num">820 MB</span><span class="dest">YouTube</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">monorepo-bundle.git</span></div>
+<span class="num">1.2 GB</span><span class="dest">WebDAV</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">cert-chain-2026.pem</span></div>
+<span class="num">12 KB</span><span class="dest">Amazon S3</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">wallpaper-pack-5k.zip</span></div>
+<span class="num">340 MB</span><span class="dest">Google Drive</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div><div class="row">
+<div class="name"><svg class="" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span class="nm">crash-report-1107.dmp</span></div>
+<span class="num">2.4 MB</span><span class="dest">Amazon S3</span>
+<span class="num" style="text-align:left;color:var(--text3)">—</span><span class="num">—</span>
+<div class="state ok"><svg class="" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8l4.4 4.4L19 7.4"/></svg><span class="st">Verified</span></div></div></div>
+
+<div class="status">
+<div class="stgroup"><svg class="" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5l7.5 13h-15z" fill="currentColor" stroke="none"/></svg><span>2 uploading</span><span class="mono">11.3 MB/s</span></div>
+<div class="stsep"></div><div class="stgroup"><span class="mono">1 queued</span></div>
+<div class="stsep"></div><div class="stgroup"><span class="red">1 failed</span></div>
+<div class="stright"><span class="edot"></span><span class="mono">Engine 127.0.0.1:8727</span>
+<div class="stsep"></div><span class="mono">IUM v0.1.1</span></div></div>
+</div></div><div class="scrim"></div>
+<div class="pal">
+<div class="palinput"><svg class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6"/><path d="M15.6 15.6L20 20"/></svg><span class="palcaret"></span>
+<span class="spacer"></span><span class="key">esc</span></div>
+<div class="pallist">
+<div class="pallabel">Actions</div><div class="palrow active"><svg class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15.5V4.5M7.5 9L12 4.5L16.5 9M5 15.5v3h14v-3"/></svg><span>New upload…</span><span class="palkeys"><span class="key">⌘N</span></span></div><div class="palrow"><svg class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 3.5V8h-4.5"/></svg><span>Retry failed uploads</span><span class="palkeys"><span class="key">⌘R</span></span></div><div class="palrow"><svg class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 5.5v13M15.5 5.5v13"/></svg><span>Pause all active uploads</span><span class="palkeys"></span></div><div class="palrow"><svg class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M10 4.5h4M6.8 7l.8 12.5h8.8L17.2 7M10 10.5v6M14 10.5v6"/></svg><span>Remove completed from list</span><span class="palkeys"></span></div>
+<div class="pallabel">Go to</div><div class="palrow"><svg class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 3.5h6.2l4.3 4.3V19a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M13.5 3.8V8.2h4.2"/></svg><span>Go to All uploads</span><span class="palkeys"><span class="key">⌘1</span></span></div><div class="palrow"><svg class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.3 17.5h9.2a3.9 3.9 0 0 0 .7-7.74 5.4 5.4 0 0 0-10.4-1.2A4 4 0 0 0 7.3 17.5z"/></svg><span>Connect a destination…</span><span class="palkeys"><span class="key">⌘3</span></span></div><div class="palrow"><svg class="" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="14.5" cy="7" r="2.1" fill="var(--chrome)"/><circle cx="8" cy="12" r="2.1" fill="var(--chrome)"/><circle cx="16.5" cy="17" r="2.1" fill="var(--chrome)"/></svg><span>Open Settings</span><span class="palkeys"><span class="key">⌘,</span></span></div>
+</div>
+<div class="palfoot"><span>↑↓ navigate</span><span>↵ run</span><span>esc close</span>
+<span class="spacer"></span><span class="mono" style="font-family:'JetBrains Mono';font-size:10px">7 commands</span></div>
+</div></div></body></html>

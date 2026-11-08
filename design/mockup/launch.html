@@ -223,6 +223,29 @@ body.launch{display:block;background:var(--chrome);overflow:auto}
 .lpfoot{border-top:1px solid var(--line);padding:20px 0 30px;display:flex;align-items:center;
   font-size:12px;color:var(--text3)}
 .lpfoot .r{margin-left:auto;display:flex;gap:20px}
+
+/* ---------------------------------------------------- command palette */
+.pal{position:absolute;left:50%;top:96px;transform:translateX(-50%);
+  width:640px;background:var(--content);border:1px solid var(--line2);
+  border-radius:10px;box-shadow:var(--modal-sh);overflow:hidden}
+.palinput{height:48px;display:flex;align-items:center;gap:10px;padding:0 14px;
+  border-bottom:1px solid var(--line)}
+.palinput svg{color:var(--text3);flex:none}
+.palcaret{display:inline-block;width:1.5px;height:16px;background:var(--text);
+  vertical-align:-3.5px}
+.palplaceholder{font-size:13.5px;color:var(--text3)}
+.pallist{padding:6px 8px 10px}
+.pallabel{font-size:10px;font-weight:600;letter-spacing:.9px;text-transform:uppercase;
+  color:var(--text3);padding:10px 8px 6px}
+.palrow{height:36px;border-radius:6px;display:flex;align-items:center;gap:11px;
+  padding:0 8px;color:var(--text2);font-size:13px}
+.palrow svg{color:var(--text3);flex:none}
+.palrow.active{background:var(--wash);color:var(--text);font-weight:500}
+.palrow.active svg{color:var(--text)}
+.palkeys{margin-left:auto;display:flex;gap:4px}
+.palfoot{display:flex;align-items:center;gap:16px;padding:8px 14px;
+  border-top:1px solid var(--line);font-size:11px;color:var(--text3)}
+.palfoot span{display:flex;align-items:center;gap:6px}
 </style></head>
 <body class="launch" data-theme="dark"><div class="lp">
 <div class="lpnav">

@@ -58,6 +58,7 @@ IC = {
     "sort": '<path d="M8 10.2l4-4.2 4 4.2z" fill="currentColor" stroke="none"/>',
     "tri": '<path d="M12 5l7.5 13h-15z" fill="currentColor" stroke="none"/>',
     "file": '<path d="M7 3.5h7.2L18.5 7.8V20a.9.9 0 0 1-.9.9H7a.9.9 0 0 1-.9-.9V4.4a.9.9 0 0 1 .9-.9z"/>',
+    "rotate": '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 3.5V8h-4.5"/>',
 }
 
 def svg(name, size=15, cls=""):
@@ -298,6 +299,29 @@ body.launch{display:block;background:var(--chrome);overflow:auto}
 .lpfoot{border-top:1px solid var(--line);padding:20px 0 30px;display:flex;align-items:center;
   font-size:12px;color:var(--text3)}
 .lpfoot .r{margin-left:auto;display:flex;gap:20px}
+
+/* ---------------------------------------------------- command palette */
+.pal{position:absolute;left:50%;top:96px;transform:translateX(-50%);
+  width:640px;background:var(--content);border:1px solid var(--line2);
+  border-radius:10px;box-shadow:var(--modal-sh);overflow:hidden}
+.palinput{height:48px;display:flex;align-items:center;gap:10px;padding:0 14px;
+  border-bottom:1px solid var(--line)}
+.palinput svg{color:var(--text3);flex:none}
+.palcaret{display:inline-block;width:1.5px;height:16px;background:var(--text);
+  vertical-align:-3.5px}
+.palplaceholder{font-size:13.5px;color:var(--text3)}
+.pallist{padding:6px 8px 10px}
+.pallabel{font-size:10px;font-weight:600;letter-spacing:.9px;text-transform:uppercase;
+  color:var(--text3);padding:10px 8px 6px}
+.palrow{height:36px;border-radius:6px;display:flex;align-items:center;gap:11px;
+  padding:0 8px;color:var(--text2);font-size:13px}
+.palrow svg{color:var(--text3);flex:none}
+.palrow.active{background:var(--wash);color:var(--text);font-weight:500}
+.palrow.active svg{color:var(--text)}
+.palkeys{margin-left:auto;display:flex;gap:4px}
+.palfoot{display:flex;align-items:center;gap:16px;padding:8px 14px;
+  border-top:1px solid var(--line);font-size:11px;color:var(--text3)}
+.palfoot span{display:flex;align-items:center;gap:6px}
 """)
 
 # ---------------------------------------------------------------- data
@@ -427,7 +451,7 @@ def inspector_html():
 <div class="mline"><span class="jseq">#409</span> chunk.evict · w1 slow</div></div>
 </div></div>'''
 
-def main_window(theme, inspector, chrome="mac"):
+def main_window(theme, inspector, chrome="mac", overlay=""):
     rows = "".join(row_html(i, r) for i, r in enumerate(ROWS))
     insp = inspector_html() if inspector else ""
     return f'''<div class="win w-{chrome}" data-theme="{theme}">
@@ -441,7 +465,7 @@ def main_window(theme, inspector, chrome="mac"):
 <div class="rows">{rows}</div>
 {insp}
 {STATUS_HTML}
-</div></div></div>'''
+</div></div>{overlay}</div>'''
 
 # ------------------------------------------------------------- settings
 CONN = [
@@ -529,6 +553,45 @@ def launch_page():
 </div>
 </div>'''
 
+# ---------------------------------------------------------- command palette
+def palette_html():
+    """The ⌘K command palette (P2 keyboard-first — approval artifact).
+
+    Same surface language as the approved Settings modal: 640px, radius 10,
+    smoke scrim, modal shadow; rows use the 36px content-row rhythm; the
+    toolbar search chip (⌘K) stays visible behind the scrim as the entry point.
+    """
+    mac = True  # keycap glyphs; win/linux variants follow the anatomy pages
+    mod = "⌘" if mac else "Ctrl"
+    actions = [
+        ("upload", "New upload…", [(mod, "N")], True),
+        ("rotate", "Retry failed uploads", [(mod, "R")], False),
+        ("pause", "Pause all active uploads", [], False),
+        ("trash", "Remove completed from list", [], False),
+    ]
+    goto = [
+        ("doc", "Go to All uploads", [(mod, "1")], False),
+        ("cloud", "Connect a destination…", [(mod, "3")], False),
+        ("sliders", "Open Settings", [(mod, ",")], False),
+    ]
+    def prow(icon, label, keys, active):
+        kbd = "".join(f'<span class="key">{a}{b}</span>' for a, b in keys)
+        return (f'<div class="palrow{" active" if active else ""}">{svg(icon,16)}'
+                f'<span>{label}</span><span class="palkeys">{kbd}</span></div>')
+    rows_a = "".join(prow(*r) for r in actions)
+    rows_g = "".join(prow(*r) for r in goto)
+    return f'''<div class="scrim"></div>
+<div class="pal">
+<div class="palinput">{svg("search",16)}<span class="palcaret"></span>
+<span class="spacer"></span><span class="key">esc</span></div>
+<div class="pallist">
+<div class="pallabel">Actions</div>{rows_a}
+<div class="pallabel">Go to</div>{rows_g}
+</div>
+<div class="palfoot"><span>↑↓ navigate</span><span>↵ run</span><span>esc close</span>
+<span class="spacer"></span><span class="mono" style="font-family:'JetBrains Mono';font-size:10px">{len(actions)+len(goto)} commands</span></div>
+</div>'''
+
 # ---------------------------------------------------------------- pages
 def page(theme, body, modal=False):
     return f'''<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -542,6 +605,8 @@ pages = {
     "settings.html": page("light", main_window("light", False), modal=True),
     "win.html":      page("dark", main_window("dark", False, chrome="win")),
     "linux.html":    page("light", main_window("light", False, chrome="gnome")),
+    "palette-light.html": page("light", main_window("light", False, overlay=palette_html())),
+    "palette-dark.html":  page("dark", main_window("dark", False, overlay=palette_html())),
 }
 for fn, html in pages.items():
     with open(os.path.join(OUT, fn), "w") as f:
