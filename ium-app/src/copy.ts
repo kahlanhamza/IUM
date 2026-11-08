@@ -131,6 +131,12 @@ export const DEFAULT_COPY = {
  */
 export const APP_COPY = {
   created: "Upload created — the engine is driving it.",
+  // #87: the launch window's boot sentences. The starting line is what the
+  // splash says while the engine answers; the degraded line is the honest
+  // ending when it never does — the handoff happens EITHER WAY, the main
+  // window owns the unreachable state.
+  launchStarting: "Starting the engine",
+  launchDegraded: "The engine did not answer — opening IUM anyway",
   emptyTitle: "No uploads yet",
   emptyHint:
     "Drop a file above, choose a destination, and press Upload. Progress, pause, resume and cancel are all journaled — a crash never loses ground.",

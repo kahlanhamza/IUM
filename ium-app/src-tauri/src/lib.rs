@@ -881,6 +881,26 @@ fn secret_mode(app: tauri::AppHandle) -> String {
     vault(&app).mode().to_string()
 }
 
+/// The launch handoff (#87): the splash page calls this when the boot is
+/// resolved — the engine answered or refused, EITHER WAY the user moves on.
+/// The main window reveals focused and the splash closes; the watchdog
+/// below shares the same idempotent reveal, so a splash webview that never
+/// gets to call (a wedged engine mid-boot) cannot trap the user.
+fn reveal_main(app: &tauri::AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+    if let Some(splash) = app.get_webview_window("splash") {
+        let _ = splash.close();
+    }
+}
+
+#[tauri::command]
+fn complete_launch(app: tauri::AppHandle) {
+    reveal_main(&app);
+}
+
 #[tauri::command]
 fn engine_status(engine: State<Engine>) -> String {
     format!(
@@ -1103,9 +1123,21 @@ pub fn run() {
                 runtime_handle,
                 4,
             ))));
+            // The launch watchdog (#87): the splash yields on its own when
+            // the boot resolves; this 8 s timer is the shell-side promise
+            // that a wedged boot STILL reaches the main window. Idempotent
+            // with complete_launch by construction (both call reveal_main).
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(8));
+                    reveal_main(&handle);
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            complete_launch,
             engine_status,
             list_adapters,
             create_job,

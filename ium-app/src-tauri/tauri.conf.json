@@ -13,11 +13,26 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "IUM — Internet Upload Manager",
         "width": 1080,
         "height": 720,
         "minWidth": 720,
-        "minHeight": 480
+        "minHeight": 480,
+        "visible": false
+      },
+      {
+        "label": "splash",
+        "url": "index.html#/launch",
+        "title": "IUM",
+        "width": 380,
+        "height": 440,
+        "center": true,
+        "decorations": false,
+        "resizable": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "shadow": false
       }
     ],
     "security": {

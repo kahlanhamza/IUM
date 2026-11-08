@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { Launch } from "./components/Launch";
 import { initTheme } from "./theme";
 import "./theme.css";
 
@@ -9,8 +10,11 @@ import "./theme.css";
 // boot never flashes light. The watcher keeps a `system` pref live.
 initTheme();
 
+// The launch window (#87) rides the same entry point under #/launch — one
+// bundle, two surfaces: the splash renders the 96 px identity moment, the
+// main window renders the working chrome. No router, no second build.
+const isLaunch = window.location.hash === "#/launch";
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
+  <React.StrictMode>{isLaunch ? <Launch /> : <App />}</React.StrictMode>,
 );

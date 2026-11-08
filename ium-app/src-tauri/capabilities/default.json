@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The shell's webview grants. Issue #40: with no capability file the ACL granted NOTHING \u2014 app commands are allowed by default (tauri docs) but core-plugin commands are not, so the job_updated event stream (plugin:event|listen, needs core:event:default) was silently denied and the UI froze on its one creation-time list_jobs snapshot while the engine uploaded. core:default covers the event stream plus the window/path/app defaults; dialog:default is the file picker (the paste-a-path seam had been dodging it). #80: updater:default is the release channel (check + download + install are plugin commands; process:allow-restart applies the update \u2014 the consent rule lives in the UI, the permission only makes the IPC reachable).",
+  "description": "The shell's webview grants. Issue #40: with no capability file the ACL granted NOTHING — app commands are allowed by default (tauri docs) but core-plugin commands are not, so the job_updated event stream (plugin:event|listen, needs core:event:default) was silently denied and the UI froze on its one creation-time list_jobs snapshot while the engine uploaded. core:default covers the event stream plus the window/path/app defaults; dialog:default is the file picker (the paste-a-path seam had been dodging it). #80: updater:default is the release channel (check + download + install are plugin commands; process:allow-restart applies the update — the consent rule lives in the UI, the permission only makes the IPC reachable).",
   "windows": [
-    "main"
+    "main",
+    "splash"
   ],
   "permissions": [
     "core:default",

@@ -1143,3 +1143,46 @@ td,
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* ------------------------------------------------------------- launch (#87)
+   The identity moment: the dart at its launch-rung size, the wordmark, one
+   boot sentence. The whole window IS this column — chrome bg, no cards, no
+   decoration. The sentence is the only moving part (one opacity step). */
+.launch {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  user-select: none;
+  padding: 24px;
+  text-align: center;
+}
+
+.launch-mark {
+  color: var(--text);
+  display: block;
+}
+
+.launch-name {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  margin-top: 22px;
+}
+
+.launch-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-2);
+  margin-top: 3px;
+}
+
+.launch-status {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 30px;
+  transition: opacity var(--dur) var(--ease);
+}
