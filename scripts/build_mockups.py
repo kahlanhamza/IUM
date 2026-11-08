@@ -26,6 +26,10 @@ FONTDIR = os.path.join(OUT, "node_modules", "@fontsource")
 # deliberately echo the ink-dart logomark geometry.
 IC = {
     "upload": '<path d="M12 15.5V4.5M7.5 9L12 4.5L16.5 9M5 15.5v3h14v-3"/>',
+    "download": '<path d="M12 4.5v11M7.5 11L12 15.5L16.5 11M5 17v2.5h14V17"/>',
+    "wmin": '<path d="M5.5 12h13"/>',
+    "wmax": '<rect x="6" y="6" width="12" height="12" rx="1.8"/>',
+    "wclose": '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
     "play": '<path d="M8.5 5.8v12.4L18.5 12z" fill="currentColor" stroke="none"/>',
     "pause": '<path d="M8.5 5.5v13M15.5 5.5v13"/>',
     "trash": '<path d="M5 7h14M10 4.5h4M6.8 7l.8 12.5h8.8L17.2 7M10 10.5v6M14 10.5v6"/>',
@@ -60,6 +64,14 @@ def svg(name, size=15, cls=""):
     return (f'<svg class="{cls}" width="{size}" height="{size}" viewBox="0 0 24 24" '
             f'fill="none" stroke="currentColor" stroke-width="1.5" '
             f'stroke-linecap="round" stroke-linejoin="round">{IC[name]}</svg>')
+
+def dart(size, color="currentColor"):
+    """The frozen ink-dart logomark (design/logo geometry, #79)."""
+    return (f'<svg width="{size}" height="{size}" viewBox="0 0 512 512" fill="none" '
+            f'stroke="{color}" stroke-linecap="round">'
+            f'<g transform="translate(11 -10.8) scale(1.15)">'
+            f'<path stroke-width="46" d="M 214 314.4 A 104 104 0 0 1 261.9 227.4"/>'
+            f'<path stroke-width="54" d="M 148 314 A 170 170 0 0 1 278 150"/></g></svg>')
 
 # ---------------------------------------------------------------- CSS
 CSS = Template("""
@@ -96,6 +108,7 @@ body{
   --search-bg:#FFFFFF;
   --win-sh:0 42px 90px rgba(15,23,42,.26),0 10px 28px rgba(15,23,42,.10);
   --modal-sh:0 30px 80px rgba(15,23,42,.24),0 6px 20px rgba(15,23,42,.10);
+  --gclose:rgba(15,23,42,.06);
 }
 [data-theme="dark"]{
   --desk1:#1A1E25; --desk2:#0E1116;
@@ -110,6 +123,7 @@ body{
   --search-bg:rgba(237,241,248,.045);
   --win-sh:0 42px 90px rgba(0,0,0,.55),0 10px 28px rgba(0,0,0,.35);
   --modal-sh:0 30px 80px rgba(0,0,0,.55),0 6px 20px rgba(0,0,0,.4);
+  --gclose:rgba(237,241,248,.08);
 }
 
 /* ------------------------------------------------------------ window */
@@ -237,6 +251,53 @@ body{
 .sw{width:34px;height:20px;border-radius:10px;background:var(--track);position:relative;flex:none}
 .sw i{position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;
   background:var(--content);box-shadow:inset 0 0 0 1px var(--line2)}
+
+/* ------------------------------------------------- per-OS window chrome */
+.w-mac{border-radius:10px}
+.w-win{border-radius:8px}
+.w-gnome{border-radius:12px;border:none}
+.caps{display:flex;align-items:center;margin-right:-14px;margin-left:6px}
+.capbtn{width:44px;height:30px;display:grid;place-items:center;color:var(--text2)}
+.gtitle{position:absolute;left:0;right:0;text-align:center;font-size:13.5px;
+  font-weight:600;color:var(--text);pointer-events:none}
+.gclose{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+  color:var(--text2);background:var(--gclose);margin-left:auto}
+
+/* ---------------------------------------------------------- launch page */
+body.launch{display:block;background:var(--chrome);overflow:auto}
+.lp{max-width:1120px;margin:0 auto;padding:0 44px}
+.lpnav{height:64px;display:flex;align-items:center;gap:30px}
+.lpbrand{display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px;color:var(--text)}
+.lplinks{display:flex;gap:24px;font-size:13px;color:var(--text2)}
+.btn-lg{height:40px;padding:0 20px;border-radius:8px;font-size:14px}
+.lphero{text-align:center;padding:56px 0 0}
+.chip{display:inline-flex;align-items:center;gap:6px;font-family:'JetBrains Mono';font-size:10.5px;
+  color:var(--text2);border:1px solid var(--line2);border-radius:999px;padding:5px 12px}
+.chip i{width:5px;height:5px;border-radius:50%;background:var(--fill);display:block}
+.lph1{font-size:52px;font-weight:600;letter-spacing:-1.4px;color:var(--text);margin:22px 0 12px}
+.lpsub{font-size:16px;color:var(--text2);line-height:1.55}
+.ctas{display:flex;gap:10px;justify-content:center;margin-top:28px}
+.lpmeta{margin-top:16px;font-family:'JetBrains Mono';font-size:11px;color:var(--text3)}
+.lptile{width:76px;height:76px;border-radius:20px;background:var(--panel);border:1px solid var(--line2);
+  display:grid;place-items:center;margin:46px auto 56px;
+  box-shadow:0 0 110px 36px rgba(233,238,246,0.055)}
+.lpmx{border-top:1px solid var(--line);padding:38px 0 44px;display:grid;
+  grid-template-columns:300px 1fr;gap:64px}
+.mxt{font-size:20px;font-weight:600;color:var(--text)}
+.mxs{font-size:13px;color:var(--text2);margin-top:6px;line-height:1.5}
+.mxn{font-family:'JetBrains Mono';font-size:10.5px;color:var(--text3);margin-top:14px;line-height:1.6}
+.mxcols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:30px}
+.mxh{font-size:10.5px;font-weight:600;letter-spacing:.9px;text-transform:uppercase;
+  color:var(--text3);padding-bottom:9px;border-bottom:1px solid var(--line2)}
+.mxrow{height:37px;display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--line);font-size:13px;color:var(--text);white-space:nowrap}
+.lptrust{border-top:1px solid var(--line);padding:22px 0;display:flex;gap:40px;
+  font-size:12.5px;color:var(--text2)}
+.lptrust span{display:flex;align-items:center;gap:8px}
+.lptrust svg{color:var(--fill)}
+.lpfoot{border-top:1px solid var(--line);padding:20px 0 30px;display:flex;align-items:center;
+  font-size:12px;color:var(--text3)}
+.lpfoot .r{margin-left:auto;display:flex;gap:20px}
 """)
 
 # ---------------------------------------------------------------- data
@@ -303,20 +364,38 @@ def sidebar_html():
     out.append('</div>')
     return "".join(out)
 
-def toolbar_html():
-    return f'''<div class="titlebar">
-<div class="tl"><i></i><i></i><i></i></div>
-<div class="tb">
+def toolbar_html(chrome="mac"):
+    key = "⌘K" if chrome == "mac" else "Ctrl K"
+    tools = f'''<div class="tb">
 <button class="btn primary">{svg("upload",14)}New Upload</button>
 <div class="sep"></div>
 <button class="btn">{svg("play",14)}Start</button>
 <button class="btn">{svg("pause",14)}Pause</button>
 <button class="btn">{svg("trash",14)}Remove</button>
-</div>
-<div class="spacer"></div>
-<div class="search">{svg("search",13)}Search uploads<span class="spacer"></span><span class="key">⌘K</span></div>
+</div>'''
+    right = f'''<div class="spacer"></div>
+<div class="search">{svg("search",13)}Search uploads<span class="spacer"></span><span class="key">{key}</span></div>
 <div class="sep"></div>
-<button class="btn" style="padding:0 8px">{svg("sliders",15)}</button>
+<button class="btn" style="padding:0 8px">{svg("sliders",15)}</button>'''
+    if chrome == "mac":
+        return f'''<div class="titlebar">
+<div class="tl"><i></i><i></i><i></i></div>
+{tools}{right}
+</div>'''
+    if chrome == "win":
+        caps = f'''<div class="caps">
+<span class="capbtn">{svg("wmin",14)}</span>
+<span class="capbtn">{svg("wmax",13)}</span>
+<span class="capbtn">{svg("wclose",15)}</span>
+</div>'''
+        return f'''<div class="titlebar">{tools}{right}{caps}
+</div>'''
+    # gnome: headerbar with centered title + round close, then a slim tools row
+    return f'''<div class="titlebar" style="position:relative">
+<span class="gtitle">IUM</span>
+<span class="gclose">{svg("x",13)}</span>
+</div>
+<div class="titlebar" style="height:44px;border-top:none">{tools}{right}
 </div>'''
 
 STATUS_HTML = f'''<div class="status">
@@ -348,11 +427,11 @@ def inspector_html():
 <div class="mline"><span class="jseq">#409</span> chunk.evict · w1 slow</div></div>
 </div></div>'''
 
-def main_window(theme, inspector):
+def main_window(theme, inspector, chrome="mac"):
     rows = "".join(row_html(i, r) for i, r in enumerate(ROWS))
     insp = inspector_html() if inspector else ""
-    return f'''<div class="win" data-theme="{theme}">
-{toolbar_html()}
+    return f'''<div class="win w-{chrome}" data-theme="{theme}">
+{toolbar_html(chrome)}
 <div class="main">
 {sidebar_html()}
 <div class="content">
@@ -402,6 +481,54 @@ def modal_html():
 <span class="spacer"></span><button class="btn primary sm">Done</button></div>
 </div>'''
 
+# ---------------------------------------------------------- launch page
+MATRIX = [
+    ("macOS", [("Apple Silicon", "dmg"), ("Intel", "dmg")]),
+    ("Windows", [("x64", "msi"), ("ARM64", "msi")]),
+    ("Linux", [(".deb", "deb"), (".rpm", "rpm"), ("Flathub", "flatpak")]),
+]
+
+def launch_page():
+    cols = []
+    for os_name, rows in MATRIX:
+        rws = "".join(f'''<div class="mxrow"><span>{label}</span>
+<button class="btn sm ghost">{svg("download",13)}Download</button></div>''' for label, ext in rows)
+        cols.append(f'<div><div class="mxh">{os_name}</div>{rws}</div>')
+    return f'''<div class="lp">
+<div class="lpnav">
+<span class="lpbrand">{dart(20, "var(--text)")}IUM</span>
+<span class="lplinks"><span>Features</span><span>Docs</span><span>Releases</span><span>GitHub</span></span>
+<span class="spacer"></span>
+<button class="btn ghost">★ Star</button>
+<button class="btn primary">Download</button>
+</div>
+<div class="lphero">
+<span class="chip"><i></i>Free · open source · MIT</span>
+<h1 class="lph1">Download IUM.</h1>
+<div class="lpsub">Reliability-engineered uploads for macOS, Windows and Linux —<br>journaled, resumable, verified before it declares Done.</div>
+<div class="ctas">
+<button class="btn primary btn-lg">{svg("download",15)}Download for macOS</button>
+<button class="btn ghost btn-lg">All platforms</button>
+</div>
+<div class="lpmeta">v0.1.1 · 14.8 MB · sha256 published with every asset</div>
+<div class="lptile">{dart(46, "#EDF1F8")}</div>
+</div>
+<div class="lpmx">
+<div><div class="mxt">IUM for desktop.</div>
+<div class="mxs">macOS, Windows and Linux.</div>
+<div class="mxn">Every asset ships with its sha256 checksum.<br>Auto-updates are signed (Tauri updater).</div></div>
+<div class="mxcols">{"".join(cols)}</div>
+</div>
+<div class="lptrust">
+<span>{svg("check",13)}Every byte journaled — SQLite WAL</span>
+<span>{svg("check",13)}Verify-before-declare — sha256</span>
+<span>{svg("check",13)}Resume for weeks — chunk sessions</span>
+</div>
+<div class="lpfoot">{dart(14, "var(--text3)")}<span style="margin-left:8px">IUM — Internet Upload Manager</span>
+<span class="r"><span>MIT license</span><span>GitHub</span><span>Releases</span><span>© 2026 the IUM community</span></span>
+</div>
+</div>'''
+
 # ---------------------------------------------------------------- pages
 def page(theme, body, modal=False):
     return f'''<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -413,8 +540,16 @@ pages = {
     "light.html":    page("light", main_window("light", False)),
     "dark.html":     page("dark", main_window("dark", True)),
     "settings.html": page("light", main_window("light", False), modal=True),
+    "win.html":      page("dark", main_window("dark", False, chrome="win")),
+    "linux.html":    page("light", main_window("light", False, chrome="gnome")),
 }
 for fn, html in pages.items():
     with open(os.path.join(OUT, fn), "w") as f:
         f.write(html)
     print("wrote", fn)
+# the launch page replaces the gradient desk with the page canvas itself
+launch = page("dark", launch_page())
+launch = launch.replace('<body data-theme="dark">', '<body class="launch" data-theme="dark">')
+with open(os.path.join(OUT, "launch.html"), "w") as f:
+    f.write(launch)
+print("wrote launch.html")

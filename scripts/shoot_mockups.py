@@ -8,6 +8,9 @@ SHOTS = [
     ("light.html", "ium-ui-mock-1-light.png"),
     ("dark.html", "ium-ui-mock-2-dark-inspector.png"),
     ("settings.html", "ium-ui-mock-3-settings.png"),
+    ("win.html", "ium-ui-mock-4-windows-dark.png"),
+    ("linux.html", "ium-ui-mock-5-linux-light.png"),
+    ("launch.html", "ium-ui-mock-6-launch-page.png"),
 ]
 
 with sync_playwright() as p:
