@@ -24,6 +24,8 @@ use ium_core::{
     S3MultipartConfig, Supervisor, TeraboxAdapter, TeraboxConfig, TransferAdapter, TusAdapter,
 };
 use tauri::{Emitter, Manager, State};
+// The #93 mouth: `app.notification()` is the plugin's NotificationExt.
+use tauri_plugin_notification::NotificationExt;
 
 struct Engine(Arc<Supervisor>);
 
@@ -881,6 +883,21 @@ fn secret_mode(app: tauri::AppHandle) -> String {
     vault(&app).mode().to_string()
 }
 
+/// The OS notification (#93): the shell decides WHEN (the pure transition
+/// rule in notify.ts) and the WORDS (the copy matrix); this command is only
+/// the mouth. The send is guarded — an optional surface must never take the
+/// shell down (the #80 silence lesson): no daemon (a headless e2e lane), a
+/// denied permission, any error at all → Ok(false), the shell moves on.
+#[tauri::command]
+fn notify_user(app: tauri::AppHandle, title: String, body: String) -> bool {
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .is_ok()
+}
+
 /// The materials verdict (#92): Mica only where it truly renders.
 ///
 /// Wire fact (tauri-apps/tauri, 2026-06-04 report): on Windows 10
@@ -1233,12 +1250,18 @@ pub fn run() {
             connect_youtube,
             probe_credentials,
             secret_mode,
+            notify_user,
             telemetry_status,
             telemetry_set_consent,
             telemetry_clear,
             platform_material,
         ])
         .plugin(tauri_plugin_dialog::init())
+        // the OS notification mouth (#93): the send is Rust-side, so the
+        // webview needs NO capability grant (the ACL gates IPC from the
+        // webview, not in-process calls) — zero new JS packages, the JS
+        // surface stays `invoke("notify_user")`.
+        .plugin(tauri_plugin_notification::init())
         // the auto-update lane (#80): check = automatic, install = user-armed;
         // endpoint + pubkey live in tauri.conf.json (the #71 rotated key)
         .plugin(tauri_plugin_updater::Builder::new().build())

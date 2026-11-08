@@ -33,6 +33,7 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { confirmedTotal, parseVersion, recentEndpoints, speedBetween } from "./logic";
 import { APP_COPY, humanizeError } from "./copy";
+import { notifyDraftFor, useNotifyPref } from "./notify";
 import { checkForUpdate } from "./updater";
 import { useThemePref } from "./useTheme";
 
@@ -107,10 +108,18 @@ export default function App() {
   const [filter, setFilter] = useState<Filter>("all");
   const [lanes, setLanes] = useState<Lane[]>([]);
   const [themePref, setThemePref] = useThemePref();
+  // The OS-notification switch (#93): App only READS it; the Settings card
+  // writes through the same store.
+  const [notifyEnabled] = useNotifyPref();
 
   // Last snapshot per job for the Δ speed math — kept in a ref so the event
   // handler never goes stale.
   const lastSample = useRef<Record<string, { confirmed: number; ms: number }>>({});
+  // The notification seams (#93): the last state seen per job id (one
+  // detector covers listener + poll + refresh), and the engine's own error
+  // words per job id (the failure body's raw — the copy table humanizes it).
+  const lastState = useRef<Map<string, string>>(new Map());
+  const lastFailRaw = useRef<Map<string, string>>(new Map());
   const toastSeq = useRef(0);
 
   const pushToast = useCallback((kind: Toast["kind"], text: string) => {
@@ -210,6 +219,20 @@ export default function App() {
       lastSample.current[snap.job.id] = { confirmed, ms: now };
       setProgress((prev) => ({ ...prev, [snap.job.id]: { confirmed, speed } }));
       setInspected((cur) => (cur && cur.job.id === snap.job.id ? snap : cur));
+      // The failure words (#93): the newest event that carries the engine's
+      // own error string feeds the notification body — the copy table turns
+      // it into a sentence; a quiet journal means the no-cause body.
+      for (let i = snap.events.length - 1; i >= 0; i--) {
+        try {
+          const payload = JSON.parse(snap.events[i][2]) as { error?: unknown };
+          if (typeof payload.error === "string" && payload.error) {
+            lastFailRaw.current.set(snap.job.id, payload.error);
+            break;
+          }
+        } catch {
+          /* a non-JSON payload — keep looking backwards */
+        }
+      }
     });
 
     return () => {
@@ -219,6 +242,29 @@ export default function App() {
       });
     };
   }, [refreshJobs, refreshLanes, pushToast]);
+
+  // The terminal notifications (#93): ONE detector watches the jobs array —
+  // the live `job_updated` listener, the 4 s poll, and a manual refresh all
+  // land in the same array, so no path can double-fire. The decision is the
+  // pure rule in notify.ts (first-sight silent, idempotent, focus-aware,
+  // toggle-aware); the send is guarded — the OS surface is optional and a
+  // missing daemon or denied permission must never take the shell down.
+  useEffect(() => {
+    for (const job of jobs) {
+      const prev = lastState.current.get(job.id);
+      lastState.current.set(job.id, job.state);
+      const draft = notifyDraftFor(prev, job, {
+        enabled: notifyEnabled,
+        focused: document.hasFocus(),
+        raw: lastFailRaw.current.get(job.id),
+      });
+      if (draft) {
+        api.notifyUser(draft.title, draft.body).catch(() => {
+          /* silent no — the in-app toast already spoke */
+        });
+      }
+    }
+  }, [jobs, notifyEnabled]);
 
   // The inspector reads the journal directly when opened (one honest fetch).
   useEffect(() => {

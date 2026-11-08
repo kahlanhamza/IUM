@@ -25,7 +25,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type AdapterSchema, type ProbeResult, type TelemetryStatus } from "../api";
 import { canSave, changedFields, probeFields, toRows, type FieldRow } from "../settings";
 import { connectionState, OAUTH_BACKENDS } from "../connect";
-import { APP_COPY, TELEMETRY_COPY } from "../copy";
+import { APP_COPY, NOTIFICATIONS_COPY, TELEMETRY_COPY } from "../copy";
+import { useNotifyPref } from "../notify";
 import { probeCopy, probeFailCopy, type ProbeState } from "../auth";
 import { IconAlert, IconCheck, IconX, Logomark } from "./icons";
 import { Button, Chip, cx, Select, TextInput } from "./ui";
@@ -234,6 +235,8 @@ export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }
         </div>
 
         <AppearanceSection />
+
+        <NotifySection />
 
         <PrivacySection onError={onError} onSaved={onSaved} />
 
@@ -771,6 +774,36 @@ function SecretField({ section, row, busy, onDraft }: SecretFieldProps) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The Notifications card (#93): ONE switch for the OS surface — the pure
+ * transition rule in notify.ts decides when, the copy matrix decides what;
+ * the user only answers "tell me or don't". Same card system as Privacy:
+ * a checkbox row + the honest sentence about the focus rule.
+ */
+function NotifySection() {
+  const [enabled, setEnabled] = useNotifyPref();
+  return (
+    <section className="card" aria-label="Notifications">
+      <h3 className="drawer-h3" style={{ margin: "0 0 8px" }}>Notifications</h3>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "10px 0" }}>
+        <input
+          id="notify-enabled"
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+          style={{ width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer" }}
+        />
+        <label htmlFor="notify-enabled" style={{ cursor: "pointer" }}>
+          {NOTIFICATIONS_COPY.settingsLabel}
+        </label>
+      </div>
+      <p className="settings-note" style={{ color: "var(--text-2)" }}>
+        {NOTIFICATIONS_COPY.settingsNote}
+      </p>
+    </section>
   );
 }
 

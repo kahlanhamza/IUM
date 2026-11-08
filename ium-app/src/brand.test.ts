@@ -7,7 +7,14 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { APP_COPY, DEFAULT_COPY, RULES, TELEMETRY_COPY, type CopyRule } from "./copy";
+import {
+  APP_COPY,
+  DEFAULT_COPY,
+  NOTIFICATIONS_COPY,
+  RULES,
+  TELEMETRY_COPY,
+  type CopyRule,
+} from "./copy";
 import { ADAPTER_LABELS } from "./logic";
 
 // node:fs is the ONE mechanism for both files: vitest stubs plain `.css`
@@ -277,6 +284,13 @@ describe("the brand sheet — the UI copy follows the voice (D3)", () => {
     // The telemetry Privacy surface rides the same voice (#75).
     for (const [k, v] of Object.entries(TELEMETRY_COPY)) {
       out.push({ text: v, where: `TELEMETRY_COPY.${k}` });
+    }
+    // The OS-notification surface rides the same voice (#93): the titles and
+    // the Settings sentences are static copy. The notification BODIES start
+    // with the user's own file name — data, not voice — so only the static
+    // strings are enumerated here.
+    for (const k of ["doneTitle", "failedTitle", "settingsLabel", "settingsNote"] as const) {
+      out.push({ text: NOTIFICATIONS_COPY[k], where: `NOTIFICATIONS_COPY.${k}` });
     }
     return out;
   }

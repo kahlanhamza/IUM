@@ -11,6 +11,15 @@ prose. An entry without verifiable issue numbers does not belong here.
 ## [Unreleased]
 
 ### Added
+- OS notifications for the two terminal job states (#93): a pure transition
+  rule (first sight silent, same-state idempotent, focus-aware — the OS
+  surface is for the away case, the in-app toast for the looking case), the
+  copy matrix as the design face (file basename only — no machine paths
+  leave the machine; failures carry the copy-table sentence for the engine's
+  own words, never an invented cause), and one persisted Settings switch
+  (default on). The send is Rust-side (`tauri-plugin-notification` — zero
+  new JS packages) and guarded: a missing daemon or a denied permission is
+  a silent no (the #80 lesson).
 - The IUM logomark: `design/logo.svg` is the constructed master (a teal tile
   carrying a white U whose counter holds an upload arrow — pure SVG paths,
   two flat tones, no gradients), feeding the in-app `Logomark` component,

@@ -218,6 +218,25 @@ export const TELEMETRY_FIELDS = [
   "column",
 ] as const;
 
+/**
+ * The terminal-notification copy (#93): the OS renders the pixels, IUM owns
+ * the words. Sentence case, em-dashes, the engine's own words preserved on
+ * failure — the voice rules apply to this surface exactly like every other.
+ * Bodies are templates the pure module fills with the file's BASENAME (never
+ * the full path — no machine layout leaks into the OS surface) and the
+ * copy-table sentence for the failure's raw words.
+ */
+export const NOTIFICATIONS_COPY = {
+  doneTitle: "Upload complete",
+  doneBody: (name: string, adapter: string) => `${name} reached ${adapter}.`,
+  failedTitle: "Upload failed",
+  failedBody: (name: string, cause: string | null) =>
+    cause ? `${name}: ${cause}.` : `${name} failed.`,
+  settingsLabel: "Tell me when an upload finishes or fails.",
+  settingsNote:
+    "If you are looking at IUM, only the in-app toast speaks — the OS surface is for the away case.",
+} as const;
+
 export function humanizeError(raw: string): ErrorCopy {
   const lowered = raw.toLowerCase();
   for (const rule of RULES) {

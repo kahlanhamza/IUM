@@ -143,6 +143,11 @@ export const api = {
    *  OS-build gate + a successful Mica apply). Everything else stays opaque. */
   platformMaterial: (): Promise<boolean> => invoke("platform_material"),
   // --- privacy: the telemetry stance (#66 lane 7, #75) ----------------------
+  /** The OS notification mouth (#93): the shell decides when + the words
+   *  (the pure rule in notify.ts); false = the OS refused (no daemon, a
+   *  denied permission) — the shell never depends on this surface. */
+  notifyUser: (title: string, body: string): Promise<boolean> =>
+    invoke("notify_user", { title, body }),
   /** Consent switch state + the local buffer's count and absolute path. */
   telemetryStatus: (): Promise<TelemetryStatus> => invoke("telemetry_status"),
   /** The master switch — enforced at the engine's single write point. */
