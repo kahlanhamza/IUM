@@ -1,10 +1,10 @@
 # The IUM brand sheet
 
-**Product bar #66, lane 6 (#73).** One page; the decided identity of the
-product. Every value here is lifted from the tree — `theme.css`, `copy.ts`,
-`logic.ts`, `App.tsx` — nothing aspirational. `ium-app/src/brand.test.ts`
-enforces it: the sheet cannot drift from the tokens it documents, and the
-UI copy must follow the voice it declares.
+**Product bar #66, lane 6 (#73); the Ink pass (#86).** One page; the decided
+identity of the product. Every value here is lifted from the tree —
+`theme.css`, `copy.ts`, `logic.ts`, `App.tsx` — nothing aspirational.
+`ium-app/src/brand.test.ts` enforces it: the sheet cannot drift from the
+tokens it documents, and the UI copy must follow the voice it declares.
 
 ## What IUM is
 
@@ -63,49 +63,72 @@ Product surfaces are friendly; engine seams stay technical.
 
 ## Color
 
-The accent is **one confident teal, used sparingly** — theme.css's own
-comment. Semantic colors always travel as a foreground/background pair.
+**Two inks, two schemes (#86, owner ruling).** The brand color is the
+logomark's ink — `#0F172A`, the near-black of the dart — and its inverted
+twin, the near-white ink the same mark wears on dark surfaces. Light mode
+speaks the dark ink on paper white; dark mode speaks the light ink on the
+midnight chrome. There is no third hue: **the accent IS the ink** — filled
+controls are ink with the scheme's opposite type on them.
+
+Color is reserved for meaning: red speaks ONLY failure, green speaks engine
+health, and nothing else gets to shout. Terminal success (Done) is the
+default expectation and stays neutral ink; paused is a user action, not a
+caution. Semantic colors always travel as a foreground/background pair.
 The table is the projection of the tokens; `brand.test.ts` requires exact
-equality with `theme.css` in both schemes.
+equality with `theme.css` in both schemes (light on `:root`, dark on
+`[data-theme="dark"]` — light is the no-attribute base, so a pre-paint
+frame can never flash the wrong scheme).
 
 | token | light | dark |
 | --- | --- | --- |
-| `--bg` | `#f5f6f8` | `#131518` |
-| `--surface` | `#ffffff` | `#1c1f23` |
-| `--surface-2` | `#eef0f3` | `#24282d` |
-| `--surface-3` | `#e6e9ed` | `#2d3238` |
-| `--text` | `#191c1f` | `#e9ebee` |
-| `--text-2` | `#5b6470` | `#a6adb7` |
-| `--text-3` | `#8b93a0` | `#727a86` |
-| `--border` | `#e2e5ea` | `#2b2f35` |
-| `--border-strong` | `#ccd2d9` | `#3d434b` |
-| `--accent` | `#0f766e` | `#2dd4bf` |
-| `--accent-hover` | `#0d6963` | `#43dcc9` |
-| `--accent-down` | `#0b5a54` | `#5ae3d2` |
-| `--accent-text` | `#ffffff` | `#062823` |
-| `--accent-subtle` | `#e4f4f2` | `#123f3a` |
-| `--ok` | `#15803d` | `#4ade80` |
-| `--ok-bg` | `#e6f5ec` | `#12331f` |
-| `--danger` | `#b91c1c` | `#f87171` |
-| `--danger-bg` | `#fdeceb` | `#3b1515` |
-| `--warn` | `#92580a` | `#fbbf24` |
-| `--warn-bg` | `#fcf1dd` | `#3a2a10` |
-| `--info` | `#1d4ed8` | `#93b4fd` |
-| `--info-bg` | `#e8eefc` | `#1a2745` |
+| `--bg` | `#f5f6f8` | `#0b101a` |
+| `--surface` | `#ffffff` | `#0e1521` |
+| `--surface-2` | `#eef0f4` | `#131c2c` |
+| `--surface-3` | `#e4e8ee` | `#18233a` |
+| `--text` | `#0f172a` | `#edf1f8` |
+| `--text-2` | `#475569` | `#a8b3c7` |
+| `--text-3` | `#5e6d86` | `#77849d` |
+| `--border` | `#e6e9ef` | `#1d2942` |
+| `--border-strong` | `#d2d8e3` | `#2c3a5c` |
+| `--accent` | `#0f172a` | `#e9eef6` |
+| `--accent-hover` | `#1d2941` | `#f6f9ff` |
+| `--accent-down` | `#0a1122` | `#d5deeb` |
+| `--accent-text` | `#ffffff` | `#0b101a` |
+| `--accent-subtle` | `#eef1f6` | `#1a2438` |
+| `--ok` | `#2b7549` | `#7cc793` |
+| `--ok-bg` | `#e7f3ec` | `#16301f` |
+| `--danger` | `#c43a2b` | `#ff8f86` |
+| `--danger-bg` | `#faeceb` | `#331d22` |
+| `--warn` | `#8f610c` | `#e3b95f` |
+| `--warn-bg` | `#faf0dc` | `#33290f` |
+| `--info` | `#40639f` | `#92aae6` |
+| `--info-bg` | `#eaeffb` | `#1a2540` |
 
 The focus halo (`--accent-ring`) is a rgba value on purpose — it is motion
-state, not a brand color, and lives in `theme.css` only. Geometry (12 px
-cards, 8 px controls, pill radius) and motion (150 ms, reduced-motion
-respect) are theme.css territory; the sheet records the fact, not the numbers.
+state, not a brand color, and lives in `theme.css` only. Geometry (10 px
+cards, 6 px controls, pill radius) and motion (150 ms, reduced-motion
+respect) are theme.css territory; the sheet records the fact, not the
+numbers.
 
 ## Type
 
-- **The OS's own type is the brand type.** UI text rides the system stack
-  (`--font`: system-ui, -apple-system, "Segoe UI Variable", …) — no brand
-  font is shipped or needed; the lightweight bar applies to type too.
-- **Technical strings ride mono.** Endpoints, adapter ids, byte counts and
-  the "the engine said: …" raw line use `--mono` — the seam between product
-  and engine is also a typographic one.
+**The brand ships its own type (#86, owner ruling).** Inter speaks the UI
+(weights 400/500/600), JetBrains Mono speaks the machine — endpoints,
+adapter ids, byte counts, chunk grids, the "the engine said: …" raw line.
+Both ride as vendored latin-subset woff2 files (`ium-app/public/fonts/`,
+~140 KB total, `font-display: swap`, provenance @fontsource 5.3.0, SIL OFL
+1.1 — the licenses ship beside the files).
+
+- **Why vendored:** the cross-OS guarantee. macOS, Windows and Linux all
+  render the SAME faces instead of drifting through SF/Segoe/Cantarell —
+  the app looks like itself everywhere, which IS the native feel the design
+  language sells. The OS stacks remain one fallback deep (`--font` leads
+  with "Inter", `--mono` with "JetBrains Mono").
+- **The scale:** 13 px body, 12 px secondary and meta, 11 px micro
+  (chips, badges); weights 400 body / 500 labels / 600 emphasis. Larger
+  sizes exist only on identity surfaces (see the ladder below).
+- **Figures are tabular.** Progress, speed and size columns set
+  `font-variant-numeric: tabular-nums` — mid-transfer updates never jitter.
 
 ## Iconography
 
@@ -142,6 +165,43 @@ banned outright by owner ruling (they were a reference-image crutch, #78).
   installer size — strokes stay fat (46/54 units on the frozen grid), so
   nothing thins out down the ladder (verified 96/48/24 on the #78 sheet).
 
+## Logo scale ladder
+
+**The mark scales with the identity weight of the surface (#86, owner
+ruling).** Where IUM introduces itself, the dart is BIG; where the user's
+work is the hero, the mark steps back or steps away entirely. A logo at one
+frozen size is a web-app habit — a desktop product treats its mark as a
+system of sizes, each rung chosen for the job that surface does.
+
+| Rung | Size |
+| --- | --- |
+| `Launch` | 96 px |
+| `About` | 64 px |
+| `First run and empty states` | 48 px |
+| `Chrome` | none |
+| `README and docs` | 128 px |
+
+- **Launch (96 px):** the launch/boot surface is THE identity moment — the
+  first pixels the product ever shows. The dart at 96 px, the wordmark
+  under it, the boot sentence in text-2. Nothing else competes.
+- **About (64 px):** Settings → About is the product introducing itself
+  again — the mark stands at 64 px above the version facts.
+- **First run and empty states (48 px):** an empty library is IUM saying
+  "there is nothing here yet — start something"; the mark anchors that
+  invitation at 48 px.
+- **Chrome (none):** the working chrome carries NO mark. Once IUM is
+  introduced, repetition is noise — the OS taskbar/dock icon owns ambient
+  identity, and the content owns the window. This is the big-tech rule:
+  the toolbar is for commands, not branding.
+- **README and docs (128 px):** the README lockup and doc headers render
+  the mark at 128 px with the wordmark beside it — print-scale presence
+  where the project meets the public.
+
+Between rungs, nothing: the ladder is exhaustive, and `brand.test.ts`
+pins the table. A new surface asks "which rung am I?" — if the answer is
+"none of them", the surface is redesigning identity and must amend this
+sheet first.
+
 ## What this sheet governs
 
 All user-visible IUM copy (UI sentences, toasts, empty states, release
@@ -150,7 +210,9 @@ mechanical, in `ium-app/src/brand.test.ts`:
 
 1. this sheet exists with its sections (the #66 acceptance bar);
 2. the color table equals `theme.css` — the sheet cannot drift from the CSS;
-3. the copy surface (`copy.ts` rules + default + the app sentences and
+3. the logo ladder table is present at its exact rungs (the #86 sizing
+   law: identity surfaces go bigger, chrome goes without);
+4. the copy surface (`copy.ts` rules + default + the app sentences and
    labels) follows the voice: capitalized sentences, no exclamation marks,
    no emoji, the name spelled IUM, adapter labels free of raw seam ids.
    Status-pill texts and button labels are the documented exempt class —

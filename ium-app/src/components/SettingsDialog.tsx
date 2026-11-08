@@ -29,6 +29,15 @@ import { APP_COPY, TELEMETRY_COPY } from "../copy";
 import { probeCopy, probeFailCopy, type ProbeState } from "../auth";
 import { IconAlert, IconCheck, IconX, Logomark } from "./icons";
 import { Button, Chip, cx, Select, TextInput } from "./ui";
+import { ThemeToggle } from "./ThemeToggle";
+import {
+  applyTheme,
+  loadThemePref,
+  resolveTheme,
+  saveThemePref,
+  systemPrefersDark,
+  type ThemePref,
+} from "../theme";
 import {
   checkForUpdate,
   downloadAndInstall,
@@ -226,6 +235,8 @@ export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }
             <IconX size={14} />
           </Button>
         </div>
+
+        <AppearanceSection />
 
         <PrivacySection onError={onError} onSaved={onSaved} />
 
@@ -763,6 +774,43 @@ function SecretField({ section, row, busy, onDraft }: SecretFieldProps) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The Appearance control (#86): the two-ink rule made user-facing. System
+ * is the default; an explicit Light/Dark overrides the OS until the user
+ * returns the choice. The preference is a UI concern — localStorage, no
+ * engine round-trip, applied to the document root immediately.
+ */
+function AppearanceSection() {
+  const [pref, setPref] = useState<ThemePref>(() => loadThemePref());
+
+  const choose = (next: ThemePref) => {
+    setPref(next);
+    saveThemePref(next);
+    applyTheme(resolveTheme(next, systemPrefersDark()), document);
+  };
+
+  return (
+    <section className="card" aria-label="Appearance">
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <h3 className="drawer-h3" style={{ margin: 0 }}>Appearance</h3>
+          <div style={{ fontSize: 12, color: "var(--text-2)" }}>
+            Two inks — the mark's dark ink on light, its light ink on dark
+          </div>
+        </div>
+        <ThemeToggle value={pref} onChange={choose} />
+      </div>
+    </section>
   );
 }
 

@@ -1,54 +1,106 @@
 /*
- * IUM design system — the shipped-product pass (#65 Lane 1).
+ * IUM design system — "Ink" (#86, owner-approved direction).
  *
- * Tokens first (light + dark via prefers-color-scheme), then base, then
+ * The design law in one paragraph: TWO inks — the logo's near-black ink on
+ * light surfaces, its near-white ink on dark — carried across every token;
+ * color is reserved for meaning (red = failure, green = engine health),
+ * hairlines carry every edge (shadows only under floating surfaces), and
+ * type is the interface: vendored Inter speaks the UI, JetBrains Mono
+ * speaks the machine. No web-app decoration: no gradients, no glow, no
+ * backdrop blur.
+ *
+ * Tokens first (light on :root, dark on [data-theme="dark"] — light is the
+ * no-attribute base so a pre-paint frame can never flash), then base, then
  * components. No runtime dependency: this file is the whole visual layer.
  * The e2e contract (#35 seams) is untouched — this file carries no behavior.
  */
 
+/* ------------------------------------------------------------------ type */
+/* Vendored faces (#86): latin subsets, font-display swap, ~140 KB total.
+   Provenance: @fontsource/inter 5.3.0 + @fontsource/jetbrains-mono 5.3.0,
+   both SIL OFL 1.1 (licenses ship beside the files). Vendoring is the
+   cross-OS guarantee — macOS, Windows and Linux render the SAME type
+   instead of drifting through SF/Segoe/Cantarell. */
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/inter-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/inter-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/inter-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-latin-500-normal.woff2") format("woff2");
+}
+
 /* ---------------------------------------------------------------- tokens */
 :root {
-  /* surfaces */
+  /* surfaces — light chrome, white content */
   --bg: #f5f6f8;
   --surface: #ffffff;
-  --surface-2: #eef0f3;
-  --surface-3: #e6e9ed;
+  --surface-2: #eef0f4;
+  --surface-3: #e4e8ee;
 
-  /* text */
-  --text: #191c1f;
-  --text-2: #5b6470;
-  --text-3: #8b93a0;
+  /* text — the logo ink and its steps */
+  --text: #0f172a;
+  --text-2: #475569;
+  --text-3: #5e6d86;
 
-  /* lines */
-  --border: #e2e5ea;
-  --border-strong: #ccd2d9;
+  /* lines — hairlines carry every edge */
+  --border: #e6e9ef;
+  --border-strong: #d2d8e3;
 
-  /* accent — one confident teal, used sparingly */
-  --accent: #0f766e;
-  --accent-hover: #0d6963;
-  --accent-down: #0b5a54;
+  /* accent — the ink itself: filled controls are ink with white type */
+  --accent: #0f172a;
+  --accent-hover: #1d2941;
+  --accent-down: #0a1122;
   --accent-text: #ffffff;
-  --accent-subtle: #e4f4f2;
-  --accent-ring: rgba(15, 118, 110, 0.28);
+  --accent-subtle: #eef1f6;
+  --accent-ring: rgba(15, 23, 42, 0.22);
 
-  /* semantics */
-  --ok: #15803d;
-  --ok-bg: #e6f5ec;
-  --danger: #b91c1c;
-  --danger-bg: #fdeceb;
-  --warn: #92580a;
-  --warn-bg: #fcf1dd;
-  --info: #1d4ed8;
-  --info-bg: #e8eefc;
+  /* semantics — color reserved for meaning; red speaks ONLY failure */
+  --ok: #2b7549;
+  --ok-bg: #e7f3ec;
+  --danger: #c43a2b;
+  --danger-bg: #faeceb;
+  --warn: #8f610c;
+  --warn-bg: #faf0dc;
+  --info: #40639f;
+  --info-bg: #eaeffb;
 
-  /* elevation */
-  --shadow-1: 0 1px 2px rgba(16, 24, 32, 0.05);
-  --shadow-2: 0 4px 16px rgba(16, 24, 32, 0.08);
-  --shadow-3: 0 12px 40px rgba(16, 24, 32, 0.16);
+  /* elevation — floating surfaces only (the modal), never cards */
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-2: 0 4px 16px rgba(15, 23, 42, 0.08);
+  --shadow-3: 0 12px 40px rgba(15, 23, 42, 0.18);
 
-  /* geometry + motion */
-  --r-card: 12px;
-  --r-ctl: 8px;
+  /* geometry + motion — tight radii, one duration */
+  --r-card: 10px;
+  --r-ctl: 6px;
   --r-pill: 999px;
   --dur: 150ms;
   --ease: cubic-bezier(0.2, 0.6, 0.3, 1);
@@ -58,46 +110,48 @@
   --space-3: 12px;
   --space-4: 16px;
 
-  /* type */
-  --font: system-ui, -apple-system, "Segoe UI Variable", "Segoe UI",
+  /* type — vendored faces lead; OS faces remain the fallback lattice */
+  --font: "Inter", system-ui, -apple-system, "Segoe UI Variable", "Segoe UI",
     Cantarell, Roboto, "Helvetica Neue", sans-serif;
-  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo,
+    Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #131518;
-    --surface: #1c1f23;
-    --surface-2: #24282d;
-    --surface-3: #2d3238;
+[data-theme="dark"] {
+  /* surfaces — the dark chrome, the panel above it */
+  --bg: #0b101a;
+  --surface: #0e1521;
+  --surface-2: #131c2c;
+  --surface-3: #18233a;
 
-    --text: #e9ebee;
-    --text-2: #a6adb7;
-    --text-3: #727a86;
+  /* text — the light ink and its steps */
+  --text: #edf1f8;
+  --text-2: #a8b3c7;
+  --text-3: #77849d;
 
-    --border: #2b2f35;
-    --border-strong: #3d434b;
+  --border: #1d2942;
+  --border-strong: #2c3a5c;
 
-    --accent: #2dd4bf;
-    --accent-hover: #43dcc9;
-    --accent-down: #5ae3d2;
-    --accent-text: #062823;
-    --accent-subtle: #123f3a;
-    --accent-ring: rgba(45, 212, 191, 0.3);
+  /* accent — the ink inverted: filled controls are light ink with dark type */
+  --accent: #e9eef6;
+  --accent-hover: #f6f9ff;
+  --accent-down: #d5deeb;
+  --accent-text: #0b101a;
+  --accent-subtle: #1a2438;
+  --accent-ring: rgba(233, 238, 246, 0.24);
 
-    --ok: #4ade80;
-    --ok-bg: #12331f;
-    --danger: #f87171;
-    --danger-bg: #3b1515;
-    --warn: #fbbf24;
-    --warn-bg: #3a2a10;
-    --info: #93b4fd;
-    --info-bg: #1a2745;
+  --ok: #7cc793;
+  --ok-bg: #16301f;
+  --danger: #ff8f86;
+  --danger-bg: #331d22;
+  --warn: #e3b95f;
+  --warn-bg: #33290f;
+  --info: #92aae6;
+  --info-bg: #1a2540;
 
-    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.45);
-    --shadow-3: 0 12px 40px rgba(0, 0, 0, 0.6);
-  }
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.55);
+  --shadow-3: 0 12px 40px rgba(0, 0, 0, 0.65);
 }
 
 /* ------------------------------------------------------------------ base */
@@ -113,7 +167,7 @@ body {
 
 body {
   font-family: var(--font);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.45;
   color: var(--text);
   background: var(--bg);
@@ -287,8 +341,11 @@ td,
 }
 
 .engine-pill--wait .dot {
-  background: var(--warn);
-  box-shadow: 0 0 0 3px var(--warn-bg);
+  /* Connecting is transient, not a warning — amber stays reserved for
+     genuine caution (#86: color reserved for meaning). A neutral ink dot
+     pulses until the engine answers. */
+  background: var(--text-3);
+  box-shadow: 0 0 0 3px var(--surface-3);
   animation: pulse 1.2s ease-in-out infinite;
 }
 
@@ -611,10 +668,12 @@ td,
   font-weight: 550;
 }
 
-/* Numeric columns never wrap — "23.3 MiB/s" on one line (#77). */
+/* Numeric columns never wrap — "23.3 MiB/s" on one line (#77). Figures
+   ride tabular numerals so mid-transfer updates never jitter (#86). */
 .cell-progress,
 .cell-speed {
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .cell-dim {
@@ -637,14 +696,18 @@ td,
   font-weight: 600;
   border-radius: var(--r-pill);
   padding: 2.5px 9px;
-  background: var(--info-bg);
-  color: var(--info);
+  /* running/queued ride the ink itself — the work IS the accent (#86) */
+  background: var(--accent);
+  color: var(--accent-text);
   letter-spacing: 0.2px;
 }
 
 .chip[data-state="done"] {
-  background: var(--ok-bg);
-  color: var(--ok);
+  /* Terminal success is the DEFAULT expectation — it stays neutral ink.
+     Color is reserved for meaning (#86): red = failure, green = engine
+     health, and nothing else gets to shout. */
+  background: var(--surface-2);
+  color: var(--text-2);
 }
 .chip[data-state="failed"],
 .chip[data-state="unresumable"] {
@@ -656,8 +719,9 @@ td,
   color: var(--text-2);
 }
 .chip[data-state="paused"] {
-  background: var(--warn-bg);
-  color: var(--warn);
+  /* Paused is a user action, not a caution — neutral ink, not amber. */
+  background: var(--surface-2);
+  color: var(--text-2);
 }
 
 .badge {
@@ -1030,4 +1094,52 @@ td,
   font-size: 11px;
   color: var(--text-3);
   word-break: break-all;
+}
+
+/* --------------------------------------------------------- appearance (#86)
+   The theme control: three real radios in one quiet segmented row. The
+   checked option carries the ink fill; the group never draws a box heavier
+   than the hairline it sits on. */
+.theme-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-ctl);
+}
+
+.theme-option {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.theme-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.theme-option span {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  padding: 4px 12px;
+  border-radius: 4px;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.theme-option input:checked + span {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+.theme-option input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
