@@ -16,7 +16,7 @@ crashes and reboots — with *honest* badges where physics says a protocol canno
 [![nightly](https://github.com/kahlanhamza/IUM/actions/workflows/nightly.yml/badge.svg)](https://github.com/kahlanhamza/IUM/actions/workflows/nightly.yml)
 [![stress](https://github.com/kahlanhamza/IUM/actions/workflows/stress.yml/badge.svg)](https://github.com/kahlanhamza/IUM/actions/workflows/stress.yml)
 ![rust](https://img.shields.io/badge/rust-stable%201.99-blue)
-![tests](https://img.shields.io/badge/tests-275%20core%20%2B%2068%20UI-brightgreen)
+![tests](https://img.shields.io/badge/tests-313%20core%20%2B%20129%20UI-brightgreen)
 ![platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
 </div>
@@ -31,14 +31,18 @@ the industry usually leaves implicit: **never claim what was not verified**.
 
 ## Screenshots
 
-The shipped shell (Tauri 2 + React), captured from the running product — dark first,
-because that is the default scheme.
+The shipped shell (Tauri 2 + React) in the **Ink** design language, captured from the
+running product — dark first, because that is the default scheme. The four-pane anatomy:
+a 48 px command toolbar, a 210 px library/destinations sidebar, the dense edge-to-edge
+work list, and a 28 px status bar — with the docked inspector and the centered settings
+modal. No brand block over the work; the dart appears where identity belongs (the launch
+window), never in the chrome.
 
 | | |
 |---|---|
-| ![The main window — intake, live uploads, honest badges](docs/screenshots/01-main-window.png) | ![The intake filled — a stat'ed file, destination, protocol](docs/screenshots/02-create-upload-filled.png) |
-| ![The per-chunk inspector — journal events, chunk states, adapter tokens](docs/screenshots/03-inspector-chunks.png) | ![Settings — the Privacy card leads: the written stance, the opt-out switch](docs/screenshots/04-settings-privacy.png) |
-| ![Settings — the credentials vault and About](docs/screenshots/05-settings-credentials.png) | ![The light scheme](docs/screenshots/06-main-window-light.png) |
+| ![The main window — toolbar, library sidebar, intake, the dense upload list, the status bar](docs/screenshots/01-main-window.png) | ![The intake filled — a stat'ed file, destination, protocol](docs/screenshots/02-create-upload-filled.png) |
+| ![The docked inspector — the chunk grid, the job summary, the live journal](docs/screenshots/03-inspector-chunks.png) | ![Settings — the centered modal: the Privacy card leads, the vault lanes follow](docs/screenshots/04-settings-privacy.png) |
+| ![Settings — the credentials vault and About](docs/screenshots/05-settings-credentials.png) | ![The light scheme — the logo ink on paper white](docs/screenshots/06-main-window-light.png) |
 
 Every progress percent you see is journal truth — a paused, done or failed row shows
 what the journal confirmed, not a guess. A one-shot destination says **One-shot ⚠**
@@ -54,6 +58,7 @@ instead of pretending it can resume.
 | **Adaptive engine** | Dynamic chunk pool, slow-connection eviction voted on measured throughput, shrink-only adaptive resplit, per-error-class retry budgets — every path ends in Done or Failed, never in silence. |
 | **Built for KB/s links** | A link prober measures 1-vs-K streams at probe time and classifies the bottleneck (per-flow vs total bearer) to pick the fleet; the tus lane floor drops pieces to 64 KiB when the adapter declares it; an idle-progress timeout replaces the 600 s total-request wall that could never fit a legal piece on a 3 KB/s moment; a 423 Locked wait is a wait, not a failure. |
 | **Privacy is a written stance** | Anonymous diagnostics are **opt-out by one visible switch**, the record stays in a local file you can open and clear, and this build uploads nothing anywhere — the full charter (collected fields, never-collected list, rotation caps) is [docs/11_Telemetry_Stance.md](docs/11_Telemetry_Stance.md) and it is enforced by gates on both sides of the IPC. |
+| **A desktop-native face** | The **Ink** design language: the logo's two inks (dark-on-light, light-on-dark) as first-class themes, Inter + JetBrains Mono vendored so all three OSes render the same faces, a four-pane anatomy (command toolbar · library sidebar · dense list · status bar), a docked chunk-grid inspector, a launch window that carries the dart at 96 px, and WCAG AA contrast in both schemes — enforced by pins, not vibes ([docs/10_Brand_Sheet.md](docs/10_Brand_Sheet.md)). |
 | **Proven against reality** | Real-network impairment models (packet loss, RTT/jitter, mid-body RST), B/s-class uplink ladders, overnight long-haul legs with fresh-journal replay, resource-growth soak bounds, real video files through every adapter. |
 | **Real shell, really driven** | Tauri 2 + React desktop app exercised end-to-end on CI by a hand-rolled W3C WebDriver suite (WebKitGTK under xvfb): create → live progress → pause/resume → Done → per-chunk inspector → cancel commits nothing. |
 
@@ -114,9 +119,14 @@ bash scripts/app-e2e.sh
 | `HttpOneShot` | plain `PUT` | ⚠️ restart-from-zero | completion only | streaming from disk, `Retry-After`, ETag capture, HEAD verify |
 | `S3Multipart` | S3 multipart | ✅ per-part | per-part | zero-dependency SigV4, part-map reconcile before `Complete` (ADR-010) |
 | `Tus` | TUS 1.0.0 | ✅ byte-level | per-`PATCH` server ack | 409 offset realign absorbs drifted bytes; session loss → counted reattach |
+| `WebDAV` (rclone bridge) | WebDAV `PUT` | bridge-declared | bridge-declared | connect with URL + username + password — no config files, the engine reads the vault live |
+| `Google Drive` (rclone bridge) | Drive resumable | bridge-declared | bridge-declared | **one-click Connect** — the provider's real sign-in opens in your browser; the token lands in the OS keychain |
+| `YouTube` | resumable upload API | ✅ byte-level (8 MiB PUTs, 308+Range) | per-`PUT` server ack | IUM's first **native** OAuth adapter — PKCE + anti-CSRF state, loopback redirect, `videos.list` verify, private by default |
 
 Where a server physically cannot resume, the UI says **One-shot ⚠️** instead of pretending.
-The badge is derived from the adapter's declared capabilities — never hard-coded.
+The badge is derived from the adapter's declared capabilities — never hard-coded. The
+connect lanes follow the same law: connecting an account is a **product surface**
+(Settings → the lane → Connect), never a config-file hunt.
 
 ## How it is tested
 
@@ -205,16 +215,26 @@ checksum-verified. Report vulnerabilities via a private GitHub security advisory
 Milestones **M0–M9 are complete**: the engine (chunk algebra, journal, supervisor,
 three transports), the speed architecture (link prober, adaptive fleet, lane floors,
 idle-progress timeouts), the KB/s ladder, the FEC and compression lanes, and the
-real-shell e2e. The **product bar** (#66) is closed lane by lane with the same loop:
-the design system, the credentials vault, the error-copy table, the brand sheet and
-voice gate, the `.gitattributes` pin, the **written telemetry stance** (opt-out,
-local-only — #75), and the RE-resistance release bar (#76). The README you are
-reading ships screenshots from the running app, gated by tests.
+real-shell e2e. The **product bar** (#66) closed lane by lane with the same loop: the
+design system, the credentials vault, the error-copy table, the brand sheet and voice
+gate, the `.gitattributes` pin, the **written telemetry stance** (opt-out, local-only —
+#75), and the RE-resistance release bar (#76).
 
-**Next (owner decides the order)**: the Google Drive lane (#59) and the YouTube lane
-(#60) are **parked by owner decision** — not scheduled. The release bar (#65) —
-per-OS installers — waits on the code-signing certificate, which only the owner can
-pin. Everything else currently open is polish under the standing product bar (#66).
+Since then: the **destination lanes** — WebDAV (#83), Google Drive one-click (#84 →
+#59), and YouTube with native resumable upload + the loopback Google sign-in (#85 →
+#60) — upload by **connecting the account**, plus painless auth (#81: OS-keychain
+secrets, hot lane registration, test-connection) and one-click connect sheets (#82).
+Signed auto-update (#80) ships in the shell. The **Ink program** is complete (#86 →
+#88): the two-ink palette with the logo-size ladder as repo law, the launch window
+(the dart at 96 px at first paint), and the four-pane chrome anatomy — the app looks
+like the mockups because the mockups' metrics are pinned by tests.
+
+**Next (owner decides the order)**: keyboard-first polish (⌘K palette, shortcut map,
+hover row actions) and the materials pass (Windows 11 Mica, native menus) are queued
+design lanes. The release bar (#65) — per-OS installers — waits on the code-signing
+certificate, which only the owner can pin; the OAuth client id/secret for the Google
+lanes are likewise registered by the owner before the next release. Everything else
+currently open is polish under the standing product bar (#66).
 
 ---
 
