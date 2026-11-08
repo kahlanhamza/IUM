@@ -894,7 +894,7 @@ fn secret_mode(app: tauri::AppHandle) -> String {
 /// The build number parser is platform-free so the unit tests run on every
 /// CI runner; only the caller touches `cmd /c ver`.
 fn parse_windows_build(ver: &str) -> u32 {
-    ver.split(|c: char| matches!(c, '[' | ']' | '\r' | '\n'))
+    ver.split(['[', ']', '\r', '\n'])
         .find_map(|seg| {
             let seg = seg.trim();
             let rest = seg.strip_prefix("Version ").unwrap_or(seg);
@@ -921,21 +921,31 @@ fn real_windows_build() -> u32 {
     0
 }
 
+/// The apply half of the verdict: Windows 11 only — Mica through the PUBLIC
+/// path (`tauri::utils::WindowEffect`; the `config` re-import is private in
+/// tauri-utils 2.10.2, E0603 on run 184). `WindowEffectsConfig` derives
+/// `Default`, so the struct literal needs only the field we set.
+#[cfg(target_os = "windows")]
+fn apply_mica(app: &tauri::AppHandle) -> bool {
+    app.get_webview_window("main").is_some_and(|main| {
+        main.set_effects(tauri::utils::config::WindowEffectsConfig {
+            effects: vec![tauri::utils::WindowEffect::Mica],
+            ..Default::default()
+        })
+        .is_ok()
+    })
+}
+
+/// Every other platform answers false WITHOUT touching the window; the
+/// handle is named (`_app`) because the verdict shape is shared.
+#[cfg(not(target_os = "windows"))]
+fn apply_mica(_app: &tauri::AppHandle) -> bool {
+    false
+}
+
 #[tauri::command]
 fn platform_material(app: tauri::AppHandle) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        if real_windows_build() >= 22000 {
-            if let Some(main) = app.get_webview_window("main") {
-                let mut fx = tauri::utils::config::WindowEffectsConfig::default();
-                fx.effects = vec![tauri::utils::config::WindowEffect::Mica];
-                if main.set_effects(fx).is_ok() {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+    real_windows_build() >= 22000 && apply_mica(&app)
 }
 
 /// The launch handoff (#87): the splash page calls this when the boot is
