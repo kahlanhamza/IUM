@@ -160,7 +160,10 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
   const copy = error ? humanizeError(error) : null;
 
   return (
-    <section className="card" aria-label="New upload">
+    // #88: the intake panel docks under the toolbar — a hairline-carried
+    // inset of the content pane, not a floating card. Every e2e seam
+    // (#upload-*) is inside and untouched.
+    <section className="create-panel" aria-label="New upload">
       {/* The drop zone: click = browse, drag = OS intake. Not a form control,
           so it never intersects the e2e send_keys seams. */}
       <div

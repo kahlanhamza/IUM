@@ -1,13 +1,15 @@
 /**
- * The header gate (#77): the chrome is quiet — big-tech rule (HIG "defer to
- * content"). The header carries identity and one ambient status signal; it
- * NEVER renders the engine's raw status sentence, a version string, or the
- * adapter roster (those live in the tooltip and Settings → About). The brand
- * block carries the real logomark, not the generic upload stroke icon.
+ * The quiet chrome gate (#77, re-homed by #88): the TOOLBAR is commands
+ * only — it carries no brand block (the logo ladder's Chrome rung: none,
+ * enforced here in the component, not only the brand sheet) and never
+ * renders the engine's raw status sentence, a version string, or the
+ * adapter roster. The engine's one ambient signal lives in the STATUS BAR
+ * as dot + short word; the engine's own sentence stays inspectable in the
+ * status bar's tooltip and Settings → About, never as permanent chrome.
  */
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { describe, expect, it, vi, afterEach } from "vitest";
+import { render, cleanup } from "@testing-library/react";
 
 const ENGINE_SENTENCE =
   "ium-core v0.1.1 ready — adapters: http_one_shot, s3_multipart, tus";
@@ -43,6 +45,10 @@ vi.mock("./api", () => ({
     credentialsGet: () => Promise.resolve({}),
     credentialsSet: () => Promise.resolve(),
     credentialsDelete: () => Promise.resolve(),
+    applyCredentials: () => Promise.resolve({ action: "replaced", lanes: [] }),
+    probeCredentials: () =>
+      Promise.resolve({ checked: false, ok: true, sentence: "", final: true }),
+    secretMode: () => Promise.resolve("keyring"),
     telemetryStatus: () =>
       Promise.resolve({ consent: true, count: 0, path: "/tmp/telemetry.jsonl" }),
     telemetrySetConsent: () => Promise.resolve(),
@@ -53,7 +59,10 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: () => Promise.resolve(() => {}),
 }));
 
-describe("the quiet header (#77)", () => {
+// no auto-cleanup under vitest (globals off) — the #87 lesson
+afterEach(cleanup);
+
+describe("the quiet chrome (#77 → #88)", () => {
   it("never renders the engine's raw sentence, a version, or the adapter roster", async () => {
     const { default: App } = await import("./App");
     const { container, findAllByText } = render(<App />);
@@ -65,47 +74,24 @@ describe("the quiet header (#77)", () => {
     expect(headerText).not.toMatch(/v\d+\.\d+\.\d+/);
     expect(headerText).not.toContain("adapters:");
     expect(headerText).not.toContain("http_oneshot");
-    // the engine's own words stay inspectable — tooltip + About, not chrome
-    expect(header!.querySelector(".engine-pill")?.getAttribute("title")).toContain(
+    // the engine's own words stay inspectable — status-bar tooltip + About,
+    // never as permanent chrome
+    const bar = container.querySelector(".statusbar");
+    expect(bar, "the status bar carries the one ambient signal").not.toBeNull();
+    expect(bar!.querySelector(".engine-pill")?.getAttribute("title")).toContain(
       "ium-core",
     );
     expect(text).not.toMatch(/ium-core v/); // nowhere in the shell surface
   });
 
-  it("the brand block is the constructed logomark — real SVG paths, not the generic icon", async () => {
+  it("the toolbar is commands only — no brand block, no logomark, no wordmark", async () => {
     const { default: App } = await import("./App");
     const { container } = render(<App />);
-    const mark = container.querySelector("header .brand .logomark");
-    expect(mark, "header renders a .logomark").not.toBeNull();
-    expect(mark!.tagName.toLowerCase()).toBe("svg");
-    // constructed geometry: more than one path, no raster fallbacks
-    expect(mark!.querySelectorAll("path").length).toBeGreaterThanOrEqual(2);
-    expect(mark!.querySelector("image")).toBeNull();
-    expect(mark!.getAttribute("aria-hidden")).toBe("true");
-  });
-
-  it("the logomark is the dart (#79) — twin arcs, round caps, no tile, currentColor", async () => {
-    const { default: App } = await import("./App");
-    const { container } = render(<App />);
-    const mark = container.querySelector("header .brand .logomark");
-    expect(mark, "header renders a .logomark").not.toBeNull();
-    // the dart is exactly two ribbons — the main arc and its echo
-    const paths = mark!.querySelectorAll("path");
-    expect(paths.length, "the dart is two arcs").toBe(2);
-    for (const p of Array.from(paths)) {
-      // smooth geometry only: arcs, round caps — the owner's construction ruling
-      expect(p.getAttribute("d")).toMatch(/^M\s/);
-      expect(p.getAttribute("stroke-linecap")).toBe("round");
-      expect(p.getAttribute("stroke-width")).toBeTruthy();
-      // flat ink discipline: the mark paints with currentColor, no hardcoded
-      // brand hex, no fills, no blends
-      expect(p.getAttribute("stroke")).toBe("currentColor");
-      expect(p.getAttribute("fill")).toBe("none");
-    }
-    // the teal tile is gone — no rects in the mark, ever
-    expect(mark!.querySelector("rect")).toBeNull();
-    // and no gradient machinery may ride along (the owner banned it outright)
-    expect(mark!.innerHTML).not.toMatch(/gradient/i);
-    expect(mark!.querySelector("defs")).toBeNull();
+    const header = container.querySelector("header");
+    expect(header).not.toBeNull();
+    expect(header!.querySelector(".brand"), "no .brand in the working chrome").toBeNull();
+    expect(header!.querySelector(".logomark"), "no logomark in the chrome").toBeNull();
+    expect(header!.textContent).not.toContain("IUM —");
+    expect(header!.textContent).not.toContain("Internet Upload Manager");
   });
 });

@@ -13,10 +13,12 @@
 //! * every row's state cell carries a `[data-state]` chip (journal truth).
 //! * the settings gear is `#app-settings` (the #69 credentials vault —
 //!   present in the header, not yet driven by this suite).
-//! * the inspector drawer is found by its ACCESSIBLE ROLE —
-//!   `[role="dialog"]` — never by a tag name (the `aside` tag broke once
-//!   already when #67 moved the role to its legal host; roles are the
-//!   contract, tags are the accident).
+//! * the inspector is the DOCKED pane (#88) — found by its ACCESSIBLE
+//!   ROLE, `[role="dialog"]`, never by a tag name (the `aside` tag broke
+//!   once already when #67 moved the role to its legal host; roles are
+//!   the contract, tags are the accident). Its FIRST button is Close,
+//!   and its chunk GRID squares carry `data-idx` + `data-state` +
+//!   `data-confirmed` (the journal's own words as attributes).
 //!
 //! Leg A runs the **tus adapter** (issue #37 CI debt): per-PATCH server
 //! acks make `bytes_confirmed` advance DURING the transfer, so the UI's
@@ -679,8 +681,9 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         .expect("job A done");
 
     // INSPECTOR = inspect_chunks through real IPC: click the row, read the
-    // journal truth the drawer renders verbatim (columns: #, Span, State,
-    // Confirmed, Token).
+    // journal truth the docked pane renders verbatim (#88 seam move: the
+    // chunk GRID replaced the chunk table; every square carries data-idx,
+    // the raw journal state in data-state, and data-confirmed bytes).
     //
     // Click a CELL of the row, not the <tr>: the jobs table is wider than
     // the window (seven columns, three action buttons), and a full-width
@@ -697,33 +700,37 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         .expect("click row A opens inspector");
     wd.wait_for_element("[role=\"dialog\"]", Duration::from_secs(10))
         .await
-        .expect("inspector drawer");
+        .expect("docked inspector");
     let deadline = Instant::now() + Duration::from_secs(20);
     let (states, confirmed_sum) = loop {
         let mut states = Vec::new();
         let mut confirmed = Vec::new();
-        for i in 1..=64 {
-            let Some(state_cell) = wd
+        for i in 0..64 {
+            let Some(square) = wd
                 .wait_for_element(
-                    &format!("[role=\"dialog\"] table tbody tr:nth-child({i}) td:nth-child(3)"),
+                    &format!("[role=\"dialog\"] [data-idx=\"{i}\"]"),
                     Duration::from_secs(2),
                 )
                 .await
                 .ok()
             else {
-                break; // no more chunk rows
+                break; // no more chunk squares
             };
-            states.push(wd.text(&state_cell).await.unwrap_or_default());
-            if let Ok(conf_cell) = wd
-                .wait_for_element(
-                    &format!("[role=\"dialog\"] table tbody tr:nth-child({i}) td:nth-child(4)"),
-                    Duration::from_secs(2),
-                )
-                .await
-            {
-                let t = wd.text(&conf_cell).await.unwrap_or_default();
-                confirmed.push(t.trim().parse::<u64>().unwrap_or(0));
-            }
+            states.push(
+                wd.attr(&square, "data-state")
+                    .await
+                    .unwrap_or_default()
+                    .unwrap_or_default(),
+            );
+            confirmed.push(
+                wd.attr(&square, "data-confirmed")
+                    .await
+                    .unwrap_or_default()
+                    .unwrap_or_default()
+                    .trim()
+                    .parse::<u64>()
+                    .unwrap_or(0),
+            );
         }
         if !states.is_empty()
             && states.len() == confirmed.len()
@@ -737,16 +744,16 @@ async fn shell_drives_create_progress_pause_resume_done_inspect_and_cancel() {
         );
         tokio::time::sleep(Duration::from_millis(300)).await;
     };
-    assert!(!states.is_empty(), "inspector rendered no chunk rows");
+    assert!(!states.is_empty(), "inspector rendered no chunk squares");
     assert_eq!(
         confirmed_sum,
         std::fs::metadata(&env.file_a).unwrap().len(),
-        "Σ bytes_confirmed across the plan == the source size (journal truth)"
+        "Σ data-confirmed across the plan == the source size (journal truth)"
     );
 
-    // Close the drawer BEFORE leg B: it is a fixed-position overlay on the
-    // window's right edge — the next row's action buttons live underneath
-    // it, and a WebDriver click lands on the overlay, not the button.
+    // Close the pane BEFORE leg B: it docks 150 px above the status bar and
+    // PUSHES the list up — the next row's action buttons may sit out of
+    // view until it closes (the overlay problem's cousin, same hygiene).
     let close_btn = wd
         .wait_for_element("[role=\"dialog\"] button", Duration::from_secs(5))
         .await

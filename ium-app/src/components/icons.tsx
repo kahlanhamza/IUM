@@ -149,3 +149,19 @@ export function IconGear(props: P) {
     </svg>
   );
 }
+
+export function IconPlus(props: P) {
+  return (
+    <svg {...base(props)}>
+      <path d="M12 5.5v13M5.5 12h13" />
+    </svg>
+  );
+}
+
+export function IconCloud(props: P) {
+  return (
+    <svg {...base(props)}>
+      <path d="M7.3 17.5h9.2a3.9 3.9 0 0 0 .7-7.74 5.4 5.4 0 0 0-10.4-1.2A4 4 0 0 0 7.3 17.5z" />
+    </svg>
+  );
+}

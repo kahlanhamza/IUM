@@ -30,14 +30,7 @@ import { probeCopy, probeFailCopy, type ProbeState } from "../auth";
 import { IconAlert, IconCheck, IconX, Logomark } from "./icons";
 import { Button, Chip, cx, Select, TextInput } from "./ui";
 import { ThemeToggle } from "./ThemeToggle";
-import {
-  applyTheme,
-  loadThemePref,
-  resolveTheme,
-  saveThemePref,
-  systemPrefersDark,
-  type ThemePref,
-} from "../theme";
+import { useThemePref } from "../useTheme";
 import {
   checkForUpdate,
   downloadAndInstall,
@@ -222,12 +215,16 @@ export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }
 
   return (
     <>
-      <div className="drawer-backdrop" onClick={onClose} aria-hidden="true" />
-      <div className="drawer" role="dialog" aria-modal="true" aria-label="Settings — connections">
-        <div className="drawer-head">
+      {/* #88: the centered 640 px modal over the smoke scrim — the drawer
+          chrome is retired; the internals (the lane list, the connect
+          sheets, the Esc ladder) are untouched. The shadow rides ONLY
+          here (the shadow law). */}
+      <div className="scrim" onClick={onClose} aria-hidden="true" />
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Settings — connections">
+        <div className="mhead">
           <div style={{ minWidth: 0 }}>
-            <h2 className="drawer-title">Settings</h2>
-            <div className="drawer-sub">
+            <h2 className="mtitle">Settings</h2>
+            <div className="msub">
               {expandedSection ? expandedSection.schema.label : "Connections the engine reads live"}
             </div>
           </div>
@@ -784,13 +781,9 @@ function SecretField({ section, row, busy, onDraft }: SecretFieldProps) {
  * engine round-trip, applied to the document root immediately.
  */
 function AppearanceSection() {
-  const [pref, setPref] = useState<ThemePref>(() => loadThemePref());
-
-  const choose = (next: ThemePref) => {
-    setPref(next);
-    saveThemePref(next);
-    applyTheme(resolveTheme(next, systemPrefersDark()), document);
-  };
+  // The shared store (#88): the Settings card and the toolbar's compact
+  // control are ONE state — moving either moves both in the same tick.
+  const [pref, setPref] = useThemePref();
 
   return (
     <section className="card" aria-label="Appearance">
@@ -808,7 +801,7 @@ function AppearanceSection() {
             Two inks — the mark's dark ink on light, its light ink on dark
           </div>
         </div>
-        <ThemeToggle value={pref} onChange={choose} />
+        <ThemeToggle value={pref} onChange={setPref} />
       </div>
     </section>
   );
@@ -872,9 +865,7 @@ function PrivacySection({
 
   return (
     <section className="card" aria-label="Privacy">
-      <div className="section-head" style={{ marginBottom: 8 }}>
-        <h3 className="drawer-h3" style={{ margin: 0 }}>Privacy</h3>
-      </div>
+      <h3 className="drawer-h3" style={{ margin: "0 0 8px" }}>Privacy</h3>
       <p className="settings-note">{TELEMETRY_COPY.stance}</p>
       <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "10px 0" }}>
         <input

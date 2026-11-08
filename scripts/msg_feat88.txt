@@ -1,0 +1,44 @@
+feat(app,e2e): the Ink chrome — the anatomy pass (Closes #88)
+
+The owner-approved mockups become the app's real structure: the four-pane
+contract at the mockup's exact metrics. The 48 px toolbar COMMANDS (New
+Upload focuses the path field; ThemeToggle; the #app-settings seam — and
+NO brand block: the logo ladder's Chrome rung is enforced in the component,
+pinned). The 210 px sidebar NAVIGATES (Library: All/Active/Queued/
+Completed/Failed as REAL filters with counts and aria-pressed; Destinations
+from the vault's own truth — schema × masked presence — with connection
+dots; Connect destination… opens Settings). The content pane WORKS: the
+intake panel docks under the toolbar (every #upload-* e2e seam untouched)
+and the jobs table is the dense edge-to-edge list — 36 px rows, hairline
+separators, sticky micro-caps header, tabular figures, dot+word states.
+The 28 px status bar EXPLAINS: live counts left; the engine's dot + word
++ SHORT version right (never the raw sentence — #77's law holds and is
+re-homed). The inspector DOCKS: 150 px, border-top, pushes the window
+(never position:fixed, pinned), three columns — summary / the mockup's
+chunk GRID (each square carrying data-idx + data-state + data-confirmed,
+the journal's own words as attributes) / the journal. Settings is the
+centered 640 px modal over the smoke scrim; the drawer chrome is retired.
+
+THE SEAM MOVES (same commit, the D4 rule): the e2e's chunk leg reads the
+grid (data-idx/data-state/data-confirmed, Σ still asserted == source
+size); the locator doc header updated; header.test rewritten (no brand in
+the chrome; quiet-status re-homed to the status bar); a11y lane dot state
+as .sr-only text (axe: aria-prohibited-attr), never aria-label on a
+roleless span.
+
+NEW PINS: anatomy.test.tsx — the metrics from the REAL stylesheet (48/
+210/36/28/150/640), docked-not-fixed, .drawer gone from the sheet, the
+shadow law (box-shadow only under modal/scrim/toast/focus), no
+backdrop-filter, filter behavior, New Upload focus, the status bar's
+short truth. useTheme.ts: the shared theme store — the toolbar control
+and the Settings card are ONE state (useSyncExternalStore; theme.ts stays
+framework-free). parseVersion in logic.ts + pin.
+
+RED first: 8 anatomy pins + 2 chrome pins failing at HEAD (comment on the
+issue); shadow-law and backdrop-filter pins were green at HEAD and stayed
+green — law-retention pins.
+
+Gates: vitest 129/129 (16 files, was 120), tsc strict, vite build
+208.13 KB JS / 64.71 KB gzip, WCAG AA both schemes (audit clean), cargo
+fmt clean, ium-e2e compiles. The six README screenshots re-shot through
+the real harness — the receipts show the anatomy.

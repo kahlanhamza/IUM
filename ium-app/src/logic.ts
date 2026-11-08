@@ -140,6 +140,16 @@ export function hostOf(endpoint: string): string {
   }
 }
 
+/**
+ * The engine's version, read from the engine's own sentence (#88): the
+ * status bar speaks the SHORT truth — `v0.1.1` — never the raw sentence
+ * (the #77 quiet-chrome law). Null when there is nothing honest to show.
+ */
+export function parseVersion(detail: string): string | null {
+  const m = detail.match(/\bv(\d+\.\d+\.\d+)\b/);
+  return m ? `v${m[1]}` : null;
+}
+
 export function humanBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   const units = ["KiB", "MiB", "GiB", "TiB"];

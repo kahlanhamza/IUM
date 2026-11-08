@@ -98,6 +98,9 @@
   --shadow-2: 0 4px 16px rgba(15, 23, 42, 0.08);
   --shadow-3: 0 12px 40px rgba(15, 23, 42, 0.18);
 
+  /* the smoke scrim under the settings modal (#88) */
+  --scrim: rgba(15, 23, 42, 0.35);
+
   /* geometry + motion — tight radii, one duration */
   --r-card: 10px;
   --r-ctl: 6px;
@@ -152,6 +155,8 @@
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.55);
   --shadow-3: 0 12px 40px rgba(0, 0, 0, 0.65);
+
+  --scrim: rgba(3, 7, 13, 0.55);
 }
 
 /* ------------------------------------------------------------------ base */
@@ -213,39 +218,39 @@ td,
   outline-offset: 1px;
 }
 
-/* ---------------------------------------------------------------- layout */
+/* ---------------------------------------------------------------- layout
+   The Ink anatomy (#88): the four-pane contract — the 48 px toolbar
+   COMMANDS, the 210 px sidebar NAVIGATES, the content pane WORKS, the
+   28 px status bar + the docked inspector EXPLAIN. Panes scroll; the
+   window shell does not. Hairlines carry every edge. */
 .app {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
-}
-
-.app-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 24px;
-  border-bottom: 1px solid var(--border);
+  overflow: hidden;
   background: var(--surface);
-  position: sticky;
-  top: 0;
-  z-index: 10;
 }
 
-.brand {
+.toolbar {
+  height: 48px;
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 0;
+  gap: 8px;
+  padding: 0 14px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
 }
 
-/* The logomark (#79): the dart — two smooth arcs, round caps. Size rides
-   the SVG viewBox; the mark paints with currentColor, so it reads ink on
-   light and white on dark (one mark, both themes — same as the favicon). */
-.logomark {
+.tb-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
   flex: none;
-  display: block;
+}
+
+.spacer {
+  flex: 1;
 }
 
 .about-update {
@@ -263,50 +268,167 @@ td,
   color: var(--text-2);
 }
 
-.brand-name {
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: 0.2px;
-}
-
-.brand-sub {
-  font-size: 12px;
-  color: var(--text-2);
-  margin-top: -1px;
-}
-
-.app-main {
+.app-body {
   flex: 1;
-  width: 100%;
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 20px 24px 48px;
+  display: flex;
+  min-height: 0;
+}
+
+/* ------------------------------------------------------------- sidebar */
+.sidebar {
+  width: 210px;
+  flex: none;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  padding: 10px 8px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 1px;
+  overflow-y: auto;
 }
 
-.section-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin: 8px 2px 0;
-}
-
-.section-title {
-  font-size: 13px;
-  font-weight: 650;
-  color: var(--text);
-  margin: 0;
-}
-
-.count-chip {
-  font-size: 11px;
+.slabel {
+  font-size: 10px;
   font-weight: 600;
+  letter-spacing: 0.9px;
+  color: var(--text-3);
+  padding: 12px 10px 5px;
+  text-transform: uppercase;
+}
+
+.sitem {
+  height: 28px;
+  border-radius: var(--r-ctl);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 8px;
   color: var(--text-2);
+  font-size: 13px;
+  flex: none;
+}
+
+button.sitem {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+button.sitem:hover {
   background: var(--surface-2);
-  border-radius: var(--r-pill);
-  padding: 1px 8px;
+  color: var(--text);
+}
+
+.sitem.active {
+  background: var(--accent-subtle);
+  color: var(--text);
+  font-weight: 550;
+}
+
+.sitem-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-3);
+}
+
+.sitem.active .sitem-icon {
+  color: var(--text);
+}
+
+.sitem-label {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sitem-label--fail {
+  color: var(--danger);
+}
+
+.scount {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.sdot {
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.sdot--on {
+  background: var(--accent);
+}
+
+.sdot--off {
+  background: transparent;
+  border: 1.5px solid var(--text-3);
+}
+
+.sadd {
+  color: var(--text-3);
+}
+
+/* -------------------------------------------------------------- content */
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface);
+}
+
+.content > .table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* The intake panel: the product's front door docks under the toolbar —
+   a hairline-carried inset of the content pane, not a floating card. */
+.create-panel {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.create-panel .dropzone {
+  padding: 12px 14px;
+  gap: 4px;
+}
+
+/* ------------------------------------------------------------ status bar */
+.statusbar {
+  flex: none;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.st-version {
+  font-size: 10.5px;
+  color: var(--text-3);
 }
 
 /* ------------------------------------------------------------ engine pill
@@ -337,7 +459,6 @@ td,
 
 .engine-pill--ok .dot {
   background: var(--ok);
-  box-shadow: 0 0 0 3px var(--ok-bg);
 }
 
 .engine-pill--wait .dot {
@@ -345,7 +466,6 @@ td,
      genuine caution (#86: color reserved for meaning). A neutral ink dot
      pulses until the engine answers. */
   background: var(--text-3);
-  box-shadow: 0 0 0 3px var(--surface-3);
   animation: pulse 1.2s ease-in-out infinite;
 }
 
@@ -357,7 +477,6 @@ td,
 }
 .engine-pill--down .dot {
   background: var(--danger);
-  box-shadow: 0 0 0 3px var(--danger-bg);
 }
 
 @keyframes pulse {
@@ -366,13 +485,15 @@ td,
   }
 }
 
-/* ------------------------------------------------------------------ card */
+/* ------------------------------------------------------------------ card
+   #88: the modal's internal sections — hairline-carried groups, never
+   floating cards (the shadow law: shadows ride only the floating modal). */
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-card);
-  box-shadow: var(--shadow-1);
-  padding: 16px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  padding: 12px 18px;
 }
 
 /* -------------------------------------------------------------- dropzone */
@@ -620,9 +741,13 @@ td,
   border-radius: 7px;
 }
 
-/* ----------------------------------------------------------------- table */
+/* ----------------------------------------------------------------- table
+   The dense list (#88): the thead IS the mockup's column header (30 px,
+   micro-caps, sticky over the scroll), rows are 36 px edge-to-edge with
+   hairline separators. The semantic <table> is LOAD-BEARING for the e2e
+   lane (pinned #65) — it is styled here, never restructured. */
 .table-wrap {
-  overflow-x: auto;
+  overflow: auto;
 }
 
 .table {
@@ -631,19 +756,29 @@ td,
 }
 
 .table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
   text-align: left;
-  font-size: 11.5px;
+  font-size: 10px;
   font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
   color: var(--text-3);
-  padding: 8px 10px;
+  height: 30px;
+  padding: 0 8px;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
 
 .table td {
-  padding: 10px;
+  height: 36px;
+  padding: 0 8px;
   border-bottom: 1px solid var(--border);
-  vertical-align: top;
+  vertical-align: middle;
+  font-size: 13px;
+  line-height: 1.25;
 }
 
 .table tbody tr {
@@ -688,113 +823,128 @@ td,
   flex-wrap: wrap;
 }
 
-/* ----------------------------------------------------------------- chips */
+/* ----------------------------------------------------------------- chips
+   The journal's state as the mockup's dot + word (#88): a 7 px dot carries
+   the state's color voice; the word stays the engine's own vocabulary.
+   running/queued ride the ink itself — the work IS the accent (#86). */
 .chip {
-  display: inline-block;
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  border-radius: var(--r-pill);
-  padding: 2.5px 9px;
-  /* running/queued ride the ink itself — the work IS the accent (#86) */
-  background: var(--accent);
-  color: var(--accent-text);
-  letter-spacing: 0.2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  white-space: nowrap;
 }
 
-.chip[data-state="done"] {
-  /* Terminal success is the DEFAULT expectation — it stays neutral ink.
-     Color is reserved for meaning (#86): red = failure, green = engine
-     health, and nothing else gets to shout. */
-  background: var(--surface-2);
-  color: var(--text-2);
+.chip::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-3);
 }
+
+.chip[data-state="running"],
+.chip[data-state="probing"],
+.chip[data-state="finishing"] {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.chip[data-state="running"]::before,
+.chip[data-state="probing"]::before,
+.chip[data-state="finishing"]::before {
+  background: var(--accent);
+}
+
+.chip[data-state="created"]::before {
+  /* queued = the ring: ink reserved, nothing flowing yet */
+  background: transparent;
+  border: 1.5px solid var(--text-3);
+}
+
 .chip[data-state="failed"],
 .chip[data-state="unresumable"] {
-  background: var(--danger-bg);
   color: var(--danger);
+  font-weight: 550;
 }
-.chip[data-state="canceled"] {
-  background: var(--surface-3);
-  color: var(--text-2);
-}
-.chip[data-state="paused"] {
-  /* Paused is a user action, not a caution — neutral ink, not amber. */
-  background: var(--surface-2);
-  color: var(--text-2);
+
+.chip[data-state="failed"]::before,
+.chip[data-state="unresumable"]::before {
+  background: var(--danger);
 }
 
 .badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 500;
   color: var(--text-2);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  padding: 2px 8px;
   white-space: nowrap;
 }
 
 .badge--resumable {
-  color: var(--accent);
-  background: var(--accent-subtle);
-  border-color: transparent;
+  /* the ∞ glyph speaks — no pill, no color shout (the Ink quiet table) */
+  color: var(--text-2);
 }
 
 /* -------------------------------------------------------------- progress */
 .progress {
-  height: 6px;
-  border-radius: 3px;
+  width: 86px;
+  max-width: 86px;
+  height: 4px;
+  border-radius: 2px;
   background: var(--surface-3);
   overflow: hidden;
-  min-width: 140px;
 }
 
 /* Solid fill (#77): liveness is encoded by the state chip and the speed
    column — motion is not duplicated on the bar (the old sheen gradient is
-   gone; no decoration without information). */
+   gone; no decoration without information). 150 ms: the motion budget. */
 .progress-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 2px;
   background: var(--accent);
-  transition: width 400ms var(--ease);
+  transition: width 150ms var(--ease);
 }
 
-/* ---------------------------------------------------------------- drawer */
-.drawer-backdrop {
+/* ----------------------------------------------------- modal + scrim (#88)
+   Settings is a centered 640 px surface over the smoke scrim — the drawer
+   chrome is retired. The window's ONLY drop shadows ride this surface
+   (the shadow law: hairlines carry every other edge). */
+.scrim {
   position: fixed;
   inset: 0;
-  background: rgba(10, 12, 16, 0.4);
-  z-index: 20;
+  background: var(--scrim);
+  z-index: 30;
   animation: fade-in var(--dur) var(--ease);
 }
 
-.drawer {
+.modal {
   position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 440px;
-  max-width: 92vw;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
-  box-shadow: var(--shadow-3);
-  z-index: 21;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 640px;
+  max-width: min(92vw, 640px);
+  max-height: min(78vh, 720px);
   overflow-y: auto;
-  padding: 18px;
-  animation: slide-in 200ms var(--ease);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-3);
+  z-index: 31;
+  padding-bottom: 6px;
+  animation: modal-in var(--dur) var(--ease);
 }
 
-@keyframes slide-in {
+@keyframes modal-in {
   from {
-    transform: translateX(24px);
     opacity: 0;
+    transform: translate(-50%, calc(-50% + 6px));
   }
 }
 
@@ -804,49 +954,28 @@ td,
   }
 }
 
-.drawer-head {
+.mhead {
+  padding: 16px 18px 10px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.drawer-title {
+.mtitle {
   margin: 0;
   font-size: 15px;
   font-weight: 650;
-  word-break: break-all;
 }
 
-.drawer-sub {
+.msub {
   font-size: 12px;
   color: var(--text-2);
   margin-top: 3px;
   word-break: break-all;
 }
 
-.meta-grid {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 6px 14px;
-  font-size: 12px;
-  background: var(--surface-2);
-  border-radius: var(--r-ctl);
-  padding: 10px 12px;
-}
-
-.meta-key {
-  color: var(--text-3);
-  font-weight: 600;
-}
-
-.meta-val {
-  font-family: var(--mono);
-  font-size: 12px;
-  word-break: break-all;
-  user-select: text;
-}
-
+/* The connect sheets' heading — modal-internal typography (kept name). */
 .drawer-h3 {
   margin: 4px 0 0;
   font-size: 12px;
@@ -854,25 +983,111 @@ td,
   color: var(--text-2);
 }
 
-.chunk-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
+/* --------------------------------------------------------------- inspector
+   The docked inspector (#88): a flex child at the window's bottom edge —
+   it PUSHES the content, never overlays (no fixed positioning, pinned).
+   Three columns: the job's summary, the chunk grid, the journal. */
+.inspector {
+  flex: none;
+  height: 150px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  padding: 11px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  overflow: hidden;
 }
 
-.chunk-table th {
-  text-align: left;
+.ihead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex: none;
+}
+
+.iname {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ipath {
+  font-family: var(--mono);
   font-size: 10.5px;
   color: var(--text-3);
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--border);
 }
 
-.chunk-table td {
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--border);
+.icols {
+  display: grid;
+  grid-template-columns: 290px 1fr 300px;
+  gap: 26px;
+  flex: 1;
+  min-height: 0;
+}
+
+.icol {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.cap {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  margin-bottom: 7px;
+  flex: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mline {
   font-family: var(--mono);
   font-size: 11px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: text;
+}
+
+.mline.jseq {
+  color: var(--text-3);
+}
+
+.chunks {
+  display: grid;
+  grid-template-columns: repeat(16, 8px);
+  grid-auto-rows: 8px;
+  gap: 2.5px;
+  align-content: start;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.c {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--surface-3);
+}
+
+.c.done {
+  background: var(--accent);
+}
+
+.c.act {
+  background: var(--accent);
+  opacity: 0.45;
 }
 
 .journal {
@@ -880,18 +1095,17 @@ td,
   padding: 0;
   list-style: none;
   font-family: var(--mono);
-  font-size: 11px;
-  max-height: 240px;
+  font-size: 10.5px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  background: var(--surface-2);
-  border-radius: var(--r-ctl);
-  padding: 8px 10px;
 }
 
 .journal li {
-  padding: 2.5px 0;
+  padding: 2px 0;
   border-bottom: 1px dashed var(--border);
   word-break: break-all;
+  line-height: 1.5;
 }
 
 .journal li:last-child {
@@ -911,11 +1125,12 @@ td,
   color: var(--text-2);
 }
 
-/* ----------------------------------------------------------------- toast */
+/* ----------------------------------------------------------------- toast
+   Floats above the status bar (the 28 px bar + 16 px of air). */
 .toast-stack {
   position: fixed;
   right: 20px;
-  bottom: 20px;
+  bottom: 44px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1134,9 +1349,11 @@ td,
 }
 
 .theme-option input:checked + span {
+  /* the checked option carries the ink fill — the edge stays a hairline
+     (the shadow law: no elevation inside the window, #88) */
   background: var(--surface);
   color: var(--text);
-  box-shadow: var(--shadow-1);
+  border: 1px solid var(--border);
 }
 
 .theme-option input:focus-visible + span {
