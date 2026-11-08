@@ -106,7 +106,11 @@ jobs:
         working-directory: ium-app
         shell: bash
         run: |
-          BIN="../target/release/ium-app"
+          # The binary's name is the config's word, not this step's memory —
+          # the #87 identity work renamed the product to IUM and release #11
+          # failed exactly here ("no binary at ../target/release/ium-app").
+          NAME="$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['mainBinaryName'])")"
+          BIN="../target/release/$NAME"
           if [ -f "$BIN.exe" ]; then BIN="$BIN.exe"; fi
           bash ../scripts/re_resistance_check.sh --bin "$BIN"
       - name: Collect artifacts + sha256 + measured sizes
