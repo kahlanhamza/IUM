@@ -1544,3 +1544,27 @@ button.sitem:hover {
   margin-top: 30px;
   transition: opacity var(--dur) var(--ease);
 }
+
+/* ------------------------------------------------ materials (#92)
+   Windows 11 Mica behind the Ink chrome — ONLY under the engine's
+   build-gated verdict (data-material="mica" is set pre-paint from the
+   `platform_material` answer; every other platform, Windows 10 and any
+   failed apply keep the fully opaque window). The window backing and the
+   app root go transparent so the two chrome tokens can go translucent;
+   the INK TEXT tokens stay opaque — type never sits on the wallpaper.
+   The AA audit (scripts/ink_contrast_audit.py) runs the same pairs on the
+   composited effective backgrounds and must stay clean both schemes. */
+[data-material="mica"] body,
+[data-material="mica"] .app {
+  background: transparent;
+}
+
+[data-material="mica"] {
+  --bg: rgba(245, 246, 248, 0.72);
+  --surface: rgba(255, 255, 255, 0.84);
+}
+
+[data-material="mica"][data-theme="dark"] {
+  --bg: rgba(11, 16, 26, 0.7);
+  --surface: rgba(14, 21, 33, 0.82);
+}

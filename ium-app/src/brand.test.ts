@@ -22,6 +22,10 @@ const THEME_PATH = fileURLToPath(new URL("./theme.css", import.meta.url));
  *  projection reads (NOT a bare substring: the design-law comment in
  *  theme.css mentions the attribute mid-sentence). */
 const DARK_SELECTOR = '\n[data-theme="dark"]';
+// The #92 materials block starts with this selector — scoped Mica overrides,
+// appended AFTER both schemes (it must win the cascade), which is exactly
+// why the token readers must stop before it.
+const MATERIALS_SELECTOR = '\n[data-material="mica"]';
 const readSheet = () =>
   readFileSync(SHEET_PATH, "utf8").replace(/\r\n/g, "\n");
 const readTheme = () =>
@@ -142,8 +146,14 @@ describe("the brand sheet — the token projection cannot drift (D2)", () => {
 
     const css = gateNormalize(crlfDisk(rawTheme));
     const split = css.indexOf(DARK_SELECTOR);
+    // The materials block (#92) appends SCOPED overrides after the schemes —
+    // rgba rewrites of --bg/--surface that exist only under the engine's
+    // Windows 11 Mica verdict. The sheet pins the BASE schemes; the override
+    // block is owned by ink_contrast_audit.py (the composited AA run), so
+    // the reader stops before it.
+    const materials = css.indexOf(MATERIALS_SELECTOR);
     const light = cssTokens(css.slice(0, split));
-    const dark = cssTokens(css.slice(split));
+    const dark = cssTokens(css.slice(split, materials < 0 ? undefined : materials));
     const drift: string[] = [];
     for (const tok of BRAND_COLOR_TOKENS) {
       const row = table[tok];
@@ -158,8 +168,11 @@ describe("the brand sheet — the token projection cannot drift (D2)", () => {
     const css = readTheme();
     const darkStart = css.indexOf(DARK_SELECTOR);
     expect(darkStart).toBeGreaterThan(0);
+    // Same materials exclusion as above (#92): the sheet reads the BASE
+    // schemes; the scoped Mica overrides answer to the audit, not the sheet.
+    const materials = css.indexOf(MATERIALS_SELECTOR);
     const light = cssTokens(css.slice(0, darkStart));
-    const dark = cssTokens(css.slice(darkStart));
+    const dark = cssTokens(css.slice(darkStart, materials < 0 ? undefined : materials));
     const table = sheetTable(readSheet());
 
     const drift: string[] = [];

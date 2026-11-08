@@ -89,3 +89,17 @@ export function initTheme(): () => void {
   apply();
   return watchSystemTheme(() => apply());
 }
+
+/**
+ * The materials verdict (#92): the engine answers `platform_material` —
+ * true only on Windows 11 (OS-build gate + a successful Mica apply) — and
+ * this applies it pre-paint, so a Mica boot never flashes opaque. The CSS
+ * rewrites ONLY the chrome tokens under `data-material="mica"`; the ink
+ * text tokens never move. A false verdict (every other platform, Windows
+ * 10, a failed apply) leaves the document untouched — the fully opaque
+ * window the e2e lane has always driven.
+ */
+export function applyPlatformMaterial(mica: boolean, doc: Pick<Document, "documentElement"> = document): void {
+  if (mica) doc.documentElement.dataset.material = "mica";
+  else delete doc.documentElement.dataset.material;
+}

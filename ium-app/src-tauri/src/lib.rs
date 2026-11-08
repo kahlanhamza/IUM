@@ -881,6 +881,63 @@ fn secret_mode(app: tauri::AppHandle) -> String {
     vault(&app).mode().to_string()
 }
 
+/// The materials verdict (#92): Mica only where it truly renders.
+///
+/// Wire fact (tauri-apps/tauri, 2026-06-04 report): on Windows 10
+/// `set_effects` can answer Ok while the window renders FULLY TRANSPARENT —
+/// the API's opinion proves nothing. The verdict reads the OS instead:
+/// Mica exists on Windows 11 (build ≥ 22000). Everything else — macOS,
+/// Linux, Windows 10, any failed effect call — answers `false`, and the
+/// shell stays exactly as opaque as before (the CSS only rewrites its
+/// chrome tokens under `data-material="mica"`; the text tokens never move).
+///
+/// The build number parser is platform-free so the unit tests run on every
+/// CI runner; only the caller touches `cmd /c ver`.
+fn parse_windows_build(ver: &str) -> u32 {
+    ver.split(|c: char| matches!(c, '[' | ']' | '\r' | '\n'))
+        .find_map(|seg| {
+            let seg = seg.trim();
+            let rest = seg.strip_prefix("Version ").unwrap_or(seg);
+            let mut parts = rest.split('.');
+            let _major = parts.next()?;
+            let _minor = parts.next()?;
+            parts.next()?.trim().parse().ok()
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(target_os = "windows")]
+fn real_windows_build() -> u32 {
+    std::process::Command::new("cmd")
+        .args(["/c", "ver"])
+        .output()
+        .ok()
+        .map(|o| parse_windows_build(&String::from_utf8_lossy(&o.stdout)))
+        .unwrap_or(0)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn real_windows_build() -> u32 {
+    0
+}
+
+#[tauri::command]
+fn platform_material(app: tauri::AppHandle) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        if real_windows_build() >= 22000 {
+            if let Some(main) = app.get_webview_window("main") {
+                let mut fx = tauri::utils::config::WindowEffectsConfig::default();
+                fx.effects = vec![tauri::utils::config::WindowEffect::Mica];
+                if main.set_effects(fx).is_ok() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// The launch handoff (#87): the splash page calls this when the boot is
 /// resolved — the engine answered or refused, EITHER WAY the user moves on.
 /// The main window reveals focused and the splash closes; the watchdog
@@ -1165,6 +1222,7 @@ pub fn run() {
             telemetry_status,
             telemetry_set_consent,
             telemetry_clear,
+            platform_material,
         ])
         .plugin(tauri_plugin_dialog::init())
         // the auto-update lane (#80): check = automatic, install = user-armed;
@@ -1173,4 +1231,35 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .run(tauri::generate_context!())
         .expect("error while running IUM");
+}
+
+#[cfg(test)]
+mod material_tests {
+    use super::parse_windows_build;
+
+    #[test]
+    fn win11_builds_pass_the_gate() {
+        assert_eq!(
+            parse_windows_build("Microsoft Windows [Version 10.0.22631.4160]"),
+            22631
+        );
+        assert_eq!(
+            parse_windows_build("Microsoft Windows [Version 10.0.22000.1110]"),
+            22000
+        );
+    }
+
+    #[test]
+    fn win10_builds_fail_the_gate() {
+        assert_eq!(
+            parse_windows_build("Microsoft Windows [Version 10.0.19045.5011]"),
+            19045
+        );
+    }
+
+    #[test]
+    fn garbage_answers_zero() {
+        assert_eq!(parse_windows_build("no version here"), 0);
+        assert_eq!(parse_windows_build(""), 0);
+    }
 }

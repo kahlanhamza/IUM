@@ -17,6 +17,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import {
+  applyPlatformMaterial,
   applyTheme,
   loadThemePref,
   resolveTheme,
@@ -120,3 +121,18 @@ async function testHarness() {
     }) => render(mod.ThemeToggle(props)),
   };
 }
+
+describe("the materials verdict (#92)", () => {
+  it("a true verdict sets data-material=mica on the root, pre-paint", () => {
+    document.documentElement.removeAttribute("data-material");
+    applyPlatformMaterial(true, document);
+    expect(document.documentElement.dataset.material).toBe("mica");
+  });
+
+  it("a refused verdict removes it — the window stays exactly as opaque as before", () => {
+    document.documentElement.dataset.material = "mica";
+    applyPlatformMaterial(false, document);
+    expect(document.documentElement.dataset.material).toBeUndefined();
+    expect(document.documentElement.hasAttribute("data-material")).toBe(false);
+  });
+});

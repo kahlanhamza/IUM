@@ -139,6 +139,9 @@ export const api = {
     invoke("probe_credentials", { adapter, fields }),
   /** Where the secret values actually live on this machine (footer marker). */
   secretMode: (): Promise<"keyring" | "file"> => invoke("secret_mode"),
+  /** The materials verdict (#92): true only on Windows 11 (the engine's
+   *  OS-build gate + a successful Mica apply). Everything else stays opaque. */
+  platformMaterial: (): Promise<boolean> => invoke("platform_material"),
   // --- privacy: the telemetry stance (#66 lane 7, #75) ----------------------
   /** Consent switch state + the local buffer's count and absolute path. */
   telemetryStatus: (): Promise<TelemetryStatus> => invoke("telemetry_status"),

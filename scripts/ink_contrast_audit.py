@@ -63,6 +63,38 @@ for name, s in (("LIGHT", LIGHT), ("DARK", DARK)):
             fail.append((name, fg, bg, r, note))
         print(f"  {mark}  {fg:>12} on {bg:<13} {r:5.2f}:1  ({note})")
 
+
+def composite(top, alpha, base):
+    """alpha-composite a CSS rgba() color over a solid base, return #rrggbb."""
+    t = top.lstrip("#")
+    tr, tg, tb = (int(t[i:i+2], 16) for i in (0, 2, 4))
+    b = base.lstrip("#")
+    br, bg_, bb = (int(b[i:i+2], 16) for i in (0, 2, 4))
+    mix = lambda a, b: round(a * alpha + b * (1 - alpha))
+    return f"#{mix(tr, br):02x}{mix(tg, bg_):02x}{mix(tb, bb):02x}"
+
+
+# --- the Mica scheme (#92): the composited effective backgrounds -----------
+# Under data-material="mica" (Windows 11 only) the two chrome tokens go
+# translucent: light bg α .72 / surface α .84, dark .70/.82. Each pane
+# composites ONE layer over the material base; the conservative base is the
+# theme's own solid --bg. The SAME PAIRS table must pass AA on the
+# composited values — type never sits on the wallpaper, but its pane does.
+MICA_ALPHA = {"LIGHT": {"bg": 0.72, "surface": 0.84},
+              "DARK": {"bg": 0.70, "surface": 0.82}}
+for name, s in (("LIGHT", LIGHT), ("DARK", DARK)):
+    a = MICA_ALPHA[name]
+    eff = dict(s)
+    eff["bg"] = composite(s["bg"], a["bg"], s["bg"])
+    eff["surface"] = composite(s["surface"], a["surface"], s["bg"])
+    print(f"== {name} MICA (composited: bg={eff['bg']}, surface={eff['surface']}) ==")
+    for fg, bg, minimum, note in PAIRS:
+        r = ratio(s[fg], eff[bg])
+        mark = "PASS" if r >= minimum else "FAIL"
+        if r < minimum:
+            fail.append((f"{name}-MICA", fg, bg, r, note))
+        print(f"  {mark}  {fg:>12} on {bg:<13} {r:5.2f}:1  ({note})")
+
 # AA bar for UI graphics (3:1): borders against both surfaces.
 for name, s in (("LIGHT", LIGHT), ("DARK", DARK)):
     for bgk in ("surface", "bg"):
@@ -73,4 +105,4 @@ print()
 if fail:
     print("FAILURES:", fail)
     raise SystemExit(1)
-print("All text pairs meet WCAG AA (4.5:1).")
+print("All text pairs meet WCAG AA (4.5:1) — opaque AND Mica-composited schemes.")
