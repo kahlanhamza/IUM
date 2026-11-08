@@ -102,6 +102,26 @@ jobs:
       # The shipped binary must be stripped, carry no credential VALUES and
       # no build-machine paths — a FAIL stops this job before collect/upload
       # can ship it (amendment items 1 + 3; the checklist is doc 12).
+      # The profile pins strip = "symbols", but not every linker honors it:
+      # release #12 proved the macOS and Windows binaries keep their symbol
+      # tables (nm succeeds) while the same pin strips on Linux. The shipped
+      # binary is stripped EXPLICITLY here — idempotent where the pin
+      # already worked, decisive where it did not — and the RE gate below
+      # stays the judge either way.
+      - name: Strip the release binary
+        working-directory: ium-app
+        shell: bash
+        run: |
+          NAME="$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['mainBinaryName'])")"
+          BIN="../target/release/$NAME"
+          if [ -f "$BIN.exe" ]; then BIN="$BIN.exe"; fi
+          if command -v strip >/dev/null 2>&1; then
+            strip "$BIN" && echo "stripped with strip(1): $BIN"
+          elif command -v llvm-strip >/dev/null 2>&1; then
+            llvm-strip "$BIN" && echo "stripped with llvm-strip: $BIN"
+          else
+            echo "no strip tool on this runner — the RE gate would fail anyway"; exit 1
+          fi
       - name: RE-resistance binary gate
         working-directory: ium-app
         shell: bash
