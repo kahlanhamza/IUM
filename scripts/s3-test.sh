@@ -123,23 +123,29 @@ cleanup() {
 trap cleanup EXIT
 
 if [ "$SERVER" = "rclone" ]; then
-  curl -sSL --retry 3 -o "$WORK/$ASSET" "$RCLONE_BASE_URL/$ASSET" \
-    || die "download $RCLONE_BASE_URL/$ASSET"
-  curl -sSL --retry 3 -o "$WORK/SHA256SUMS" "$RCLONE_BASE_URL/SHA256SUMS" \
-    || die "download SHA256SUMS"
+  # -f is the #89 guard: without it an upstream 504 HTML body is saved with exit 0
+  # and poisons the sidecar; --retry 3 + --retry-delay 2 rides out CDN brown-outs.
+  curl -fsSL --retry 3 --retry-delay 2 -o "$WORK/$ASSET" "$RCLONE_BASE_URL/$ASSET" \
+    || die "download $RCLONE_BASE_URL/$ASSET — upstream error (HTTP 4xx/5xx?)"
+  curl -fsSL --retry 3 --retry-delay 2 -o "$WORK/SHA256SUMS" "$RCLONE_BASE_URL/SHA256SUMS" \
+    || die "download SHA256SUMS — upstream error (HTTP 4xx/5xx?)"
   expected_sha256="$(awk -v a="$ASSET" '$2==a {print $1}' "$WORK/SHA256SUMS" | tr -d '[:space:]')"
   actual_sha256="$(sha256sum "$WORK/$ASSET" | cut -d' ' -f1)"
-  [ -n "$expected_sha256" ] && [ "$actual_sha256" = "$expected_sha256" ] \
+  echo "$expected_sha256" | grep -Eq '^[0-9a-fA-F]{64}$' \
+    || die "SHA256SUMS has no 64-hex digest for $ASSET — upstream served an error page? (supply-chain guard)"
+  [ "$actual_sha256" = "$expected_sha256" ] \
     || die "sha256 mismatch for $ASSET (expected ${expected_sha256:-none}, got $actual_sha256) — supply-chain guard"
   say "downloaded + sha256 verified (via SHA256SUMS)"
 else
-  curl -sSL --retry 3 -o "$WORK/$ASSET" "$BASE_URL/$ASSET" \
-    || die "download $BASE_URL/$ASSET"
-  curl -sSL --retry 3 -o "$WORK/$ASSET.md5" "$BASE_URL/$ASSET.md5" \
-    || die "download md5 sidecar"
+  curl -fsSL --retry 3 --retry-delay 2 -o "$WORK/$ASSET" "$BASE_URL/$ASSET" \
+    || die "download $BASE_URL/$ASSET — upstream error (HTTP 4xx/5xx?)"
+  curl -fsSL --retry 3 --retry-delay 2 -o "$WORK/$ASSET.md5" "$BASE_URL/$ASSET.md5" \
+    || die "download md5 sidecar — upstream error (HTTP 4xx/5xx?)"
   actual_md5="$(md5sum "$WORK/$ASSET" | cut -d' ' -f1)"
   expected_md5="$(tr -d '[:space:]' < "$WORK/$ASSET.md5")"
-  [ -n "$expected_md5" ] && [ "$actual_md5" = "$expected_md5" ] \
+  echo "$expected_md5" | grep -Eq '^[0-9a-fA-F]{32}$' \
+    || die "md5 sidecar for $ASSET is not a 32-hex digest — upstream served an error page? (supply-chain guard)"
+  [ "$actual_md5" = "$expected_md5" ] \
     || die "md5 mismatch for $ASSET (expected $expected_md5, got $actual_md5) — supply-chain guard"
   say "downloaded + md5 verified"
 fi

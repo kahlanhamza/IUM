@@ -154,11 +154,15 @@ if [ "$SERVER" = "tus-node" ]; then
   node "$LANE_DIR/server.mjs" "$TUS_DATA" "$TUS_PORT" > "$WORK/tus-node.log" 2>&1 &
   TUSD_PID=$!   # single kill-handle name reused by cleanup
 else
-  curl -sSL --retry 3 -o "$WORK/$ASSET" "$BASE_URL/$ASSET" || die "download $ASSET"
-  curl -sSL --retry 3 -o "$WORK/$ASSET.sha256" "$BASE_URL/$ASSET.sha256" || die "download sha256 sidecar"
+  # -f is the #89 guard: without it an upstream 504 HTML body is saved with exit 0
+  # and poisons the sidecar; --retry 3 + --retry-delay 2 rides out CDN brown-outs.
+  curl -fsSL --retry 3 --retry-delay 2 -o "$WORK/$ASSET" "$BASE_URL/$ASSET" || die "download $ASSET — upstream error (HTTP 4xx/5xx?)"
+  curl -fsSL --retry 3 --retry-delay 2 -o "$WORK/$ASSET.sha256" "$BASE_URL/$ASSET.sha256" || die "download sha256 sidecar — upstream error (HTTP 4xx/5xx?)"
   actual="$(sha256sum "$WORK/$ASSET" | cut -d' ' -f1)"
   expected="$(cut -d' ' -f1 < "$WORK/$ASSET.sha256")"
-  [ -n "$expected" ] && [ "$actual" = "$expected" ] \
+  echo "$expected" | grep -Eq '^[0-9a-fA-F]{64}$' \
+    || die "sha256 sidecar for $ASSET is not a 64-hex digest — upstream served an error page? (supply-chain guard)"
+  [ "$actual" = "$expected" ] \
     || die "sha256 mismatch for $ASSET (expected $expected, got $actual) — supply-chain guard"
   say "downloaded + sha256 verified"
 
