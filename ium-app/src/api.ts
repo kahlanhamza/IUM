@@ -148,6 +148,11 @@ export const api = {
    *  denied permission) — the shell never depends on this surface. */
   notifyUser: (title: string, body: string): Promise<boolean> =>
     invoke("notify_user", { title, body }),
+  /** The speed cap (#94): bytes/sec across ALL jobs and lanes, or null for
+   *  unlimited. HOT — running jobs obey on their next between-lease
+   *  acquire. The shell persists the choice and re-asserts it at boot. */
+  setRateCap: (cap: number | null): Promise<void> =>
+    invoke("set_rate_cap", { cap }),
   /** Consent switch state + the local buffer's count and absolute path. */
   telemetryStatus: (): Promise<TelemetryStatus> => invoke("telemetry_status"),
   /** The master switch — enforced at the engine's single write point. */

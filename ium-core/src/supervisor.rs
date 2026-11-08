@@ -204,6 +204,14 @@ impl Supervisor {
         self.inner.manager.pause(job_id)
     }
 
+    /// The global upload cap (#94): bytes/sec across ALL jobs and lanes, or
+    /// `None` for unlimited. Hot — running workers obey on their next
+    /// between-lease acquire. The shell persists the user's choice and
+    /// re-asserts it at boot (a policy knob, not journal truth).
+    pub fn set_rate_cap(&self, cap: Option<u64>) {
+        self.inner.manager.set_rate_cap(cap);
+    }
+
     /// Resume: clear the pause flag AND re-spawn the drive task (the previous
     /// task exited when it journaled Paused — a flag flip alone is a no-op).
     pub fn resume_signal(&self, job_id: &str) -> Result<()> {

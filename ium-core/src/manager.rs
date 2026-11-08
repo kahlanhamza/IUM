@@ -97,6 +97,10 @@ pub struct JobManager {
     cancel_flags: Mutex<HashMap<String, watch::Sender<bool>>>,
     /// job ids with an active driver task — enforces single-driver.
     active: Mutex<HashSet<String>>,
+    /// The global rate bucket (#94): every worker of every job acquires its
+    /// lease's bytes here BEFORE the upload — the cap is the SUM across
+    /// parallel flows. Unlimited (`None`) = the acquire is a no-op.
+    rate: Arc<crate::rate::Bucket>,
 }
 
 /// RAII guard so a panicking/early-returning driver always releases its slot.
@@ -193,6 +197,7 @@ impl JobManager {
             pause_flags: Mutex::new(HashMap::new()),
             cancel_flags: Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
+            rate: Arc::new(crate::rate::Bucket::new(None)),
         })
     }
 
@@ -208,6 +213,7 @@ impl JobManager {
             pause_flags: Mutex::new(HashMap::new()),
             cancel_flags: Mutex::new(HashMap::new()),
             active: Mutex::new(HashSet::new()),
+            rate: Arc::new(crate::rate::Bucket::new(None)),
         })
     }
 
@@ -240,6 +246,20 @@ impl JobManager {
     /// Replace the retry policy (spec §5's per-error-class decisions).
     pub fn set_policy(&mut self, policy: RetryPolicy) {
         self.policy = policy;
+    }
+
+    /// The global upload cap (#94): bytes/sec across ALL jobs and lanes —
+    /// the sum the fleet may take — or `None` for unlimited. A policy knob
+    /// (the set_policy family's shape): runtime state, not journal truth;
+    /// the shell persists the user's choice and re-asserts it at boot. HOT:
+    /// running workers obey on their next between-lease acquire.
+    pub fn set_rate_cap(&self, cap: Option<u64>) {
+        self.rate.set_rate(cap);
+    }
+
+    /// The bucket reference for the worker loop's pre-upload acquire.
+    fn rate(&self) -> &Arc<crate::rate::Bucket> {
+        &self.rate
     }
 
     /// Slow-chunk eviction tuning (spec §4.2). Shrink the window in tests.
@@ -1542,6 +1562,40 @@ impl JobManager {
             // current plan; only a NEW bump (a real resplit under THIS
             // upload) may abort it.
             resplit_rx.borrow_and_update();
+
+            // -- the global cap (#94): pace BETWEEN leases -----------------
+            // Acquire the next lease's bytes BEFORE leasing: nothing is
+            // held during the wait, so an abort/pause/resplit that lands
+            // mid-wait simply re-runs THIS loop top (the same epoch sync,
+            // the same flags — no stranded lease, no duplicate guard). The
+            // wait also sits OUTSIDE the upload's eviction-tracked window,
+            // so a capped wait can never be sampled as a stalled chunk —
+            // zero false evictions by construction. The size is the pool's
+            // current outstanding target (the largest unfinished part): the
+            // eventual lease is that size or smaller (the file's tail), so
+            // the pacing is honest-never-greedy. Unlimited = no-op.
+            if self.rate().cap().is_some() {
+                let want = shared
+                    .pool
+                    .lock()
+                    .expect("pool mutex poisoned")
+                    .outstanding_target();
+                if want > 0 {
+                    // One select! — `acquire` slices internally, so the wait
+                    // is a single future; an abort or a resplit bump wins the
+                    // biased race and `continue` re-runs the loop top (the
+                    // flags' one home of meaning).
+                    let paced_out = tokio::select! {
+                        biased;
+                        _ = abort_rx.changed() => Some(true),
+                        _ = resplit_rx.changed() => Some(false),
+                        _ = self.rate().acquire(want) => None,
+                    };
+                    if paced_out.is_some() {
+                        continue; // the loop top owns every flag's meaning
+                    }
+                }
+            }
 
             // -- lease: the in-memory pool decides, the journal mirrors it --
             // The pool lock is held across the journal mirror: a resplit

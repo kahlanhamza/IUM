@@ -34,6 +34,7 @@ import { ThemeToggle } from "./components/ThemeToggle";
 import { confirmedTotal, parseVersion, recentEndpoints, speedBetween } from "./logic";
 import { APP_COPY, humanizeError } from "./copy";
 import { notifyDraftFor, useNotifyPref } from "./notify";
+import { kbpsToBytesPerSec, loadRateCapKbps } from "./speed";
 import { checkForUpdate } from "./updater";
 import { useThemePref } from "./useTheme";
 
@@ -242,6 +243,19 @@ export default function App() {
       });
     };
   }, [refreshJobs, refreshLanes, pushToast]);
+
+  // The speed cap (#94): re-assert the persisted choice at every boot — the
+  // cap is a policy knob in the engine (runtime state), so the shell owns
+  // the persistence. Failure is a silent no: the knob is optional, the next
+  // boot tries again.
+  useEffect(() => {
+    const kbps = loadRateCapKbps();
+    if (kbps !== null) {
+      api.setRateCap(kbpsToBytesPerSec(kbps)).catch(() => {
+        /* the knob is optional; the Settings card still shows the choice */
+      });
+    }
+  }, []);
 
   // The terminal notifications (#93): ONE detector watches the jobs array —
   // the live `job_updated` listener, the 4 s poll, and a manual refresh all

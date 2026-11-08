@@ -25,8 +25,9 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type AdapterSchema, type ProbeResult, type TelemetryStatus } from "../api";
 import { canSave, changedFields, probeFields, toRows, type FieldRow } from "../settings";
 import { connectionState, OAUTH_BACKENDS } from "../connect";
-import { APP_COPY, NOTIFICATIONS_COPY, TELEMETRY_COPY } from "../copy";
+import { APP_COPY, NOTIFICATIONS_COPY, SPEED_COPY, TELEMETRY_COPY } from "../copy";
 import { useNotifyPref } from "../notify";
+import { kbpsToBytesPerSec, loadRateCapKbps, saveRateCapKbps } from "../speed";
 import { probeCopy, probeFailCopy, type ProbeState } from "../auth";
 import { IconAlert, IconCheck, IconX, Logomark } from "./icons";
 import { Button, Chip, cx, Select, TextInput } from "./ui";
@@ -237,6 +238,8 @@ export function SettingsDialog({ open, onClose, onError, onSaved, engineDetail }
         <AppearanceSection />
 
         <NotifySection />
+
+        <SpeedSection onError={onError} onSaved={onSaved} />
 
         <PrivacySection onError={onError} onSaved={onSaved} />
 
@@ -774,6 +777,88 @@ function SecretField({ section, row, busy, onDraft }: SecretFieldProps) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The Speed card (#94): ONE global cap the user sets once and trusts. The
+ * checkbox arms the cap; the field is its size in KB/s. The contract is
+ * stated, not implied: the cap is the TOTAL across every upload and lane,
+ * and it is hot — running uploads obey the moment it changes. The choice
+ * persists (localStorage) and the shell re-asserts it at every boot.
+ */
+function SpeedSection({
+  onError,
+  onSaved,
+}: {
+  onError: (message: string) => void;
+  onSaved: (message: string) => void;
+}) {
+  const [kbps, setKbps] = useState<number | null>(() => loadRateCapKbps());
+  const [draft, setDraft] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+
+  const draftValue = draft === "" ? null : Number(draft);
+  const draftValid = draftValue === null || (Number.isFinite(draftValue) && draftValue > 0);
+
+  async function apply(next: number | null) {
+    setBusy(true);
+    try {
+      await api.setRateCap(next === null ? null : kbpsToBytesPerSec(next));
+      saveRateCapKbps(next);
+      setKbps(next);
+      setDraft("");
+      onSaved(next === null ? SPEED_COPY.clearedToast : SPEED_COPY.savedToast);
+    } catch (e) {
+      onError(`changing the speed cap failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card" aria-label="Speed">
+      <h3 className="drawer-h3" style={{ margin: "0 0 8px" }}>Speed</h3>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "10px 0" }}>
+        <input
+          id="rate-cap-enabled"
+          type="checkbox"
+          checked={kbps !== null}
+          disabled={busy}
+          onChange={(e) => void apply(e.target.checked ? 1024 : null)}
+          style={{ width: 15, height: 15, accentColor: "var(--accent)", cursor: "pointer" }}
+        />
+        <label htmlFor="rate-cap-enabled" style={{ cursor: "pointer" }}>
+          {SPEED_COPY.switchLabel}
+        </label>
+        {kbps !== null ? (
+          <span style={{ display: "inline-flex", gap: 6, alignItems: "center", marginLeft: "auto" }}>
+            <input
+              id="rate-cap-kbps"
+              type="number"
+              min={1}
+              value={draft !== "" ? draft : String(kbps)}
+              disabled={busy}
+              aria-label="Speed cap in kilobytes per second"
+              onChange={(e) => setDraft(e.target.value)}
+              style={{ width: 84 }}
+            />
+            <span className="settings-note" style={{ margin: 0 }}>{SPEED_COPY.inputSuffix}</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy || !draftValid || draftValue === null || draftValue === kbps}
+              onClick={() => void apply(draftValue)}
+            >
+              Apply
+            </Button>
+          </span>
+        ) : null}
+      </div>
+      <p className="settings-note" style={{ color: "var(--text-2)" }}>
+        {SPEED_COPY.contract}
+      </p>
+    </section>
   );
 }
 

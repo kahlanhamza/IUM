@@ -898,6 +898,15 @@ fn notify_user(app: tauri::AppHandle, title: String, body: String) -> bool {
         .is_ok()
 }
 
+/// The speed cap (#94): the shell persists the user's choice (a policy
+/// knob, not journal truth) and re-asserts it at every boot; this command
+/// is the mouth. `None` = unlimited. HOT — running jobs obey on their next
+/// between-lease acquire; the cap is the SUM across all jobs and lanes.
+#[tauri::command]
+fn set_rate_cap(engine: State<'_, Engine>, cap: Option<u64>) {
+    engine.0.set_rate_cap(cap);
+}
+
 /// The materials verdict (#92): Mica only where it truly renders.
 ///
 /// Wire fact (tauri-apps/tauri, 2026-06-04 report): on Windows 10
@@ -1251,6 +1260,7 @@ pub fn run() {
             probe_credentials,
             secret_mode,
             notify_user,
+            set_rate_cap,
             telemetry_status,
             telemetry_set_consent,
             telemetry_clear,

@@ -59,6 +59,7 @@ pub mod journal;
 pub mod manager;
 pub mod netpath;
 pub mod prober;
+pub mod rate;
 pub mod retry;
 pub mod state;
 pub mod supervisor;

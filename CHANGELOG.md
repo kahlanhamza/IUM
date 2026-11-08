@@ -11,6 +11,18 @@ prose. An entry without verifiable issue numbers does not belong here.
 ## [Unreleased]
 
 ### Added
+- The global speed cap (#94): one knob in Settings → Speed — bytes/sec
+  across ALL jobs and lanes (the cap divides the bearer sum; per-flow caps
+  would let the fleet multiply it), or unlimited. The engine enforces it
+  between leases (a cancellation-safe acquire BEFORE each lease — outside
+  the eviction-tracked window, so a capped wait can never be sampled as a
+  stalled chunk: zero false evictions by construction); the bucket slices
+  grants so any lease size completes in its fair `n/cap` time (a
+  single-shot bucket would deadlock leases larger than one cap-second).
+  HOT: running uploads obey the moment the cap changes; the choice is a
+  policy knob (runtime state, not journal truth) persisted shell-side and
+  re-asserted at every boot. Virtual-time-tested (tokio `start_paused`):
+  pacing, fleet sum ≤ cap, hot swap, byte-exact under a cap.
 - OS notifications for the two terminal job states (#93): a pure transition
   rule (first sight silent, same-state idempotent, focus-aware — the OS
   surface is for the away case, the in-app toast for the looking case), the

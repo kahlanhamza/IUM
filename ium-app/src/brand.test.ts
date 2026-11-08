@@ -12,6 +12,7 @@ import {
   DEFAULT_COPY,
   NOTIFICATIONS_COPY,
   RULES,
+  SPEED_COPY,
   TELEMETRY_COPY,
   type CopyRule,
 } from "./copy";
@@ -291,6 +292,10 @@ describe("the brand sheet — the UI copy follows the voice (D3)", () => {
     // strings are enumerated here.
     for (const k of ["doneTitle", "failedTitle", "settingsLabel", "settingsNote"] as const) {
       out.push({ text: NOTIFICATIONS_COPY[k], where: `NOTIFICATIONS_COPY.${k}` });
+    }
+    // The speed-cap surface rides the same voice (#94).
+    for (const k of ["switchLabel", "contract", "savedToast", "clearedToast"] as const) {
+      out.push({ text: SPEED_COPY[k], where: `SPEED_COPY.${k}` });
     }
     return out;
   }

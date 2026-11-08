@@ -47,6 +47,9 @@ libc = "0.2"
 [dev-dependencies]
 tempfile = "3"
 trybuild = "1.0.122"
+# Virtual time for the #94 pacing pins: deterministic cap tests, no clocks
+# to bet on (the #54 lesson). Test-only — the production build never sees it.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lib]
 name = "ium_core"

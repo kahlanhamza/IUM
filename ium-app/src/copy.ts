@@ -237,6 +237,21 @@ export const NOTIFICATIONS_COPY = {
     "If you are looking at IUM, only the in-app toast speaks — the OS surface is for the away case.",
 } as const;
 
+/**
+ * The speed-cap copy (#94): the Settings card's words. The honest contract
+ * the sentence states: the cap is the TOTAL across every upload and lane
+ * (the #46 vocabulary — the cap divides the bearer sum), and it is hot —
+ * running uploads obey the moment it changes.
+ */
+export const SPEED_COPY = {
+  switchLabel: "Limit total upload speed",
+  inputSuffix: "KB/s",
+  contract:
+    "The cap is the total across every upload and lane. It applies the moment you change it — running uploads included.",
+  savedToast: "The speed cap applies now — running uploads included.",
+  clearedToast: "The speed cap is off — uploads use the full link.",
+} as const;
+
 export function humanizeError(raw: string): ErrorCopy {
   const lowered = raw.toLowerCase();
   for (const rule of RULES) {
