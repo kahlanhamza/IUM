@@ -95,21 +95,29 @@ check_stripped() {
 
 fallback_stripped() {
   local bin="$1"
-  if command -v nm >/dev/null 2>&1; then
-    # The verdict is the SYMBOL COUNT, not the exit status: BSD nm (macOS)
-    # exits 0 even for a stripped binary — "no name list" goes to stderr
-    # and stdout stays empty — so exit-status-only checking false-positives
-    # on every honestly-stripped Mach-O (release #13 proved it: strip(1)
-    # succeeded and the count-based verdict still failed it).
+  # The amendment bar (#76 item 1) is DEBUG symbols. Platform-honest
+  # signals, learned from releases #12-#14:
+  #   Mach-O: the __DWARF segment + stabs entries (nm type '-') — a small
+  #           export symtab LEGALLY survives any strip;
+  #   PE:     the RSDS codeview marker;
+  #   ELF:    the symbol count (a stripped ELF lists nothing).
+  if command -v otool >/dev/null 2>&1 && otool -l "$bin" 2>/dev/null | grep -q __DWARF; then
+    fail "$bin carries a __DWARF segment (debug data present)"
+  fi
+  if command -v nm >/dev/null 2>&1 && nm "$bin" 2>/dev/null | awk '$2 == "-"' | grep -q .; then
+    fail "$bin carries stabs debug symbols"
+  fi
+  if grep -aq RSDS "$bin" 2>/dev/null; then
+    fail "$bin carries the RSDS codeview marker (debug data present)"
+  fi
+  if command -v nm >/dev/null 2>&1 && command -v otool >/dev/null 2>&1 && ! otool -l "$bin" >/dev/null 2>&1; then
+    # nm exists but otool does not and the binary is not Mach-O — the ELF
+    # lane: a shipped object lists no symbols.
     if [ "$(nm "$bin" 2>/dev/null | wc -l)" -gt 0 ]; then
       fail "$bin still lists symbols via nm"
     fi
-    echo "RE-CHECK: $bin — zero symbols via nm — stripped"
-  elif grep -aq RSDS "$bin" 2>/dev/null; then
-    fail "$bin carries the RSDS codeview marker (debug data present)"
-  else
-    echo "RE-CHECK: $bin — no RSDS marker — stripped (windows fallback)"
   fi
+  echo "RE-CHECK: $bin — no DWARF, no stabs, no RSDS — debug-stripped"
 }
 
 # repo_pins_check <root> — the committed-tree pins (amendment items 1, 2, 4).

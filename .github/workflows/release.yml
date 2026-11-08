@@ -115,13 +115,22 @@ jobs:
           NAME="$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['mainBinaryName'])")"
           BIN="../target/release/$NAME"
           if [ -f "$BIN.exe" ]; then BIN="$BIN.exe"; fi
-          if command -v strip >/dev/null 2>&1; then
-            strip "$BIN" && echo "stripped with strip(1): $BIN"
-          elif command -v llvm-strip >/dev/null 2>&1; then
-            llvm-strip "$BIN" && echo "stripped with llvm-strip: $BIN"
-          else
-            echo "no strip tool on this runner — the RE gate would fail anyway"; exit 1
-          fi
+          # The amendment bar (#76 item 1) is DEBUG symbols. Mach-O keeps a
+          # small export symtab even fully stripped, so macOS strips debug +
+          # locals (-Sx) and the DETECTOR checks the debug signals — the
+          # other platforms strip the table outright.
+          case "$(uname -s)" in
+            Darwin)
+              strip -Sx "$BIN" && echo "debug-stripped (-Sx): $BIN" ;;
+            *)
+              if command -v strip >/dev/null 2>&1; then
+                strip "$BIN" && echo "fully stripped: $BIN"
+              elif command -v llvm-strip >/dev/null 2>&1; then
+                llvm-strip "$BIN" && echo "fully stripped (llvm): $BIN"
+              else
+                echo "no strip tool on this runner — the RE gate would fail anyway"; exit 1
+              fi ;;
+          esac
       - name: RE-resistance binary gate
         working-directory: ium-app
         shell: bash
