@@ -50,3 +50,56 @@ Two fixes, one per layer:
 2. **Harness (the test double)**: the shared bucket grants ONE 20 ms poll-slice per take (`rate × 0.02`, was ×0.25) — no single connection can outrun a cycle; the wake rotation shares the bearer by construction.
 
 Full core suite green after the engine change (46/46 binaries). End-to-end validation = the next `long_soak` dispatch (the 55-minute leg must reach `Done` with an honest plateau receipt).
+
+## R3 dispatch round 2 (run 42550649711) + the local repro — the send path was the killer
+
+The round-2 dispatch on the primer fix FAILED with the same terminal shape
+(`resumed leg ended Failed`). The pushed tree could not say why; the
+diagnostics commit (ef0d836, this lane) gives every future failure a name.
+The local repro (30 MiB @ 8192 B/s, the diagnostic build) then named it in
+ONE leg — the receipt chain:
+
+```
+transient: transport: error sending request ... ← client error (SendRequest)
+  ← error writing a body to connection ← Connection timed out (os error 110)
+```
+
+**The un-paced send path**: hyper blasts the part body into the socket until
+the kernel buffers fill (~1.1 MB in this box, `tcp_wmem` max 931 136 B), then
+the write pends for the drain — 8–95 s at a stretch at 8 KiB/s (measured with
+a bare-socket experiment) — and the TCP stack kills the stalled writer. The
+engine retried the ENTIRE part from zero (S3 parts are atomic), 8 attempts
+each, journal frozen, budget dead. Isolation experiment: a paced receiver
+does NOT kill a bare sender — the kill needs the engine's exact writer
+shape; the receipt, not the theory, names it.
+
+**The fix (round 2, three layers):**
+
+1. **`PacedAsyncRead`** (adapter_s3.rs): the body reads pace to the MEASURED
+   wire — a debt-carrying token bucket (2 s burst ceiling) over tokio's
+   clock, so the socket never buffers deeper than the ceiling and the writer
+   never pends longer than the wire itself. 0 = unpaced passthrough (no
+   measurement → byte-identical behavior; fast links unchanged — the pacing
+   engages only below a 4 MiB/s ceiling). Wired through the existing #57
+   probe: `TransferAdapter::notify_link_bps` (default no-op — zero breakage)
+   delivers `profile.single_bps` after a successful probe, and `run_job`
+   re-notifies from the JOURNALED link_profile on every drive — the pace
+   survives a pause/crash/restart. Virtual-time pins: wire conservation
+   (3000 B @ 1000 B/s = ~2.0 s), passthrough, burst ceiling.
+2. **The saturated-lease hold** (manager.rs): a lease whose body is FULLY
+   emitted is not stalled — it is waiting for the confirm. S3 parts are
+   atomic: an eviction there re-PUTs the whole span from zero (the leg's
+   3 evictions = 22 MB of pure waste). The window doesn't vote and doesn't
+   strike.
+3. **`reconcile_parts` dedups a re-PUT duplicate**: SeaweedFS's ListParts
+   listed BOTH copies of a re-PUT part (`expected 2, found 1; server listed
+   6 part(s): (p1) (p1) (p2)...`). S3 replace semantics: the latest write IS
+   the part; dedup by part number, judge contiguity on the deduped list.
+
+**Local GREEN (full arc)**: 30 MiB @ 65536 B/s, `IUM_LINK_PROBE=1`,
+`EVIDENCE {... "state":"Done", "mid_state":"done", "frontier_at_pause":
+31457280, "fd_span":{"delta":0,"bound":4}, "rss_hwm_kb":14408,
+"replayed_and_resumed":true, byte-exact readback}` — the paced leg holds
+`VICTIM-WIRE moved=7864320B in 120.0s (65536 B/s)` per part, zero
+abandons. The long_soak stress job now sets `IUM_LINK_PROBE=1` (the owner's
+shell posture — the leg models it) so the measurement and the pace engage.

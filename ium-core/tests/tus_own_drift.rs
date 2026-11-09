@@ -94,9 +94,17 @@ async fn two_midbody_deaths_converge_in_one_call() {
         2,
         "the drill's two kill-shots must both have fired"
     );
-    assert!(
-        progress.wasted() > 0,
-        "the flushed-nowhere bytes of the killed attempts are measured waste (#37 reckoning)"
+    // The #37 reckoning, as the exact identity it defines: every counted
+    // wire byte is either server-persisted or measured waste —
+    // `moved() − wasted() == bytes the server actually took`. The old
+    // `wasted() > 0` asserted one side of a documented client↔server
+    // scheduling race (the waste size is "0–48 KiB quiet, 192 KiB on a
+    // loaded runner" — 0 is IN range) and flaked the gate on a quiet box
+    // (issue #95 round-2 gate). The identity is deterministic on both.
+    assert_eq!(
+        progress.moved() - progress.wasted(),
+        SPAN,
+        "the accounting identity: persisted bytes + measured waste == counted wire bytes"
     );
     // Byte fidelity: whatever route the bytes took (kill + realign + accept),
     // the stored content is exactly the source's prefix.

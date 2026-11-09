@@ -340,6 +340,15 @@ pub trait TransferAdapter: Send + Sync {
         Ok(None)
     }
 
+    /// The measured single-stream goodput (bytes/second), handed BACK to the
+    /// adapter after a successful probe (issue #95): the send path paces its
+    /// body to the measured wire. An un-paced writer on a B/s-class link
+    /// fills the socket, pends for the drain, and hostile TCP stacks kill
+    /// the stalled writer — burning the attempt budget on whole-part
+    /// re-sends (the long-soak receipts, dispatch 42550649711). Default:
+    /// no-op — lanes without a paced send path stay byte-identical.
+    fn notify_link_bps(&self, _bps: f64) {}
+
     /// The lane's prescribed uniform chunk size, when STATIC (issue #56):
     /// consulted at CREATE time — before any probe exists — so the initial
     /// plan is born in the prescribed shape (the probe later re-declares

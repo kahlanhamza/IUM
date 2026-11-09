@@ -131,6 +131,13 @@ jobs:
             "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_30MB.mp4"
           echo "5b603ec1db36cc15d5e48ab9ea6e72ffd6a65e325f2bb218e9ed298974b453bc  /tmp/bbb_30mb.mp4" | sha256sum -c -
       - name: Long-haul plateau soak (RSS slope + fd span, issue #95 R3)
+        env:
+          # The probe measures the paced lane and the send path paces to it
+          # (issue #95 round 2): without the measurement the un-paced writer
+          # fills the socket on a B/s-class link and the stalled write dies
+          # (ETIMEDOUT) — the exact shape dispatch 42550649711 caught. The
+          # owner's shell runs the probe explicitly; the leg models that.
+          IUM_LINK_PROBE: "1"
         run: >-
           bash scripts/s3-test.sh --with-longhaul /tmp/bbb_30mb.mp4
           "${{ inputs.longhaul_rate || '8192' }}"

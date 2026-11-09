@@ -51,7 +51,11 @@
 //! `IUM_S3_ACCESS_KEY` / `IUM_S3_SECRET_KEY` / `IUM_S3_REGION`.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{ready, Context, Poll};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -333,8 +337,20 @@ pub fn reconcile_parts(parts: &[ListedPart], source_size: u64) -> Result<(), Str
             ))
         };
     }
+    // A re-PUT of a partNumber REPLACES it (S3 semantics), but SeaweedFS's
+    // ListParts can list BOTH copies after an eviction re-PUT (the #95 leg:
+    // `expected 2, found 1; server listed 6 part(s): (p1 ..) (p1 ..)`). The
+    // engine's own journal knows it re-PUT those parts — the duplicate entry
+    // is reality, not corruption. Dedup by part number keeping the LAST
+    // listed copy (the latest write), then judge contiguity on the deduped
+    // list, ascending.
+    let mut latest: std::collections::BTreeMap<u32, &ListedPart> =
+        std::collections::BTreeMap::new();
+    for p in parts {
+        latest.insert(p.number, p);
+    }
     let mut sum = 0u64;
-    for (expected, p) in (1u32..).zip(parts.iter()) {
+    for (expected, p) in (1u32..).zip(latest.values()) {
         if p.number != expected {
             return Err(format!(
                 "part numbers not contiguous: expected {expected}, found {}",
@@ -414,6 +430,9 @@ pub struct S3MultipartAdapter {
     client: Client,
     signer: SigV4Signer,
     sessions: Mutex<HashMap<String, String>>,
+    /// The measured single-stream wire (bytes/second) from the last probe;
+    /// 0 = unpaced. Shared so `notify_link_bps` reaches every upload call.
+    pace_bps: Arc<AtomicU64>,
 }
 
 /// One S3 request description — method, target, signed query/headers and
@@ -452,6 +471,7 @@ impl S3MultipartAdapter {
             client,
             signer,
             sessions: Mutex::new(HashMap::new()),
+            pace_bps: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -794,6 +814,23 @@ fn civil_from_epoch(secs: u64) -> (String, String) {
 
 #[async_trait]
 impl TransferAdapter for S3MultipartAdapter {
+    /// The measured single-stream goodput handed back after a probe (issue
+    /// #95): the send path paces its body to this wire so a B/s-class link
+    /// can never out-buffer the socket. 0 = unpaced (no measurement, or a
+    /// fast link — the ceiling lives here).
+    fn notify_link_bps(&self, bps: f64) {
+        // The stall class lives below ~4 MiB/s: above it, kernel buffers
+        // drain faster than any honest writer can fill them and the un-paced
+        // path is byte-identical to today. The clamp rejects non-finite too.
+        const PACING_CEILING_BPS: f64 = 4.0 * 1024.0 * 1024.0;
+        let v = if bps.is_finite() && bps > 0.0 && bps < PACING_CEILING_BPS {
+            bps as u64
+        } else {
+            0
+        };
+        self.pace_bps.store(v, Ordering::Relaxed);
+    }
+
     fn name(&self) -> &'static str {
         "s3_multipart"
     }
@@ -931,9 +968,13 @@ impl TransferAdapter for S3MultipartAdapter {
             .await
             .map_err(io_err)?;
         let reader = file.take(span);
+        // The send-path pace (issue #95): measured wire in, paced reads out —
+        // the socket never buffers deeper than the burst ceiling, so the
+        // writer never pends long enough for a hostile TCP stack to kill it.
+        let pace = self.pace_bps.load(Ordering::Relaxed) as f64;
         let body = Body::wrap_stream(FramedRead::new(
             Counting {
-                inner: reader,
+                inner: PacedAsyncRead::new(reader, pace),
                 progress: progress.clone(),
             },
             BytesCodec::new(),
@@ -1247,6 +1288,96 @@ fn etag_of(resp: &Response) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// The send-path pace (issue #95): an `AsyncRead` that emits bytes no faster
+/// than the measured wire. The long-soak receipts (dispatch 42550649711 +
+/// the local repro `run-20261109-140513`) named the killer — an un-paced
+/// body writer on a B/s-class link fills the socket (the primer burst), then
+/// pends for the drain for tens of seconds at a stretch, and the TCP stack
+/// kills the stalled writer (`error writing a body to connection ←
+/// Connection timed out (os error 110)`) — burning the attempt budget on
+/// whole-part re-sends. Pacing the read to the measured goodput keeps the
+/// socket buffers inside their burst ceiling: the writer never pends longer
+/// than the wire itself, and the part completes inside one attempt.
+///
+/// The clock is tokio's (`tokio::time::Instant` + `sleep`) — virtualized
+/// under `start_paused`, so the pins are exact (the #94 rule: measure with
+/// tokio's clock, never std's).
+pub(crate) struct PacedAsyncRead<R> {
+    inner: R,
+    /// Measured goodput, bytes/second. 0 = unpaced passthrough.
+    pace_bps: f64,
+    /// Banked wire budget in bytes, capped at `PACE_BURST_SECS` of pace.
+    tokens: f64,
+    last: tokio::time::Instant,
+    sleep: Option<Pin<Box<tokio::time::Sleep>>>,
+}
+
+/// How much wire time a burst may bank while the caller is not reading —
+/// deep enough to absorb scheduling jitter, shallow enough that the socket
+/// buffers never fill on the paced lane.
+const PACE_BURST_SECS: f64 = 2.0;
+
+impl<R: tokio::io::AsyncRead + Unpin> PacedAsyncRead<R> {
+    pub(crate) fn new(inner: R, pace_bps: f64) -> Self {
+        Self {
+            inner,
+            pace_bps,
+            // One second of burst budget at start: the first read is
+            // instant, the debt starts on the second.
+            tokens: if pace_bps > 0.0 { pace_bps } else { 0.0 },
+            last: tokio::time::Instant::now(),
+            sleep: None,
+        }
+    }
+}
+
+impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for PacedAsyncRead<R> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.pace_bps <= 0.0 {
+            return Pin::new(&mut this.inner).poll_read(cx, buf);
+        }
+        if let Some(s) = this.sleep.as_mut() {
+            ready!(s.as_mut().poll(cx));
+            this.sleep = None;
+        }
+        let now = tokio::time::Instant::now();
+        // The debt carries: an oversized read leaves tokens negative and the
+        // following polls sleep the deficit off. Erasing the debt here (a
+        // `.max(0.0)`) would re-clock the pace to one deficit-slice per read
+        // — the pin catches exactly that.
+        this.tokens = (this.tokens + (now - this.last).as_secs_f64() * this.pace_bps)
+            .min(this.pace_bps * PACE_BURST_SECS);
+        this.last = now;
+        if this.tokens < 1.0 {
+            // The next byte is not paid for yet: sleep the deficit, then
+            // re-poll (the debt-carrying bucket self-clocks to the pace —
+            // an oversized read simply goes into debt, paid next poll).
+            let deficit = ((1.0 - this.tokens) / this.pace_bps).clamp(0.001, 0.5);
+            let mut s = Box::pin(tokio::time::sleep(Duration::from_secs_f64(deficit)));
+            if s.as_mut().poll(cx).is_ready() {
+                this.sleep = None;
+            } else {
+                this.sleep = Some(s);
+                return Poll::Pending;
+            }
+        }
+        let filled_before = buf.filled().len();
+        match Pin::new(&mut this.inner).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) => {
+                let n = (buf.filled().len() - filled_before) as f64;
+                this.tokens -= n;
+                Poll::Ready(Ok(()))
+            }
+            other => other,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1282,8 +1413,96 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_dedups_a_reput_duplicate() {
+        // The #95 leg: after an eviction re-PUT, SeaweedFS's ListParts listed
+        // BOTH copies of p1. S3 replace semantics: the latest write IS the
+        // part. The deduped list is contiguous and the sizes still sum.
+        let parts = vec![
+            ListedPart {
+                number: 1,
+                size: 10,
+                etag: "\"old\"".into(),
+            },
+            ListedPart {
+                number: 1,
+                size: 10,
+                etag: "\"new\"".into(),
+            },
+            ListedPart {
+                number: 2,
+                size: 5,
+                etag: "\"b\"".into(),
+            },
+        ];
+        assert_eq!(reconcile_parts(&parts, 15), Ok(()));
+    }
+
+    #[test]
     fn map_error_is_transparent_about_codes() {
         let e = map_error(ErrorCtx::Chunk, 404, Some("NoSuchUpload"), None, "d");
         assert!(e.to_string().contains("code=NoSuchUpload"));
+    }
+
+    // --- the send-path pace (issue #95 R3 round 2) --------------------------
+    // The long-soak dispatch 42550649711 + the local repro named the killer:
+    // an un-paced body writer on a B/s-class link fills the socket, pends for
+    // the drain, and the TCP stack kills the stalled writer (ETIMEDOUT on the
+    // write) — burning the attempt budget on whole-part re-sends. The pins
+    // hold the paced reader's wire shape; tokio's paused clock makes them
+    // exact (the #94 rule: measure with tokio's clock, never std's).
+
+    #[tokio::test(start_paused = true)]
+    async fn paced_read_holds_the_measured_wire() {
+        // The ledger must conserve wire time: 3000 B at 1000 B/s with a
+        // 1000 B start budget = 2.001 s of paced wall (the trailing +1 ms
+        // buys the last token before the EOF poll can even be answered).
+        // read_to_end pays the trailing debt — a per-read elapsed would not.
+        let data = vec![7u8; 3000];
+        let mut paced = PacedAsyncRead::new(&data[..], 1000.0);
+        let mut out = Vec::new();
+        let t0 = tokio::time::Instant::now();
+        paced.read_to_end(&mut out).await.unwrap();
+        let took = (tokio::time::Instant::now() - t0).as_secs_f64();
+        assert_eq!(out.len(), 3000);
+        assert!(
+            (2.0..=2.01).contains(&took),
+            "3000 B at 1000 B/s with a 1 s budget must cost ~2 s of wall, took {took}s"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unpaced_read_is_passthrough() {
+        // pace 0 = no measurement, byte-identical to today: zero virtual time.
+        let data = vec![7u8; 3000];
+        let mut paced = PacedAsyncRead::new(&data[..], 0.0);
+        let t0 = tokio::time::Instant::now();
+        for _ in 0..3 {
+            let mut buf = [0u8; 1000];
+            paced.read_exact(&mut buf).await.unwrap();
+        }
+        assert_eq!(tokio::time::Instant::now() - t0, std::time::Duration::ZERO);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn paced_read_caps_the_burst_budget() {
+        // An idle gap must not bank more than the burst ceiling (2 s of
+        // wire): after 10 virtual seconds idle, the remaining 3000 B stream
+        // costs ~1 s (the capped 2000 B budget + the paid trailing debt) —
+        // NOT ~0 s (uncapped banking) and NOT 3 s (no banking). The pipe
+        // can never deepen past the ceiling.
+        let data = vec![7u8; 4000];
+        let mut paced = PacedAsyncRead::new(&data[..], 1000.0);
+        let mut buf = [0u8; 1000];
+        paced.read_exact(&mut buf).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        let mut out = Vec::new();
+        let t0 = tokio::time::Instant::now();
+        paced.read_to_end(&mut out).await.unwrap();
+        let took = (tokio::time::Instant::now() - t0).as_secs_f64();
+        assert_eq!(out.len(), 3000);
+        assert!(
+            (1.0..=1.01).contains(&took),
+            "3000 B after a 10 s idle must cost ~1 s (burst capped at 2 s of wire), took {took}s"
+        );
     }
 }

@@ -57,7 +57,7 @@ pub enum LinkClass {
 }
 
 /// What one probing pass learned about the link.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LinkProfile {
     /// Single-stream goodput, bytes/second.
     pub single_bps: f64,
