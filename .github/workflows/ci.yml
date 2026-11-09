@@ -171,3 +171,11 @@ jobs:
           cargo build -p ium-core --bin loopback_recorder
       - name: Drive the shell once (create/progress/pause/resume/done/inspect/cancel)
         run: bash scripts/app-e2e.sh --skip-build
+      # Issue #95 R2: the shell's resource honesty rides the e2e lane —
+      # the sampler proof (self-test, no display) plus the live pin: the
+      # booted tree must idle near-zero CPU and hold bounded RSS over a
+      # quiet window. Provisional-generous bounds; receipts tighten them.
+      - name: Resource pin — sampler self-test
+        run: bash scripts/resource_pin.sh --self-test
+      - name: Resource pin — the booted shell idles honest
+        run: bash scripts/resource_pin.sh
