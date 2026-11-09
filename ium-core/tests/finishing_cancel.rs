@@ -218,4 +218,13 @@ async fn cancel_racing_verify_never_declares_done() {
         "the journal never ends Done for a canceled job"
     );
     assert_eq!(mock.verify_calls.load(Ordering::SeqCst), 1);
+
+    // Break the Arc cycle the razor-window hook forms (Manager → adapter →
+    // Manager): the mock outlives the run holding the manager that holds
+    // the mock, so without this neither ever drops. The sanitizer lane
+    // (issue #95 R4, run 42542779782: 1332 bytes / 10 objects, all
+    // indirect) caught exactly this — the first find of the ASan program.
+    // A production manager-callback API must be Weak-based; this hook is
+    // test scaffolding, and the test owns breaking it.
+    *mock.hook.lock().unwrap() = None;
 }
