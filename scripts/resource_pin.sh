@@ -51,11 +51,15 @@ for pid in os.listdir("/proc"):
     except OSError:
         continue
     # comm may hold spaces/parens — parse fields AFTER the last ')'.
+    # Field map (man 5 proc, 0-indexed after ')'): [0]=state, [1]=ppid,
+    # [11]=utime, [12]=stime, [21]=rss (PAGES — pre-landing CI caught the
+    # first draft reading [23] = rsslim's neighbor: a 1.1-petabyte tree,
+    # the receipt that proves why the self-test now guards the RSS path).
     try:
         after = raw[raw.rindex(")") + 2:].split()
         ppid = int(after[1])
         utime, stime = int(after[11]), int(after[12])
-        rss_pages = int(after[23])
+        rss_pages = int(after[21])
     except (ValueError, IndexError):
         continue
     procs[int(pid)] = (ppid, utime + stime, rss_pages * PAGE // 1024)
@@ -106,7 +110,20 @@ bdelta, sdelta = b1 - b0, s1 - s0
 print(f"[resource-pin] self-test: busy=+{bdelta}ms sleep=+{sdelta}ms over 2s")
 assert bdelta > 1500, f"busy child burned only {bdelta}ms — sampler or scheduler broken"
 assert sdelta < 400, f"sleeper burned {sdelta}ms — sampler misreads CPU time"
-print("[resource-pin] SELF-TEST GREEN: the sampler separates burn from idle")
+
+# The RSS path gets its own proof: the first CI run caught the sampler
+# reading the WRONG /proc stat field (a 1.1-petabyte tree sailed through
+# the CPU-only self-test). A real process's RSS is between 1 MiB and 64 GiB.
+with open(f"/proc/self/stat", "rb") as f:
+    raw = f.read().decode("utf-8", "replace")
+after = raw[raw.rindex(")") + 2:].split()
+PAGE = os.sysconf("SC_PAGE_SIZE")
+rss_kib = int(after[21]) * PAGE // 1024
+print(f"[resource-pin] self-test: self rss={rss_kib}KiB")
+assert 1024 <= rss_kib <= 64 * 1024 * 1024, (
+    f"self rss {rss_kib}KiB is not a sane process size — the RSS field parse is broken"
+)
+print("[resource-pin] SELF-TEST GREEN: the sampler separates burn from idle, and RSS parses real")
 PY
   exit 0
 fi
