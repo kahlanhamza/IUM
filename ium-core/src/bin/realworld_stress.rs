@@ -48,7 +48,7 @@
 //! — no test shrink: the real-world drill earns real-world timings.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -692,13 +692,18 @@ async fn longhaul(
     let rec = m.create_job(&spec, 4).map_err(|e| e.to_string())?;
     let t0 = Instant::now();
 
-    // Persistence telemetry: frontier, journal bytes, RSS high-water.
+    // Persistence telemetry: frontier, journal bytes, RSS high-water, and
+    // the (t, rss) sample series the plateau pin consumes (R3, issue #95).
     let journal_dir = journal.to_string();
     let rss_hwm = Arc::new(AtomicU64::new(0));
+    let samples: Arc<Mutex<Vec<(f64, u64)>>> = Arc::new(Mutex::new(Vec::new()));
+    let fd_span: Arc<Mutex<Option<(usize, usize)>>> = Arc::new(Mutex::new(None));
     let persist = {
         let id = rec.id.clone();
         let m_tel = Arc::clone(&m);
         let rss_hwm = Arc::clone(&rss_hwm);
+        let samples = Arc::clone(&samples);
+        let fd_span = Arc::clone(&fd_span);
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(5)).await;
@@ -706,6 +711,17 @@ async fn longhaul(
                 let jb = journal_bytes(&journal_dir);
                 let rss = rss_kb();
                 rss_hwm.fetch_max(rss, Ordering::Relaxed);
+                if let Ok(mut s) = samples.lock() {
+                    s.push((t0.elapsed().as_secs_f64(), rss));
+                }
+                if let Ok(mut fd) = fd_span.lock() {
+                    if let Some(n) = fd_count() {
+                        *fd = Some(match *fd {
+                            Some((first, _)) => (first, n),
+                            None => (n, n),
+                        });
+                    }
+                }
                 eprintln!(
                     "[longhaul][persist] t=+{:.1}s frontier={frontier} journal_bytes={jb} rss_kb={rss}",
                     t0.elapsed().as_secs_f64()
@@ -796,6 +812,54 @@ async fn longhaul(
             "longhaul: Done without a `verified` event — verify-before-declare bypassed".into(),
         );
     }
+    // The plateau pin (R3, issue #95): the hours-shaped leg must hold FLAT
+    // memory and return every descriptor it opened — through the pause AND
+    // the fresh-process replay (both are in the sample span). Warmup is
+    // dropped (boot-time allocation is not a leak); a slope past the bound
+    // or fd drift fails the leg loudly. Short legs skip LOUD, never silently.
+    let n_samples = samples.lock().map_err(|e| e.to_string())?.len();
+    let plateau = if n_samples >= 40 {
+        let slope = {
+            let s = samples.lock().map_err(|e| e.to_string())?;
+            let cut = s.len() / 4;
+            slope_kib_per_hour(&s[cut..])
+        };
+        if slope > PLATEAU_KIB_PER_HOUR {
+            return Err(format!(
+                "longhaul: RSS slope {slope:.0} KiB/hour past the {} KiB/hour bound — \
+                 the hours-shaped leg LEAKS ({n_samples} samples)",
+                PLATEAU_KIB_PER_HOUR as u64
+            ));
+        }
+        serde_json::json!({
+            "slope_kib_per_hour": slope,
+            "bound_kib_per_hour": PLATEAU_KIB_PER_HOUR,
+            "samples": n_samples,
+        })
+    } else {
+        serde_json::json!({
+            "skipped": true,
+            "reason": format!("samples {n_samples} < 40 — plateau needs 200 s of telemetry"),
+            "samples": n_samples,
+        })
+    };
+    let fd_report = {
+        let fd = fd_span.lock().map_err(|e| e.to_string())?;
+        match *fd {
+            Some((first, last)) => {
+                let delta = last.saturating_sub(first);
+                if delta > BOUND_FD_DELTA {
+                    return Err(format!(
+                        "longhaul: fd drift {delta} over the leg (first {first}, last {last}) — \
+                         handles held across pause+replay"
+                    ));
+                }
+                serde_json::json!({ "first": first, "last": last, "delta": delta, "bound": BOUND_FD_DELTA })
+            }
+            None => serde_json::json!({ "skipped": "no /proc/self/fd (non-Linux)" }),
+        }
+    };
+    eprintln!("[longhaul][plateau] {plateau} fd_span {fd_report}");
     persist.abort();
     Ok(serde_json::json!({
         "scenario": "longhaul", "state": "Done",
@@ -809,6 +873,8 @@ async fn longhaul(
         "rss_hwm_kb": rss_hwm.load(Ordering::Relaxed),
         "state_events": state_events,
         "replayed_and_resumed": true,
+        "plateau": plateau,
+        "fd_span": fd_report,
     }))
 }
 
@@ -822,6 +888,40 @@ fn rss_kb() -> u64 {
                 .and_then(|v| v.parse::<u64>().ok())
         })
         .unwrap_or(0)
+}
+
+/// Open descriptors; `None` off-Linux — the R3 fd pin skips loud there
+/// (issue #95, the #34 honesty contract).
+fn fd_count() -> Option<usize> {
+    std::fs::read_dir("/proc/self/fd").map(|d| d.count()).ok()
+}
+
+/// R3 (issue #95): after warmup the leg's RSS may climb at most 24 MiB per
+/// hour — generous against allocator noise, tight against real leaks (a
+/// 1 KiB-per-tick leak at the 5 s cadence is 720 KiB/hour: caught).
+const PLATEAU_KIB_PER_HOUR: f64 = 24.0 * 1024.0;
+
+/// R3 (issue #95): descriptors at the leg's end vs its start — the span
+/// covers the pause AND the fresh-process replay.
+const BOUND_FD_DELTA: usize = 4;
+
+/// Least-squares slope in KiB per HOUR over (seconds, KiB) samples. A
+/// leaking leg climbs; an honest leg is flat or SHRINKS (the allocator
+/// returning pages is the opposite of a leak — negative slope passes).
+fn slope_kib_per_hour(samples: &[(f64, u64)]) -> f64 {
+    let n = samples.len() as f64;
+    if n < 2.0 {
+        return 0.0;
+    }
+    let sx: f64 = samples.iter().map(|(x, _)| x).sum();
+    let sy: f64 = samples.iter().map(|(_, y)| *y as f64).sum();
+    let sxx: f64 = samples.iter().map(|(x, _)| x * x).sum();
+    let sxy: f64 = samples.iter().map(|(x, y)| x * (*y as f64)).sum();
+    let denom = n * sxx - sx * sx;
+    if denom == 0.0 {
+        return 0.0;
+    }
+    (n * sxy - sx * sy) / denom * 3600.0
 }
 
 fn journal_bytes(dir: &str) -> u64 {

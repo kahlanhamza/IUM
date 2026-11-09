@@ -42,6 +42,14 @@ on:
         description: "S7 real-network models CSV (issue #32): 'loss,rtt,reset' or a subset; empty skips S7"
         required: false
         default: ""
+      longhaul_rate:
+        description: "R3 long-soak paced-link rate in BYTES/s (default 8192 = 8 KiB/s: a 30 MiB film runs ~64 min, the #45 ladder shape)"
+        required: false
+        default: "8192"
+      longhaul_timebox:
+        description: "R3 long-soak timebox in seconds before the pause (default 3300; pause + fresh-process replay follows)"
+        required: false
+        default: "3300"
   schedule:
     - cron: "0 4 * * 6" # Saturdays 04:00 UTC
 
@@ -101,4 +109,38 @@ jobs:
           path: |
             rea-lab/realworld/evidence-*.md
             rea-lab/realworld/run-*/
+          if-no-files-found: error
+
+  # Issue #95 R3 — the long-haul PLATEAU soak: a 30 MiB real film through a
+  # paced KiB/s-class link for ~55 minutes, then pause + fresh-process
+  # replay — the exact overnight shape. The bin now PINS what #34 only
+  # printed: RSS slope after warmup ≤ 24 MiB/hour, fd drift ≤ 4 across the
+  # whole span. Own job (the realworld lane keeps its 45-min shape); runs
+  # on the Saturday schedule and on dispatch.
+  long_soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch the real film (30 MiB clip, sha-pinned)
+        run: |
+          # -f is the #90 guard: an upstream error page must never become the film
+          curl -fsL --retry 3 --retry-delay 2 -o /tmp/bbb_30mb.mp4 \
+            "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_30MB.mp4"
+          echo "5b603ec1db36cc15d5e48ab9ea6e72ffd6a65e325f2bb218e9ed298974b453bc  /tmp/bbb_30mb.mp4" | sha256sum -c -
+      - name: Long-haul plateau soak (RSS slope + fd span, issue #95 R3)
+        run: >-
+          bash scripts/s3-test.sh --with-longhaul /tmp/bbb_30mb.mp4
+          "${{ inputs.longhaul_rate || '8192' }}"
+          "${{ inputs.longhaul_timebox || '3300' }}"
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-soak-evidence
+          path: |
+            rea-lab/longhaul/evidence-*.md
+            rea-lab/longhaul/run-*/
           if-no-files-found: error
