@@ -181,6 +181,24 @@ impl TransferAdapter for WedgeAdapter {
     async fn reattach(&self, endpoint: &str, token: &str) -> Result<(), AdapterError> {
         self.inner.reattach(endpoint, token).await
     }
+
+    async fn probe_link(
+        &self,
+        spec: &JobSpec,
+        k: u32,
+        sample_hint_bps: Option<f64>,
+    ) -> Result<Option<ium_core::prober::LinkProfile>, AdapterError> {
+        self.inner.probe_link(spec, k, sample_hint_bps).await
+    }
+
+    fn notify_link_bps(&self, bps: f64) {
+        // The measured wire must cross the wrapper (issue #95): the send
+        // path lives in the INNER adapter — a wrapper that swallowed this
+        // call left `pace_bps` at 0 and the send path unpaced, which is
+        // exactly the class that killed the long-soak dispatches (kernel
+        // ETIMEDOUT ~40 s into every attempt on an 8192 B/s link).
+        self.inner.notify_link_bps(bps);
+    }
 }
 
 /// Issue #28 diagnostics: the runner's `S6[2048]` legs refuse to fire the
@@ -238,6 +256,22 @@ impl TransferAdapter for TelemetryAdapter {
 
     async fn reattach(&self, endpoint: &str, token: &str) -> Result<(), AdapterError> {
         self.inner.reattach(endpoint, token).await
+    }
+
+    async fn probe_link(
+        &self,
+        spec: &JobSpec,
+        k: u32,
+        sample_hint_bps: Option<f64>,
+    ) -> Result<Option<ium_core::prober::LinkProfile>, AdapterError> {
+        self.inner.probe_link(spec, k, sample_hint_bps).await
+    }
+
+    fn notify_link_bps(&self, bps: f64) {
+        // Same wrapper-transparency rule as TelemetryAdapter (issue #95):
+        // the paced send path lives in the inner adapter; a wedge that
+        // swallowed the measurement would pace nothing.
+        self.inner.notify_link_bps(bps);
     }
 }
 
@@ -738,6 +772,106 @@ async fn longhaul(
     };
 
     sup.drive(&rec.id);
+
+    // The measurement contract (issue #95): this leg's whole point is the
+    // PACED lane — the send path paces to a MEASURED wire, never to hope.
+    // A probing phase that journaled neither `link_profile` nor
+    // `link_profile_skipped` ran UNMEASURED, and on the paced harness that
+    // is exactly the class that killed dispatches 42550649711 /
+    // 42650308878 / 42661470148: an un-paced writer on an 8192 B/s link
+    // fills the loopback socket, pends in zero-window, and the kernel
+    // ETIMEDOUTs the write ~40 s into every attempt — nine attempts, all
+    // dead, `Failed` at t≈532 s, and the leg's real verdict 46 minutes of
+    // zombie timebox later. The diagnostics wrappers around the real
+    // adapter (TelemetryAdapter, WedgeAdapter) amputated the measurement:
+    // their trait impls forwarded probe/upload/verify/reattach but let
+    // `probe_link` fall to the default `Ok(None)` (silent) and
+    // `notify_link_bps` to the default no-op — the env posture (the
+    // af6b884 fix) never mattered because the wrapper ate the call chain
+    // behind it. The leg refuses to run unmeasured: fail loud in the
+    // first minute, not after the timebox.
+    let probe_deadline = Duration::from_secs(900);
+    let measured = loop {
+        let snap = m.snapshot(&rec.id).map_err(|e| e.to_string())?;
+        // The probe gate block runs INSIDE the Probing state — the
+        // `probing → running` transition journals AFTER it. That transition
+        // is the exact, rate-independent "the gate had its chance" marker:
+        // a drive that lands Running with neither `link_profile` nor
+        // `link_profile_skipped` in the journal ran UNMEASURED, and on the
+        // paced harness that is exactly the class that killed dispatches
+        // 42550649711 / 42650308878 / 42661470148: an un-paced writer on an
+        // 8192 B/s link fills the loopback socket, pends in zero-window,
+        // and the kernel ETIMEDOUTs the write ~40 s into every attempt —
+        // nine attempts, all dead, `Failed` at t≈532 s, and the leg's real
+        // verdict 46 minutes of zombie timebox later. The diagnostics
+        // wrappers around the real adapter (TelemetryAdapter, WedgeAdapter)
+        // amputated the measurement: their trait impls forwarded
+        // probe/upload/verify/reattach but let `probe_link` fall to the
+        // default `Ok(None)` (silent) and `notify_link_bps` to the default
+        // no-op — the env posture (the af6b884 fix) never mattered because
+        // the wrapper ate the call chain behind it.
+        let left_probing = snap
+            .events
+            .iter()
+            .any(|(_, k, p)| k == "state" && p.contains("\"to\":\"running\""));
+        if let Some((_, _, payload)) = snap
+            .events
+            .iter()
+            .rev()
+            .find(|(_, k, _)| k == "link_profile_skipped")
+        {
+            return Err(format!(
+                "longhaul: the link probe was SKIPPED ({payload}) — the leg \
+                 refuses to run unmeasured (the paced lane is the point)"
+            ));
+        }
+        if left_probing && !snap.events.iter().any(|(_, k, _)| k == "link_profile") {
+            return Err(
+                "longhaul: the drive reached Running with NO link_profile in \
+                 the journal — the lane ran UNMEASURED (probe gate silent: a \
+                 wrapper amputated probe_link/notify_link_bps, or the \
+                 IUM_LINK_PROBE posture never reached the gate)"
+                    .into(),
+            );
+        }
+        if left_probing {
+            break true;
+        }
+        if t0.elapsed() > probe_deadline {
+            break false;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
+    if !measured {
+        return Err(
+            "longhaul: the probing phase never completed within 900 s — no \
+             measurement to pace to (probe stuck or the server is dead)"
+                .into(),
+        );
+    }
+    let profile = {
+        let ev = m.snapshot(&rec.id).map_err(|e| e.to_string())?.events;
+        ev.iter()
+            .rev()
+            .find(|(_, k, _)| k == "link_profile")
+            .and_then(|(_, _, p)| serde_json::from_str::<serde_json::Value>(p).ok())
+    };
+    let profile_bps = profile
+        .as_ref()
+        .and_then(|p| p.get("single_bps"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    if profile_bps <= 0.0 {
+        return Err(format!(
+            "longhaul: link_profile measured single_bps={profile_bps} — a \
+             zero/negative wire is not a measurement (profile: {})",
+            profile
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "<absent>".into())
+        ));
+    }
+    eprintln!("[longhaul][pace] measured single_bps={profile_bps} — send path paces to it");
+
     tokio::time::sleep(timebox).await;
 
     // Honest timebox: pause (resumable), never cancel. If the job already

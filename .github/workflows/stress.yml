@@ -138,10 +138,23 @@ jobs:
           # (ETIMEDOUT) — the exact shape dispatch 42550649711 caught. The
           # owner's shell runs the probe explicitly; the leg models that.
           IUM_LINK_PROBE: "1"
-        run: >-
-          bash scripts/s3-test.sh --with-longhaul /tmp/bbb_30mb.mp4
-          "${{ inputs.longhaul_rate || '8192' }}"
-          "${{ inputs.longhaul_timebox || '3300' }}"
+        run: |
+          # The pause is COOPERATIVE: it lands at the next LEASE boundary —
+          # one 5 MiB-floor part IS `5 MiB / measured rate` of paced wire.
+          # The operator bounds are sized from that arithmetic, not vibes
+          # (issue #95: the 300 s defaults assumed a link ~20× faster than
+          # this lane models — a mid-part pause could never land). The
+          # resume bound carries the worst honest unconfirmed tail: the
+          # film's remainder after the timebox, plus one part of
+          # granularity slack. The 30 MiB clip is sha-pinned: 30,704,510 B.
+          RATE="${{ inputs.longhaul_rate || '8192' }}"
+          TIMEBOX="${{ inputs.longhaul_timebox || '3300' }}"
+          PART_WIRE=$(( (5 * 1024 * 1024) / RATE + 1 ))
+          export IUM_LONGHAUL_PAUSE_SECS=$(( 2 * PART_WIRE + 600 ))
+          RESUME=$(( (30704510 - TIMEBOX * RATE) / RATE ))
+          [ "$RESUME" -lt "$PART_WIRE" ] && RESUME=$PART_WIRE
+          export IUM_LONGHAUL_RESUME_SECS=$(( RESUME + 600 ))
+          bash scripts/s3-test.sh --with-longhaul /tmp/bbb_30mb.mp4 "$RATE" "$TIMEBOX"
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@v4

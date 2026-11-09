@@ -1077,11 +1077,25 @@ impl TransferAdapter for S3MultipartAdapter {
 
         // The abort runs on success AND on every failure path (W5).
 
+        // -- phase 0: the server's first-write warmup --------------------------
+        // A FRESHLY BOOTED S3 server answers its first write to a new
+        // collection in ~8 s of server-side cold-start (measured direct on
+        // SeaweedFS 4.51, no proxy, no pacing: PUT #1 8.14 s, PUT #2 0.00 s
+        // — volume creation + master round-trip). CI boots weed per run, so
+        // WITHOUT this warmup the phase-1 window measures the SERVER'S BOOT,
+        // not the wire: the pace under-measures ~8× (dispatch-class 7864 vs
+        // a 65491 B/s wire), and every downstream bound sized from the
+        // profile — the pause bound, the resume deadline — breaks. One 1 KiB
+        // part (the smallest honest write; ~0.13 s of wire at 8192 B/s)
+        // buys a clean phase 1. The abort cleans it up with the rest (W5).
+        self.put_probe_part(&probe_target, &upload_id, 1, &spec.source_path, 0, 1024)
+            .await?;
+
         // -- phase 1: one canary part, sequentially ----------------------------
         let probe = async {
             let k_canary = (canary / k as u64).max(1024);
             let t0 = std::time::Instant::now();
-            self.put_probe_part(&probe_target, &upload_id, 1, &spec.source_path, 0, canary)
+            self.put_probe_part(&probe_target, &upload_id, 2, &spec.source_path, 0, canary)
                 .await?;
             let s1 = canary as f64 / t0.elapsed().as_secs_f64().max(1e-9);
 
@@ -1094,7 +1108,7 @@ impl TransferAdapter for S3MultipartAdapter {
                 futs.push(self.put_probe_part(
                     &probe_target,
                     &upload_id,
-                    i + 2,
+                    i + 3,
                     &spec.source_path,
                     offset,
                     k_canary,
