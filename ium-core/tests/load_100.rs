@@ -579,10 +579,21 @@ async fn load_100_jobs_reach_honest_terminals_through_the_limiter() {
         "fd leak: {fd_delta} new descriptors for 100 jobs"
     );
     if let Some(delta) = rss_delta_kb {
-        assert!(
-            delta < 512 * 1024,
-            "RSS grew {delta} KiB for 100 small jobs — unbounded orchestration"
-        );
+        // Under the sanitizer lane (issue #95 R4) ASan's own footprint
+        // dwarfs the engine's — the absolute RSS budget belongs to
+        // production builds; there the pin skips loud, and LSan owns the
+        // leak finding at process exit.
+        if std::env::var_os("ASAN_OPTIONS").is_some() {
+            eprintln!(
+                "skipped under sanitizers: {delta} KiB is instrumentation \
+                 footprint, not orchestration state"
+            );
+        } else {
+            assert!(
+                delta < 512 * 1024,
+                "RSS grew {delta} KiB for 100 small jobs — unbounded orchestration"
+            );
+        }
     }
 
     // The summary for the issue record (the soak's honesty pattern).

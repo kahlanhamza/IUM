@@ -268,11 +268,25 @@ async fn many_event_soak_bounds_journal_and_rss() {
         "WAL did not collapse at checkpoint(TRUNCATE): {wal_bytes} bytes"
     );
     if let Some(delta) = rss_delta_kb {
-        assert!(
-            delta <= BOUND_RSS_DELTA_KB,
-            "manager RSS grew {delta} KiB over {n_events} events — unbounded \
-             orchestration state (pools/maps/events held in memory?)"
-        );
+        // The sanitizer lane (issue #95 R4) runs this suite under ASan,
+        // whose shadow/redzone footprint dwarfs the engine's — the first
+        // sanitized run measured 405 068 KiB of INSTRUMENTATION against a
+        // 256 MiB state bound that production satisfies at +7.5 MiB. The
+        // absolute RSS budget belongs to production builds; under the
+        // sanitizer lane the pin skips LOUD (the leak finding is LSan's
+        // job at process exit, not this bound's).
+        if std::env::var_os("ASAN_OPTIONS").is_some() {
+            eprintln!(
+                "skipped under sanitizers: {delta} KiB is instrumentation \
+                 footprint, not orchestration state"
+            );
+        } else {
+            assert!(
+                delta <= BOUND_RSS_DELTA_KB,
+                "manager RSS grew {delta} KiB over {n_events} events — unbounded \
+                 orchestration state (pools/maps/events held in memory?)"
+            );
+        }
     } else {
         eprintln!("skipped: RSS pinned on Linux only (this platform has no /proc/self/status)");
     }
