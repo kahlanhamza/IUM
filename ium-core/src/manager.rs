@@ -1896,6 +1896,14 @@ impl JobManager {
                                     "kind": format!("{:?}", err.kind()),
                                     "attempt": attempt,
                                     "action": format!("{action:?}"),
+                                    // The reason rides the journal: a red run
+                                    // must be self-diagnosing (the #39 lesson,
+                                    // applied to the engine's own receipt). The
+                                    // long-soak dispatch (issue #95 R3) burned a
+                                    // round-trip on exactly this gap — 33
+                                    // Transient errors with no text to name
+                                    // their killer.
+                                    "reason": err.to_string(),
                                 }),
                             )
                             .map_err(EngineError::from)?;

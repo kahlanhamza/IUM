@@ -592,7 +592,19 @@ impl S3MultipartAdapter {
             .body(body)
             .send()
             .await
-            .map_err(|e| AdapterError::Transient(format!("transport: {e}")))
+            .map_err(|e| {
+                // reqwest's Display hides the hyper cause ("error sending
+                // request" for a reset, a stall-abort and a DNS miss alike) —
+                // the long-soak dispatch (issue #95 R3) burned a round-trip
+                // on exactly that. Walk the cause chain into the receipt.
+                let mut causes = Vec::new();
+                let mut src: Option<&dyn std::error::Error> = Some(&e);
+                while let Some(err) = src {
+                    causes.push(err.to_string());
+                    src = err.source();
+                }
+                AdapterError::Transient(format!("transport: {}", causes.join(" ← ")))
+            })
     }
 
     /// Status→error extraction shared by all call sites: Retry-After header,
