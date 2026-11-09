@@ -48,6 +48,9 @@ const SEGMENT: u64 = 4 * 1024;
 const BOUND_JOURNAL_BYTES: u64 = 32 * MIB;
 const BOUND_WAL_BYTES: u64 = 4096;
 const BOUND_RSS_DELTA_KB: u64 = 256 * 1024; // 256 MiB
+/// R1 (issue #95): descriptors opened AND retained by the soak itself.
+/// Generous against sqlite's WAL/SHM pair, tight against per-event leaks.
+const BOUND_FD: usize = 8;
 
 fn rss_kb() -> Option<u64> {
     std::fs::read_to_string("/proc/self/status")
@@ -56,6 +59,49 @@ fn rss_kb() -> Option<u64> {
         .find(|l| l.starts_with("VmRSS:"))
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|v| v.parse::<u64>().ok())
+}
+
+/// Open file descriptors (/proc/self/fd entries). `None` off-Linux — the
+/// fd pin skips LOUD there (the #34 honesty contract: a skipped pin says
+/// so), it never fakes a zero (R1, issue #95).
+fn fd_count() -> Option<usize> {
+    std::fs::read_dir("/proc/self/fd").map(|d| d.count()).ok()
+}
+
+/// The canary: prove the fd detector is not a no-op — five REAL handles
+/// must be seen, and their closure must return the count to baseline.
+/// Without this proof an fd pin could vacuously pass forever.
+#[test]
+fn fd_probe_detects_real_descriptor_growth() {
+    let Some(_) = fd_count() else {
+        eprintln!("skipped: no /proc/self/fd (non-Linux) — the canary is platform-honest");
+        return;
+    };
+    // Reference-relative, NOT process-baseline-relative: cargo runs this
+    // file's tests in PARALLEL, and the soak's sqlite fds are legitimately
+    // opening/closing while the canary runs (two pre-landing failures
+    // taught this: first the process baseline, then the reference window —
+    // the full-suite gate hit the soak's startup churn the standalone run
+    // never saw). Both checks are therefore symmetric ±1-churn deltas
+    // around the NARROW read windows: the detector must SEE ~5 opens and
+    // must SEE their closure; anything else is sibling noise.
+    let reference = fd_count().expect("/proc existed at first read");
+    let tmp = tempfile::tempdir().unwrap();
+    let handles: Vec<std::fs::File> = (0..5)
+        .map(|i| std::fs::File::create(tmp.path().join(format!("canary{i}.bin"))).unwrap())
+        .collect();
+    let grown = fd_count().expect("/proc existed at second read");
+    assert!(
+        grown >= reference + 4,
+        "detector saw no growth for 5 open handles: reference {reference}, now {grown}"
+    );
+    drop(handles);
+    let back = fd_count().unwrap();
+    assert!(
+        grown - back >= 4,
+        "the 5 closures were not seen: {grown} open vs {back} after close \
+         (detector blind to releases?)"
+    );
 }
 
 /// Partial-confirm adapter: every call moves and gets acknowledged for
@@ -156,9 +202,12 @@ async fn many_event_soak_bounds_journal_and_rss() {
         endpoint: "soak://bounds".into(),
     };
 
-    // Memory measured AFTER the 64 MiB source + journal exist: the delta is
-    // the manager's own orchestration cost over the whole soak.
+    // Memory and descriptors measured AFTER the 64 MiB source + journal
+    // exist: the delta is the manager's own orchestration cost over the
+    // whole soak (R1, issue #95: fds join the RSS pin — a handle leak is a
+    // different failure shape than a memory leak, EMFILE hours later).
     let rss_before = rss_kb();
+    let fd_before = fd_count();
 
     let rec = m.create_job(&spec, 8).unwrap();
     let t0 = std::time::Instant::now();
@@ -181,6 +230,8 @@ async fn many_event_soak_bounds_journal_and_rss() {
         .unwrap_or(0);
     let rss_after = rss_kb();
     let rss_delta_kb = rss_after.zip(rss_before).map(|(a, b)| a.saturating_sub(b));
+    let fd_after = fd_count();
+    let fd_delta = fd_after.zip(fd_before).map(|(a, b)| a.saturating_sub(b));
 
     // Sanity floors: the soak really wrote (a no-op soak would pass any cap).
     assert!(
@@ -195,11 +246,13 @@ async fn many_event_soak_bounds_journal_and_rss() {
         "journal_bytes": db_bytes,
         "wal_bytes_after_checkpoint": wal_bytes,
         "rss_delta_kb": rss_delta_kb,
+        "fd_delta": fd_delta,
         "elapsed_secs": elapsed.as_secs_f64(),
         "bounds": {
             "journal_bytes": BOUND_JOURNAL_BYTES,
             "wal_bytes": BOUND_WAL_BYTES,
             "rss_delta_kb": BOUND_RSS_DELTA_KB,
+            "fd": BOUND_FD,
         },
     });
     println!("SOAK-BOUNDS {measured}");
@@ -222,5 +275,18 @@ async fn many_event_soak_bounds_journal_and_rss() {
         );
     } else {
         eprintln!("skipped: RSS pinned on Linux only (this platform has no /proc/self/status)");
+    }
+    // The fd pin (R1): a soak that runs tens of thousands of events must
+    // return every handle it opened — the journal, the adapters, the
+    // tempdirs. Bound is generous against the sqlite WAL/SHM pair, tight
+    // against any per-event handle retention.
+    if let Some(delta) = fd_delta {
+        assert!(
+            delta <= BOUND_FD,
+            "soak leaked {delta} descriptors over {n_events} events — \
+             handles held per event (journal/adapter/tempfile?)"
+        );
+    } else {
+        eprintln!("skipped: fd pin is Linux-only (this platform has no /proc/self/fd)");
     }
 }
