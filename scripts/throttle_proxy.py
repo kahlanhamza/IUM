@@ -86,12 +86,21 @@ class SharedBucket:
 
     def __init__(self, rate_bps: float):
         self.rate = float(rate_bps)
-        self.read_cap = max(1, int(self.rate * 0.25))  # ≤ 250 ms of bucket per read
+        # One 20 ms poll-slice per grant — the fairness granule. The first
+        # draft granted 250 ms of bucket per take (0.25), and the long-soak
+        # dispatch (issue #95 R3, run 42541835145) caught the consequence:
+        # the lead relay's take() drained the whole bucket every ~250 ms and
+        # re-queued first, so ONE connection streamed at the full bearer
+        # while the other three starved FLAT (their VICTIM-WIRE lines never
+        # appeared; the engine's eviction saw honest 0.0 B/s and killed
+        # them). At one poll-slice per grant the wake rotation shares the
+        # bearer by construction: no single take can outrun a cycle.
+        self.read_cap = max(1, int(self.rate * 0.02))
         self.tokens = 0.0  # starts EMPTY and never accumulates idle credit
-        # beyond 250 ms — a MEASUREMENT instrument must show the steady-state
-        # bearer shape, not a boot-time burst (caught live by the #55
-        # rehearsal: a 2 s ceiling handed the first PATCH 128 KiB free and
-        # the "bearer" measured 2× its own rate).
+        # beyond one poll slice — a MEASUREMENT instrument must show the
+        # steady-state bearer shape, not a boot-time burst (caught live by
+        # the #55 rehearsal: a 2 s ceiling handed the first PATCH 128 KiB
+        # free and the "bearer" measured 2× its own rate).
         self.t0 = time.monotonic()
 
     def _refill(self) -> None:

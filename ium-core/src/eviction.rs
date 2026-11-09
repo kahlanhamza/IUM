@@ -44,6 +44,8 @@ pub(crate) struct ThroughputWatch {
     window_start: Instant,
     last_total: u64,
     strikes: u32,
+    /// The primer window has been consumed (see [`ThroughputWatch::sample`]).
+    primed: bool,
 }
 
 impl ThroughputWatch {
@@ -53,11 +55,26 @@ impl ThroughputWatch {
             window_start: now,
             last_total: 0,
             strikes: 0,
+            primed: false,
         }
     }
 
     /// Feed the call's cumulative wire bytes. Returns the finished window's
     /// throughput (bytes/sec) when a full window has elapsed, else `None`.
+    ///
+    /// The FIRST elapsed window of a lease is a PRIMER and is discarded
+    /// (returns `None`, resets the accounting): it measures the kernel
+    /// socket-buffer drain, not the wire. At localhost/CI scale the client's
+    /// TCP buffers absorb hundreds of KB the instant a PUT opens, so the
+    /// primer window reports 50–150 KB/s on a link that trickles at 8 KB/s —
+    /// the long-soak receipts (issue #95 R3, run 42541835145) caught fleet
+    /// medians of 461 169 / 266 615 / 72 091 B/s on an 8 192 B/s bearer, a
+    /// floor above every honest streamer, and an eviction cascade that
+    /// killed healthy parts until the attempt budget died. On fast links
+    /// parts complete inside the burst and the artifact is invisible — which
+    /// is exactly why it took an hours-shaped honest rehearsal to find.
+    /// The primer's byte count still seeds `last_total`, so window 2 measures
+    /// the true steady-state delta.
     pub(crate) fn sample(&mut self, now: Instant, total_wire_bytes: u64) -> Option<f64> {
         let elapsed = now.duration_since(self.window_start);
         if elapsed < self.window {
@@ -67,6 +84,10 @@ impl ThroughputWatch {
         let bps = delta as f64 / elapsed.as_secs_f64().max(f64::MIN_POSITIVE);
         self.window_start = now;
         self.last_total = total_wire_bytes;
+        if !self.primed {
+            self.primed = true;
+            return None;
+        }
         Some(bps)
     }
 
@@ -292,15 +313,23 @@ mod tests {
         let t0 = Instant::now();
         let mut w = ThroughputWatch::new(&p, t0);
         assert!(w.sample(t0 + Duration::from_millis(50), 1_000).is_none());
-        assert_eq!(
-            w.sample(t0 + Duration::from_millis(100), 2_000),
-            Some(2_000.0 / 0.1),
-            "2000 bytes over the first 100 ms window"
+        // The FIRST elapsed window is the primer (socket-buffer drain, not
+        // wire — issue #95 R3): discarded, but it seeds the accounting.
+        assert!(
+            w.sample(t0 + Duration::from_millis(100), 2_000).is_none(),
+            "the primer window must not vote"
         );
-        // next window counts only the delta
+        // Window 2 counts only the delta past the primer's boundary.
         assert_eq!(
             w.sample(t0 + Duration::from_millis(250), 3_000),
             Some(1_000.0 / 0.15),
+        );
+        // A burst in the primer must not leak into the next window: 3 000
+        // bytes at the primer boundary + a 100 KB burst mid-window 2 still
+        // measures exactly the window-2 delta.
+        assert_eq!(
+            w.sample(t0 + Duration::from_millis(350), 103_000),
+            Some(100_000.0 / 0.1),
         );
     }
 

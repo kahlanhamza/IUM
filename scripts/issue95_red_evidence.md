@@ -35,3 +35,18 @@ Parent tree: `5374a00` (the v0.2.0 STATUS closer). Captured 2026-11-09. One sect
 
 - **R2 — the sampler read the wrong stat field**: the live pin failed with `tree RSS 1885448087439360KiB` (~1.1 petabytes): `/proc/<pid>/stat` field `[23]` is not the RSS page count (`[21]` is) — the CPU-only self-test sailed through because the RSS path had no proof. Fixed: `[21]` + the self-test now guards RSS sanity (a real process is 1 MiB–64 GiB). The same receipt delivered R2's first honest number: **cpu_delta 420 ms over the 60 s quiet window — the booted shell idles at ~0.7% of one core.**
 - **R4 — proc-macros cannot carry sanitizers**: `error: building proc macro crate with sanitizers enabled is not supported` on `zerofrom-derive`. Fixed: `CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu` at the job level — an explicit target keeps host proc-macros out of the sanitized compilation, and covers every cargo call inside the harness scripts.
+
+## R3 dispatch round 1 (run 42541835145) — the long soak's first REAL find
+
+The 55-minute honest rehearsal of the owner's KB/s uplink (8 KiB/s bearer, 4-way fleet) FAILED: `frontier=0` at t+3296 s, `chunk_evicted` cascade, attempts exhausted, `resumed leg ended Failed`. The journal + proxy receipts (artifact `long-soak-evidence`) pin the mechanism:
+
+- **Eviction medians poisoned by the socket-buffer burst**: the `chunk_evicted` events carry `median_bps` of **461 169 / 266 615 / 72 091 B/s on an 8 192 B/s bearer** — physically impossible without each lease's FIRST window measuring the client's kernel-buffer drain (hundreds of KB at localhost speed) instead of the wire.
+- **The honest trickle then sits below 0.4×median for 2 windows** → evicted → re-lease re-bursts and re-dies → attempt budget exhausted. The proxy's `client abandoned PUT mid-body` lines at 82–129 s with 0.5–1.5 MB moved match the 2-strike arithmetic exactly.
+- **Harness layer**: every abandoned PUT's `VICTIM-WIRE` shows the FULL 8 243–8 277 B/s while its peers starve at honest `bps: 0.0` — the shared bucket granted 250 ms of tokens per take, and the lead relay's wake phase monopolized it (`take()` drains the whole grant and re-queues first).
+
+Two fixes, one per layer:
+
+1. **Engine (the product bug)**: `ThroughputWatch` now DISCARDS each lease's primer window — it measures the kernel socket-buffer drain, not the wire, on ANY link where part-time ≫ window (the owner's real uplink qualifies; no proxy required). The primer still seeds the accounting so window 2 measures the true steady-state delta. Unit test extended: primer discarded, window-2 delta exact, primer bursts cannot leak.
+2. **Harness (the test double)**: the shared bucket grants ONE 20 ms poll-slice per take (`rate × 0.02`, was ×0.25) — no single connection can outrun a cycle; the wake rotation shares the bearer by construction.
+
+Full core suite green after the engine change (46/46 binaries). End-to-end validation = the next `long_soak` dispatch (the 55-minute leg must reach `Done` with an honest plateau receipt).
