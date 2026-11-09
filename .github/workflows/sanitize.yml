@@ -1,0 +1,46 @@
+# sanitize.yml (issue #95, R4) — the weekly sanitizer lane.
+#
+# Rust's memory safety makes heap corruption rare, not leaks: Arc cycles,
+# detached tasks and OS handles all leak SILENTLY, and the runtime pins
+# (soak_bounds, load_100) only see the shapes they sample. Big tech runs
+# sanitizer lanes for exactly this residue; this is ours — NOT per-push
+# (the CI-economics rule: AddressSanitizer costs a full nightly recompile
+# and ~2-3× runtime), weekly + dispatchable instead.
+#
+# Scope: the whole ium-core suite (env-gated wire tests skip loud without
+# servers) PLUS the canonical S3 and TUS wire suites against the pinned
+# real servers — the wire path is where sessions and adapters hold handles.
+# LSan ships inside ASan on Linux (detect_leaks=1): any unreachable heap
+# allocation at process exit fails the lane loudly.
+#
+# macOS/Windows and the ium-app shell are out of scope: a system WebKit
+# under ASan would drown the signal in foreign allocations; the engine is
+# the leak surface this loop owns. The shell's honesty is R2's job.
+name: sanitize
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 0" # Sundays 04:00 UTC (stress owns Saturdays)
+
+concurrency:
+  group: sanitize-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  asan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      RUSTFLAGS: -Zsanitizer=address
+      ASAN_OPTIONS: detect_leaks=1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Suite under ASan/LSan (env-gated wire tests skip loud)
+        run: cargo test -p ium-core
+      - name: S3 wire suite under ASan (pinned SeaweedFS 4.51)
+        run: bash scripts/s3-test.sh
+      - name: TUS wire suite under ASan (pinned tusd 2.10.1)
+        run: bash scripts/tus-test.sh
