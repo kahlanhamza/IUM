@@ -33,6 +33,13 @@ jobs:
     timeout-minutes: 150
     env:
       RUSTFLAGS: -Zsanitizer=address
+      # Proc-macros cannot carry sanitizers ("building proc macro crate
+      # with sanitizers enabled is not supported" — the first CI run's
+      # error). Building for an EXPLICIT target keeps host proc-macros
+      # out of the sanitized compilation unit, and CARGO_BUILD_TARGET
+      # covers every cargo call, including the ones inside s3-test.sh /
+      # tus-test.sh.
+      CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
       ASAN_OPTIONS: detect_leaks=1
     steps:
       - uses: actions/checkout@v4
