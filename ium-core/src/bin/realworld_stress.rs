@@ -686,6 +686,13 @@ async fn longhaul(
     rate_bps: u64,
     timebox: Duration,
 ) -> Result<serde_json::Value, String> {
+    // The leg's posture is the owner's shell: the link probe ON, so the send
+    // path paces to the measured wire (issue #95 round 2). Declared IN the
+    // scenario — env plumbing across three harness layers is a silent
+    // failure surface (dispatch 42650308878: the workflow's step env never
+    // surfaced here; no link_profile in the journal, no pace, and the
+    // un-paced write stall returned on the next leg).
+    std::env::set_var("IUM_LINK_PROBE", "1");
     let m = telemetry_manager(journal)?;
     let sup = Supervisor::new(Arc::clone(&m));
     let spec = spec_for(file, endpoint)?;
