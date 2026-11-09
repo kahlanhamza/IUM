@@ -30,3 +30,8 @@ Parent tree: `5374a00` (the v0.2.0 STATUS closer). Captured 2026-11-09. One sect
 - **Landed**: `sanitize.yml` — weekly (Sundays 04:00 UTC; stress owns Saturdays) + dispatchable; ASan + LSan (nightly, `-Zsanitizer=address`, `detect_leaks=1`) over (1) the full ium-core suite (env-gated wire tests skip loud without servers), (2) the canonical S3 wire suite vs pinned SeaweedFS 4.51, (3) the TUS wire suite vs pinned tusd 2.10.1. NOT per-push (the CI-economics rule: full nightly recompile + ~2-3× runtime).
 - Scope: the engine is the leak surface the loop owns — a system WebKit under ASan would drown the signal in foreign allocations; the shell's honesty is R2's job.
 - Verification: YAML-lint green locally; the first dispatch run is the lane's real proof (foreign-allocation false-positive risk handled on the record if it fires).
+
+## CI-caught fixes (round 1, runs 42541818712 / 42541837469)
+
+- **R2 — the sampler read the wrong stat field**: the live pin failed with `tree RSS 1885448087439360KiB` (~1.1 petabytes): `/proc/<pid>/stat` field `[23]` is not the RSS page count (`[21]` is) — the CPU-only self-test sailed through because the RSS path had no proof. Fixed: `[21]` + the self-test now guards RSS sanity (a real process is 1 MiB–64 GiB). The same receipt delivered R2's first honest number: **cpu_delta 420 ms over the 60 s quiet window — the booted shell idles at ~0.7% of one core.**
+- **R4 — proc-macros cannot carry sanitizers**: `error: building proc macro crate with sanitizers enabled is not supported` on `zerofrom-derive`. Fixed: `CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu` at the job level — an explicit target keeps host proc-macros out of the sanitized compilation, and covers every cargo call inside the harness scripts.
