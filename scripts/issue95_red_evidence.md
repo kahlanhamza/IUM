@@ -103,3 +103,19 @@ shape; the receipt, not the theory, names it.
 `VICTIM-WIRE moved=7864320B in 120.0s (65536 B/s)` per part, zero
 abandons. The long_soak stress job now sets `IUM_LINK_PROBE=1` (the owner's
 shell posture — the leg models it) so the measurement and the pace engage.
+
+### Round-2 addendum: the saturated-lease hold was REJECTED by CI
+
+The first fix shape held the eviction accounting back while a lease's body
+was "fully emitted" (progress.moved() >= span) — reasoning that the lease
+was confirm-pending, not stalled. CI's own S3-hostile drill rejected it
+within the hour: `s3hostile: no chunk_evicted in the journal — eviction did
+NOT fire on the impaired link`. The drill's impaired connection absorbs its
+whole body into kernel buffers, so "emitted" ≠ "on the wire" — deep buffers
+make the hold treat a crawling lane as confirm-pending, and the eviction
+contract (spec §4.2, aria2's connection re-establishment) is the DESIGN for
+exactly that shape. REVERTED (this commit); the eviction semantics are
+byte-identical to the baseline again. What stands: the pacing (paced links
+never over-buffer, so their confirms land without the race the hold tried to
+fix) and the reconcile dedup (any eviction re-PUT duplicates are now
+reconciled honestly). The lane_floor drill passes on the reverted tree.

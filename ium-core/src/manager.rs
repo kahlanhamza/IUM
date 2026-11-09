@@ -1698,55 +1698,31 @@ impl JobManager {
                         Err(err) => Step::Errored(err),
                     },
                     _ = ticker.tick() => {
-                        // A lease whose body is FULLY emitted is not stalled —
-                        // it is waiting for the server's confirm. S3 parts are
-                        // atomic: an eviction here re-PUTs the whole span from
-                        // zero (pure wire waste, and the re-PUT makes the
-                        // server's part list hold duplicates — the #95 leg's
-                        // reconcile caught exactly that). The eviction
-                        // accounting (sample, vote, strike) is skipped — a
-                        // saturated lease's 0 B/s would poison the fleet
-                        // median — but the RESPLIT evaluation still runs: a
-                        // fully saturated fleet owes the plan the frozen-link
-                        // rule (#28) from exactly this state, and the lane
-                        // floor drill (tests/lane_floor.rs) lives there.
-                        let saturated = progress.moved() >= lease.end - lease.begin;
-                        if !saturated {
-                            let Some(bps) = watch.sample(Instant::now(), progress.moved()) else {
-                                continue; // window not elapsed yet
-                            };
-                            let below = {
-                                let mut live =
-                                    shared.live_bps.lock().expect("live bps poisoned");
-                                live.insert(lease.idx, bps);
-                                // Issue #25: completed leases keep voting — the
-                                // fleet's achieved rate is real knowledge even
-                                // after its chunks finish.
-                                let done = shared.done_bps.lock().expect("done bps poisoned");
-                                let mut samples: Vec<f64> =
-                                    live.values().chain(done.values()).copied().collect();
-                                let below = below_floor(bps, &mut samples, &self.eviction);
-                                last_median = median(&mut samples);
-                                below
-                            };
-                            watch.record_window(below);
-                            last_bps = Some(bps);
-                            // Track the fleet's best live window for vote capping
-                            // (non-negative f64 bits order like the values).
-                            shared
-                                .best_live_bps
-                                .fetch_max(bps.to_bits(), Ordering::Relaxed);
-                            if watch.exhausted(&self.eviction) {
-                                break Step::Evicted;
-                            }
-                        } else {
-                            // The saturated lease's freshest honest opinion of
-                            // the fleet is its LAST measured window — keep it
-                            // on the record for the resplit rule below.
+                        let Some(bps) = watch.sample(Instant::now(), progress.moved()) else {
+                            continue; // window not elapsed yet
+                        };
+                        let below = {
                             let mut live = shared.live_bps.lock().expect("live bps poisoned");
-                            if let Some(bps) = last_bps {
-                                live.insert(lease.idx, bps);
-                            }
+                            live.insert(lease.idx, bps);
+                            // Issue #25: completed leases keep voting — the
+                            // fleet's achieved rate is real knowledge even
+                            // after its chunks finish.
+                            let done = shared.done_bps.lock().expect("done bps poisoned");
+                            let mut samples: Vec<f64> =
+                                live.values().chain(done.values()).copied().collect();
+                            let below = below_floor(bps, &mut samples, &self.eviction);
+                            last_median = median(&mut samples);
+                            below
+                        };
+                        watch.record_window(below);
+                        last_bps = Some(bps);
+                        // Track the fleet's best live window for vote capping
+                        // (non-negative f64 bits order like the values).
+                        shared
+                            .best_live_bps
+                            .fetch_max(bps.to_bits(), Ordering::Relaxed);
+                        if watch.exhausted(&self.eviction) {
+                            break Step::Evicted;
                         }
                         // Issue #27 (pattern #9): reshape the plan when the
                         // measured fleet rate says the outstanding parts are
