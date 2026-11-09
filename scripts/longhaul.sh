@@ -109,9 +109,16 @@ OUT_LH="$(cargo run -q -p ium-core --bin realworld_stress -- \
   echo "$OUT_LH" | tail -30 >&2; die "longhaul bin failed";
 }
 # Persist lines + EVIDENCE into the artifact (telemetry is the deliverable).
-echo "$OUT_LH" | rg "longhaul" >> "$EVID" || true
-echo "$OUT_LH" | rg "^EVIDENCE" | tee -a "$EVID" >/dev/null
-collect_last="$(echo "$OUT_LH" | rg "^EVIDENCE" | tail -1)"
+# POSIX grep, NOT rg: the GitHub ubuntu runner ships no ripgrep, and a
+# missing post-processing toy killed a GREEN 25-minute leg at dispatch
+# 42692635806 (`rg: command not found` → pipefail → the step died AFTER
+# the bin had exited 0 — the #89 class: runner-vs-sandbox divergence).
+# A leg that loses its evidence line is a leg that cannot be audited:
+# an empty collection dies loud, below.
+echo "$OUT_LH" | grep -E "longhaul" >> "$EVID" || true
+echo "$OUT_LH" | grep -E "^EVIDENCE" | tee -a "$EVID" >/dev/null || true
+collect_last="$(echo "$OUT_LH" | grep -E "^EVIDENCE" | tail -1)"
+[ -n "$collect_last" ] || die "the longhaul bin printed no EVIDENCE line — the leg's shape is unauditable"
 say "$collect_last"
 
 # --- server truth (read-back DIRECT — a paced GET would take hours) ---------
