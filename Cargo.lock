@@ -1880,7 +1880,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "ium-app"
-version = "0.1.1"
+version = "0.2.1"
 dependencies = [
  "ium-core",
  "keyring",
@@ -1898,7 +1898,7 @@ dependencies = [
 
 [[package]]
 name = "ium-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -1924,7 +1924,7 @@ dependencies = [
 
 [[package]]
 name = "ium-e2e"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "reqwest 0.12.28",
  "serde_json",

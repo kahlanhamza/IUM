@@ -8,7 +8,7 @@ All notable changes to IUM are documented here. Format follows
 Every entry cites its issue numbers — evidence lives in the tracker, not in
 prose. An entry without verifiable issue numbers does not belong here.
 
-## [Unreleased]
+## [0.2.1] — 2026-11-10
 
 ### Fixed
 - **CVE-2026-119375 (RUSTSEC-2026-0459, CVSS 6.8) in the journal's bundled
@@ -26,6 +26,21 @@ prose. An entry without verifiable issue numbers does not belong here.
   HEAD with **zero re-upload asserted on the wire** — and a `user_version`
   tripwire fails loud the day a v2 migration lands without a new N-1
   fixture.
+- The [User Guide](USERGUIDE.md) (#99): download → verify → install →
+  first upload → troubleshooting — per-OS checksum commands, the plain
+  SmartScreen/Gatekeeper truth for unsigned installers, the four-field
+  job form with a real S3 example, the journal's failure receipts in user
+  words, and the telemetry truth (local, capped, clearable; nothing is
+  transmitted in this build).
+
+### Changed
+- The README rewritten as a closed product's front page (owner mandate,
+  `8e43cfe`): the product story, the real screenshots and the verification
+  receipts stay; internal engineering process, tracker citations and
+  contributor scaffolding are gone.
+- The crate metadata now states the product's real terms
+  (`LicenseRef-Proprietary`) instead of a stale open-source declaration;
+  the shell and e2e crates carry the workspace version again.
 
 ## [0.2.0] — 2026-11-08
 

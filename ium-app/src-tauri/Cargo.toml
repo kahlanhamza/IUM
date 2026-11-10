@@ -1,10 +1,10 @@
 [package]
 name = "ium-app"
 description = "IUM desktop shell (Tauri 2)"
-version = "0.1.1"
+version = "0.2.1"
 edition = "2021"
-license = "MIT"
-authors = ["IUM community"]
+license.workspace = true
+authors.workspace = true
 
 [lib]
 name = "ium_app_lib"

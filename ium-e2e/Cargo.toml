@@ -1,10 +1,10 @@
 [package]
 name = "ium-e2e"
 description = "Real-shell WebDriver e2e for the IUM desktop shell (issue #35)"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2021"
-license = "MIT"
-authors = ["IUM community"]
+license.workspace = true
+authors.workspace = true
 
 # Deliberately NOT a dependency of anything else, and dependent on nothing
 # Tauri: this crate must compile in any sandbox (WebKitGTK is not needed to

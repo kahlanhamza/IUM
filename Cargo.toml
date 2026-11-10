@@ -6,10 +6,12 @@ members = ["ium-core", "ium-app/src-tauri", "ium-e2e"]
 # platform's job (WebKitGTK on Linux; none needed on Windows/macOS).
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
-license = "MIT"
-authors = ["IUM community"]
+# Closed product (owner mandate, 2026-11-10): the crate metadata states the
+# real terms instead of a stale open-source declaration.
+license = "LicenseRef-Proprietary"
+authors = ["IUM"]
 
 # RE-resistance pin (issue #66 amendment, lane 8 #76, amendment item 1):
 # release builds ship STRIPPED — no symbol table, no debug info recoverable
