@@ -14,8 +14,9 @@ rea-lab/pylib/
 # Evidence lives in the GitHub issue + STATUS.md, never in git (ADR-009).
 rea-lab/realworld/
 
-# --- sandbox infra (not part of IUM) ---
-skills/
+# --- sandbox infra (not part of IUM; zero-to-shipped is the exception: the method ships with the repo) ---
+skills/*
+!skills/zero-to-shipped
 .env
 agent-ctx/
 
