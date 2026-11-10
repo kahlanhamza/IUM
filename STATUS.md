@@ -96,22 +96,23 @@ the Tauri/React shell (`ium-app/`) is **frozen** until M2+M3 (ADR-006).
 
 ## 3. In progress
 
-**M14#6 — the closed flip + the distro lane (#101) — CODE COMPLETE, CI-blocked at
-infra.** The owner flipped the repo PRIVATE (the docs/12 flip, post-v0.2.1) and
-rotated the token; the wire casualty: the baked updater feed 404s unauthenticated
-→ every shipped v0.2.0/v0.2.1 install lost auto-update. Owner decision: option B —
-private source + public `IUM-dist` (created, push+admin verified). Fix `707c47f`
-pushed: endpoint → the distro feed (the minisign trust root UNCHANGED, pinned by
-the new `distro.test.ts`), `release.yml` publishes cross-repo via `DISTRO_TOKEN`
-(secret set, sealed) with `contents:write` dropped, offline cosign = the public
-verification path, docs repointed + the one-final-manual-update note, 0.2.2
-everywhere + CHANGELOG. Local gates GREEN on the committed tree (core full + doc +
-vitest 166/166). **CI runs #217/#218 fail EVERY job instantly, no logs — measured
-cause: the Nov 1–5 private period burned 5,708 quota units vs the 2,000/month
-tier (scripts/quota_window.py); unblocked ONLY by the owner's billing action
-(raise the Actions spending limit) or the Dec 1 reset. ADR-007: NO tag v0.2.2
-until CI is green; then the public verification (unauth latest.json 200, version
-0.2.2, darwin-aarch64 key, sha256 cross-check) + the #101 closure.**
+**M14#6 — the closed flip + the distro lane (#101) — SHIPPED + CLOSED 2026-11-11.**
+The owner flipped the repo PRIVATE (the docs/12 flip, post-v0.2.1); the baked feed
+404'd unauthenticated → fix `707c47f` moved the distribution to the public
+`IUM-dist` (endpoint, cross-repo publish via `DISTRO_TOKEN` with `contents:write`
+dropped, docs repointed, v0.2.2 everywhere). The post-flip CI runs were INFRA-dead,
+not code: every job killed at START by the account's billing/spending limit (the
+check-run annotation: "recent account payments have failed or your spending limit
+needs to be increased"; the Nov 1–5 private period had burned 5,708 quota units vs
+the 2,000/month tier — scripts/quota_window.py). The owner opened a PUBLIC
+visibility window ("only so you can run workflows") — standard-runner minutes are
+free on public repos, so both the quota debt and the billing trip dissolved →
+CI re-run GREEN 8/8 on `b63af34` (42876147844) → tag v0.2.2 → release run
+42880948954 SUCCESS → 33 assets on IUM-dist → the unauthenticated user-view
+verification ALL GREEN (feed 200/0.2.2, 3 platform keys = shipped hardware, sig
+byte-identical ×3, sha256 exact ×4 installers). #101 closed completed. Auto-update
+is permanently alive for v0.2.2+ regardless of this repo's visibility; v0.2.0/v0.2.1
+installs take the documented one-final-manual-update.
 
 **M5 — API freeze, docs & real-data evidence** (owner mandate 2026-11-02 folded in:
 "always test on real data" — standing rule in docs/05 "Real data only"). Milestone 4
@@ -494,6 +495,7 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 
 | Date | Task | Outcome | Commit |
 |---|---|---|---|
+| 2026-11-11 (M14#6 complete — the public window, the v0.2.2 cut, the distro verified, Closes #101) | **The owner opened the public window ("I've changed the visibility to Public only so you can run workflows and do anything you want") and the verdict chain finished inside it.** FORENSICS FIRST: the three RED runs of 11-10 (`2d0a5f7`/`707c47f`/`b63af34`) were NOT code — the check-run annotations read "The job was not started because recent account payments have failed or your spending limit needs to be increased"; every job died at START, fmt included. The public flip removes the paid-usage meter entirely (standard-runner minutes are free on public repos) — the quota debt (5,708 units) and the billing trip both dissolve while public. CI re-run on HEAD `b63af34` (42876147844): **GREEN 8/8** (fmt, core ×3 OS, ium-app ×3 OS, app-e2e). ADR-007 satisfied → tag **v0.2.2** cut at `b63af34` → release run **42880948954 SUCCESS** → the publish job shipped cross-repo via `secrets.DISTRO_TOKEN` → **IUM-dist release v0.2.2: 33 assets, not draft, not prerelease** (installers + `.sig` sidecars + cosign attestations + 2 CycloneDX SBOMs + `SHA256SUMS.txt` + `latest.json`). THE USER-VIEW VERIFICATION (all unauthenticated — exactly what a v0.2.2 install sees, scripts/verify_distro_release.py): `releases/latest/download/latest.json` → **200, version 0.2.2**; platform keys `darwin-aarch64`/`linux-x86_64`/`windows-x86_64` = shipped hardware, each with an IUM-dist url + signature; manifest `signature` byte-identical to the `.sig` asset bytes ×3; sha256 exact on 4 real installers (dmg/AppImage/deb/setup.exe) against `SHA256SUMS.txt`; the release is the repo's `latest`. README/USERGUIDE point at the IUM-dist releases page; USERGUIDE carries the one-final-manual-update note for v0.2.1-and-earlier. Issue #101 closed completed with the evidence comment (6776775716). The upshot: auto-update is dead for v0.2.0/v0.2.1 (their baked feed URL is auth-walled forever — one manual update each, documented) and **permanently alive for v0.2.2+ no matter what visibility the source repo has** | CI GREEN 8/8; release SUCCESS; unauth user-view verification ALL GREEN; #101 closed | b63af34 + v0.2.2 |
 | 2026-11-10 (post-flip — the closed flip + the distro lane, #101, code-complete) | **The owner flipped the repo PRIVATE and rotated the token; the distribution surface moved.** Restore protocol first (identity + push + admin verified BEFORE anything else). The stray morning commit `a317891` (UUID message: 4 logo-variant scripts + 2 icons, refs #78) forensics: content verified fully upstream via `2d0a5f7`; the proper-message commit was REJECTED by branch protection (force-push declined — the guard works); local synced; damage = one cosmetic message scar. Wire facts post-flip: repo API unauth 403; the baked updater feed unauth **404** — every shipped v0.2.0/v0.2.1 install lost auto-update; README/USERGUIDE links auth-walled. Owner decision: **option B — private source + public distro repo**; `kahlanhamza/IUM-dist` created (public, push+admin verified). THE LANE (#101): issue filed with the design note → RED at HEAD posted (comment 6775314311: the endpoint pins fail, the minisign trust-root pin holds) → fix `707c47f`: tauri.conf endpoint → the distro feed + the bundle copyright states the real terms (the v0.2.1 metadata chase MISSED `bundle.copyright` — it still claimed "the IUM community — MIT"), release.yml publishes cross-repo via `secrets.DISTRO_TOKEN` with `contents:write` DROPPED and the offline cosign bundles as the public verification path, `build_latest_json.py` defaults + self-test assert the distro URLs, README loses the private-repo badges + repoints, USERGUIDE gains the one-final-manual-update note, 0.2.2 everywhere + CHANGELOG. The escaped-regex trap (the M14#4 lesson) bit AGAIN pre-commit (`/0\.2\.1 is available/`) — caught by the fast run this time. `DISTRO_TOKEN` sealed onto the repo (libsodium sealed box, value never printed). Gates local GREEN on the committed tree (core full + doc + vitest 166/166; the rust-shell lane loud-skipped to CI). **CI BLOCKED AT INFRA: runs #217/#218 (post-flip) fail EVERY job instantly with BlobNotFound logs — not code (fmt fails too; a rerun fails identically). Measured cause: the Nov 1–5 private period burned 5,708 quota units vs the 2,000/month free tier (scripts/quota_window.py) — November's budget is exhausted; public runs since were free, the flip re-exposed the debt. Unblocked by the owner's billing action ONLY (raise the Actions spending limit) or the Dec 1 reset; ADR-007 holds — NO tag until CI is green. The tag v0.2.2 + the public verification (unauth latest.json 200, version 0.2.2, darwin-aarch64 key, sha256 cross-check) + the #101 closure ride on that** | RED → fix pushed; local gates GREEN; DISTRO_TOKEN set; CI infra-blocked (quota debt) | 707c47f |
 | 2026-11-10 (M14#5 — the updater feed keyed to the hardware that ships, Closes #100) | **Found during the release verification itself — a wire-read, not a report.** The v0.2.1 `latest.json` carried exactly one platform entry, `darwin-x86_64`, and the product ships Apple Silicon only. Wire facts (the vendored tauri-plugin-updater 2.14.1 source + the release run's build log): the plugin errors `TargetNotFound` only when the feed is NEWER than the install — so a v0.2.0 Apple-Silicon user's update check was failing TODAY (feed 0.2.1 > installed 0.2.0 → the single key matches no shipped hardware), Windows/Linux would join at the next bump, and the collector shipped no installer `.sig` sidecars at all (v1-era globs + a self-test fixtured on v1 wrapper bundles that v2 never emits — a gate that tested a story). THE ROOT CAUSE: v2's `createUpdaterArtifacts` signs the INSTALLERS themselves and wraps only macOS in `.app.tar.gz`, whose name carries no arch — the builder's shape heuristic guessed. THE FIX (a439a15): the builder learns the v2 shapes (linux → `.AppImage`, windows → the NSIS `.exe`, macOS → the declared `--darwin-arch`, an undeclared macOS bundle fails `UNKEYED` instead of guessing), the collector ships the `.sig` sidecars (they joined the attestation subjects + verify gate), the publish leg runs the self-test as a detector BEFORE building, and `--darwin-arch aarch64` is the product's word. RED posted at HEAD (6767835838) → self-test GREEN → key map simulated on the real artifact names → CI 13/13 (42820611361) → tag v0.2.1 MOVED to the fix → release re-drive 42821542083 SUCCESS. One wrinkle handled on the record: moving the tag flipped the release to DRAFT (GitHub's documented behavior), re-published via the API. VERIFIED: the published manifest has `darwin-aarch64 → IUM.app.tar.gz`, `linux-x86_64 → IUM_0.2.1_amd64.AppImage`, `windows-x86_64 → IUM_0.2.1_x64-setup.exe`; the manifest's darwin signature byte-identical to the published `.sig` asset (both base64 layers decoded); 33 assets, every subject attested. The v0.2.0 → v0.2.1 update check now resolves on the only macOS hardware the product ships | RED → fix → re-drive; 33 assets; manifest keys = shipped hardware; sig byte-identical | a439a15 + v0.2.1 moved |
 | 2026-11-10 (M14#4 — the v0.2.1 cut, the release bar's second delivery) | **The security-and-docs cut is on the record.** Version: patch, honestly — no new features ride it (semver: #97 CVE fix + the docs arc; #96/#98 are executable proof, not product surface). The cut: CHANGELOG [0.2.1] (Fixed #97 / Added #96+#99 / Changed README + metadata); workspace + both member crates + package.json + tauri.conf + Cargo.lock at 0.2.1 (the shell crate was still 0.1.1); the crate metadata states the real terms (`LicenseRef-Proprietary`, no stale MIT / "IUM community" — the closed-product mandate chased into the manifests); every engine-sentence mock + the screenshot harness + all six product shots re-shot through the real harness speak v0.2.1. The gate earned its keep pre-push: the replace_all missed the ESCAPED regex pin (`/0\.2\.0 is available/` in updater.test.tsx) — gate RED 162/163, fixed, amended, GREEN. Release: tag v0.2.1 → run 42816215486 SUCCESS (deb/appimage/rpm + dmg + msi/nsis legs green; publish leg = SHA256SUMS + 11 attestation sidecars + 2 CycloneDX SBOMs + signed latest.json); CI 13/13 on `1172276` (42812713191) before the tag. Verified-before-declared on the receipt: 22 assets (exact v0.2.0 shape parity), latest.json version 0.2.1 with a signed darwin entry (platform parity with v0.2.0: darwin-x86_64), and an INDEPENDENT cross-check — the amd64.deb downloaded and its sha256 compared against SHA256SUMS.txt: `14fe8d57…` byte-exact | release run 42816215486 SUCCESS; CI 13/13; 22 assets; sha256 cross-check exact | 1172276 + v0.2.1 |
@@ -605,6 +607,19 @@ Invariants, design details: `docs/02_IUM_MVP_Spec_v1.md`, `docs/03_Sprint0_Engin
 
 ## 10. Security
 
+- **2026-11-11: the owner flipped the repo PUBLIC again (a temporary execution window
+  for the Actions runs) — and asked to be told when it is safe to flip back.** The
+  billing/quota root cause was confirmed by the check-run annotations ("recent account
+  payments have failed or your spending limit needs to be increased"); on public repos
+  standard-runner minutes are free, and CI (8/8) + the release (v0.2.2, 33 assets) both
+  went GREEN inside the window. The flip-back is now SAFE whenever the owner chooses:
+  every user-facing surface (releases, `latest.json`, the download links) lives on the
+  public `IUM-dist`, and nothing user-visible depends on this repo's visibility.
+  **The current PAT appeared in chat again during this window's restores → treat the
+  value as chat-exposed; the ROTATE-at-the-next-break advisory STANDS**
+  (<https://github.com/settings/personal-access-tokens>; restore recipe below). Note:
+  `DISTRO_TOKEN` in the IUM Actions secrets holds the SAME value — rotating the PAT
+  means re-sealing that secret too, or the cross-repo publish breaks at the next tag.
 - **2026-11-10 (post-flip): the repo went PRIVATE (owner action, the docs/12 flip) and
   the PAT was ROTATED** (the old value had been overdue since 11-04). The new value
   stored (first restore of the rotated value; 700/600, gitignored + excluded) and
