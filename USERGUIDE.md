@@ -6,7 +6,7 @@ Everything you need to go from download to a completed upload. Every command and
 
 ## 1. Download
 
-All releases live on the [Releases page](https://github.com/kahlanhamza/IUM/releases). Each release ships:
+All releases live on the [Releases page](https://github.com/kahlanhamza/IUM-dist/releases). Each release ships:
 
 | Platform | Files |
 |---|---|
@@ -102,6 +102,8 @@ IUM's installers are **not code-signed yet**. That is a deliberate, known hold �
 ## 8. Updates
 
 IUM checks the release feed (`latest.json`) and offers updates through its built-in updater — on Windows the update applies passively. To update manually: download the new installer, verify it (§2), and install over the old version; your journal, credentials, and preferences carry over.
+
+**Updating from v0.2.1 or earlier — one final manual update.** Those builds check a feed URL on the source repository, which has since gone private, so their update check can no longer reach it. Download v0.2.2 (or newer) from the Releases page once, verify, and install it — from that version on, the update feed lives in a public place and auto-update works permanently.
 
 ## 9. Quick troubleshooting
 

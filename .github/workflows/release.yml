@@ -232,11 +232,14 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     permissions:
-      contents: write      # create the release, upload assets
       id-token: write      # OIDC — the provenance signature
       attestations: write  # the attestation store
+      # contents: write DROPPED (#101): the release ships on the PUBLIC distro
+      # repo (kahlanhamza/IUM-dist) via secrets.DISTRO_TOKEN — this job no
+      # longer touches source-repo releases (least privilege).
     env:
       TAG: ${{ github.ref_name }}
+      DISTRO_REPO: kahlanhamza/IUM-dist
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pinned 2026-11-06)
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4 (pinned 2026-11-06)
@@ -283,7 +286,7 @@ jobs:
             --version "${TAG#v}" \
             --notes "See the release notes below." \
             --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --repo "$GITHUB_REPOSITORY" \
+            --repo "$DISTRO_REPO" \
             --tag "$TAG" \
             --darwin-arch aarch64 \
             --out release_assets/latest.json
@@ -384,13 +387,14 @@ jobs:
             echo "  \`Cargo.lock\`; \`IUM-${TAG}-app.cdx.json\` — the app npm tree"
             echo "  **including devDependencies** (they ship inside the bundle)."
             echo "- **Build provenance:** every artifact above is attested (SLSA v1,"
-            echo "  GitHub artifact attestations). Verify any file with:"
+            echo "  GitHub artifact attestations). Verify ANY file without repo access"
+            echo "  using the offline sigstore bundle that ships next to it:"
             echo ""
-            echo "  \`gh attestation verify <file> -R kahlanhamza/IUM\`"
+            echo "  \`cosign verify-blob-attestation <file> --bundle <file>.attestation.1.jsonl\`"
             echo ""
-            echo "- The sigstore bundles ship alongside (\`*.attestation.*.jsonl\`) so"
-            echo "  verification stays possible offline / after the repo goes private"
-            echo "  (\`cosign verify-blob-attestation\` against Fulcio/Rekor)."
+            echo "  against the public Fulcio/Rekor transparency logs. (The GitHub"
+            echo "  attestation API path, \`gh attestation verify -R kahlanhamza/IUM\`,"
+            echo "  is maintainer-side: the source repo is closed — #101.)"
             echo "- Signed binaries: no — code-signing certs remain the pinned owner ask."
             echo
             echo "## Checksums"
@@ -399,9 +403,9 @@ jobs:
             cat SHA256SUMS.txt
             echo '```'
           } > ../notes_body.md
-      - name: Publish the GitHub release
+      - name: Publish the GitHub release (on the PUBLIC distro repo, #101)
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.DISTRO_TOKEN }}
         run: |
           PRERELEASE_ARGS=()
           case "$TAG" in *-*) PRERELEASE_ARGS+=(--prerelease);; esac
@@ -410,10 +414,10 @@ jobs:
             echo
             cat notes_body.md
           } > release_notes.md
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" release_assets/* --clobber
+          if gh release view "$TAG" -R "$DISTRO_REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" -R "$DISTRO_REPO" release_assets/* --clobber
           else
-            gh release create "$TAG" --title "IUM $TAG" \
+            gh release create "$TAG" -R "$DISTRO_REPO" --title "IUM $TAG" \
               "${PRERELEASE_ARGS[@]}" \
               --notes-file release_notes.md release_assets/*
           fi

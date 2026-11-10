@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "IUM",
   "mainBinaryName": "IUM",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "identifier": "app.ium.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -52,7 +52,7 @@
       "icons/icon.png"
     ],
     "category": "Productivity",
-    "copyright": "© 2026 the IUM community — MIT",
+    "copyright": "© 2026 IUM. All rights reserved.",
     "shortDescription": "Reliability-engineered uploads",
     "longDescription": "IUM applies download-manager reliability engineering to uploads: a dynamic chunk pool, a crash-safe SQLite WAL journal, counted retries with backoff, slow-connection eviction, and verify-before-declare — with honest badges for every destination.",
     "windows": {
@@ -71,7 +71,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/kahlanhamza/IUM/releases/latest/download/latest.json"
+        "https://github.com/kahlanhamza/IUM-dist/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM2QjY1OUU5RUI2RjMxMkUKUldRdU1XL3I2Vm0yTmdtYUx3TlFQTUFzL1hRV3N5eWhacTBIZkRYb2dUSnNQTjB2UUZmelkySXEK",
       "windows": {

@@ -12,8 +12,6 @@
 Resumable, segmented, multi-protocol uploads that survive slow networks, sleep,
 crashes and reboots — with *honest* badges where physics says a protocol cannot resume.
 
-[![ci](https://github.com/kahlanhamza/IUM/actions/workflows/ci.yml/badge.svg)](https://github.com/kahlanhamza/IUM/actions/workflows/ci.yml)
-[![nightly](https://github.com/kahlanhamza/IUM/actions/workflows/nightly.yml/badge.svg)](https://github.com/kahlanhamza/IUM/actions/workflows/nightly.yml)
 ![tests](https://img.shields.io/badge/tests-329%20core%20%2B%20163%20UI-brightgreen)
 ![platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
@@ -75,7 +73,7 @@ The badge is derived from the destination's declared capabilities — never hard
 
 ## Download & install
 
-Grab the current release from the [Releases page](https://github.com/kahlanhamza/IUM/releases):
+Grab the current release from the [Releases page](https://github.com/kahlanhamza/IUM-dist/releases):
 
 | Platform | File |
 |---|---|

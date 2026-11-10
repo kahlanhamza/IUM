@@ -16,8 +16,10 @@ manifest. Rules enforced here, fail-loud:
 - v2 serves the INSTALLERS as the updater artifacts (verified in the v0.2.1
   release run logs): linux → the `.AppImage`, windows → the NSIS `.exe`
   (passive install), falling back to the `.msi`;
-- URLs are absolute GitHub release-download links (the endpoint serves the
-  manifest, the assets carry the bytes);
+- URLs are absolute GitHub release-download links pointing at the PUBLIC
+  distro repo `kahlanhamza/IUM-dist` (#101: the source repo is closed — a
+  private repo's release assets 404 for every user, the distro repo is the
+  distribution surface);
 - `--self-test` proves all of the above on a synthetic tree (the house
   pattern: a gate that cannot rot silently).
 
@@ -154,7 +156,7 @@ def self_test() -> int:
         # (#100: the shape heuristic keyed the aarch64-only product as
         # darwin-x86_64, a key no shipped hardware reports).
         manifest = build(d, "0.2.1", "Fixes and polish.", "2026-11-10T00:00:00Z",
-                         "kahlanhamza/IUM", "v0.2.1", darwin_arch="aarch64")
+                         "kahlanhamza/IUM-dist", "v0.2.1", darwin_arch="aarch64")
         assert set(manifest["platforms"]) == {
             "darwin-aarch64", "linux-x86_64", "windows-x86_64"
         }, manifest["platforms"].keys()
@@ -165,11 +167,17 @@ def self_test() -> int:
         assert manifest["platforms"]["windows-x86_64"]["url"].endswith(
             "IUM_0.2.1_x64-setup.exe"), "NSIS setup wins on windows (passive)"
         assert all(p["signature"] == sig for p in manifest["platforms"].values())
+        assert all(
+            p["url"].startswith(
+                "https://github.com/kahlanhamza/IUM-dist/releases/download/"
+            )
+            for p in manifest["platforms"].values()
+        ), "manifest asset URLs are the PUBLIC distro repo's (#101)"
         assert manifest["version"] == "0.2.1" and manifest["pub_date"] == "2026-11-10T00:00:00Z"
         # the pairing rule: an unsigned bundle must FAIL the build
         (d / "IUM_0.2.2_x64-setup.exe").write_bytes(b"bundle")
         try:
-            build(d, "0.2.2", "", "2026-11-10T00:00:00Z", "kahlanhamza/IUM",
+            build(d, "0.2.2", "", "2026-11-10T00:00:00Z", "kahlanhamza/IUM-dist",
                   "v0.2.2", darwin_arch="aarch64")
         except SystemExit as e:
             assert "PAIRING FAIL" in str(e)
@@ -196,7 +204,10 @@ def main() -> int:
     ap.add_argument("--version", help="release version, e.g. 0.2.0")
     ap.add_argument("--notes", default="See the release notes on GitHub.")
     ap.add_argument("--pub-date", help="ISO 8601 timestamp, e.g. 2026-11-08T00:00:00Z")
-    ap.add_argument("--repo", default="kahlanhamza/IUM")
+    ap.add_argument("--repo", default="kahlanhamza/IUM-dist",
+                    help="the release repo the asset URLs point at — the PUBLIC "
+                         "distro repo by default (#101; the source repo is "
+                         "private, its assets 404 for users)")
     ap.add_argument("--tag", help="release tag, e.g. v0.2.0")
     ap.add_argument("--darwin-arch", default="aarch64",
                     choices=["aarch64", "x86_64"],

@@ -6,7 +6,7 @@ members = ["ium-core", "ium-app/src-tauri", "ium-e2e"]
 # platform's job (WebKitGTK on Linux; none needed on Windows/macOS).
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 # Closed product (owner mandate, 2026-11-10): the crate metadata states the
 # real terms instead of a stale open-source declaration.

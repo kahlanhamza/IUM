@@ -12,7 +12,7 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 
 const ENGINE_SENTENCE =
-  "ium-core v0.2.1 ready — adapters: http_one_shot, s3_multipart, tus";
+  "ium-core v0.2.2 ready — adapters: http_one_shot, s3_multipart, tus";
 
 vi.mock("./api", () => ({
   api: {

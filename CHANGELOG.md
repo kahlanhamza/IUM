@@ -8,6 +8,30 @@ All notable changes to IUM are documented here. Format follows
 Every entry cites its issue numbers — evidence lives in the tracker, not in
 prose. An entry without verifiable issue numbers does not belong here.
 
+## [0.2.2] — 2026-11-11
+
+### Changed
+- **The distribution moved to the public distro repo** (#101): the source repo
+  is now PRIVATE (the docs/12 private-flip procedure, executed after the
+  verified v0.2.1 cut), so the updater feed (`latest.json`) and every download
+  link live on [kahlanhamza/IUM-dist](https://github.com/kahlanhamza/IUM-dist).
+  The baked updater endpoint repoints there; the release publish job ships
+  assets cross-repo via `DISTRO_TOKEN` and drops source-repo `contents: write`;
+  artifact verification is primary via the offline sigstore bundles
+  (`cosign verify-blob-attestation`, public Fulcio/Rekor) — the GitHub
+  attestation API path stays maintainer-side on the closed source repo. The
+  minisign trust root is UNCHANGED (pinned by the new distro gate).
+- The installer bundle copyright states the real terms (`© 2026 IUM. All
+  rights reserved.`) — the v0.2.1 closed-product metadata chase missed the
+  `bundle.copyright` string, which still claimed "the IUM community — MIT" (#101).
+
+### Fixed
+- **v0.2.1's auto-update channel broke for users the moment the repo went
+  private** (#101): the baked feed URL returns 404 unauthenticated on a
+  private repo. v0.2.1-and-earlier installs need ONE final manual update from
+  the distro repo; from v0.2.2 the feed is public and the updater is
+  permanent. The endpoint + trust-root pins live in `ium-app/src/distro.test.ts`.
+
 ## [0.2.1] — 2026-11-10
 
 ### Fixed
