@@ -68,6 +68,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: ">100 MiB upload + SIGKILL mid-body + zero-re-upload resume"
         run: bash scripts/s3-test.sh --with-drill
+      # The OS life-event lane (#98): the laptop lid closes mid-upload —
+      # SIGSTOP with bytes provably in flight, 35 s of wall clock (past the
+      # server's 30 s idle timeout), SIGCONT into dead sockets. The wake must
+      # come back as counted transients and honest Done, never a false
+      # terminal; wire waste bounded by one part per frozen worker.
+      - name: "SIGSTOP mid-body + 35 s freeze + SIGCONT — counted transients, honest Done"
+        run: bash scripts/s3-test.sh --with-freeze
 
   # The TUS kill-9 drill (issue #11): the same shape against tusd, with the
   # sharper window — SIGKILL after the server ACKed chunk 0 but BEFORE the

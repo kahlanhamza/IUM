@@ -30,6 +30,7 @@ RCLONE_VERSION="1.75.2"
 RCLONE_BASE_URL="https://downloads.rclone.org/v${RCLONE_VERSION}"
 BUCKET="ium-test"
 WITH_DRILL=0
+WITH_FREEZE=0
 WITH_REAL=0
 WITH_REALWORLD=0
 WITH_LONGHAUL=0
@@ -48,6 +49,11 @@ while [ $# -gt 0 ]; do
       esac
       shift ;;
     --with-drill) WITH_DRILL=1 ;;
+    # --with-freeze — the OS life-event drill (#98): SIGSTOP mid-body, 35 s
+    # wall-clock sleep (past SeaweedFS's 30 s idle timeout), SIGCONT — the
+    # dead sockets must come back as COUNTED transients, never a false
+    # terminal, honest Done. SeaweedFS-canonical (the idle-timeout fact).
+    --with-freeze) WITH_FREEZE=1 ;;
     # --with-real: also run the real-data drill (tests/real_data.rs, issue
     # #17) — a REAL ffmpeg-generated video through the engine; skipped loud
     # where ffmpeg is absent.
@@ -71,6 +77,19 @@ done
 if [ "$WITH_DRILL" = 1 ] && [ "$SERVER" != "seaweedfs" ]; then
   die "--with-drill is SeaweedFS-canonical only (kill-9 drill semantics built vs SeaweedFS; see #33)"
 fi
+if [ "$WITH_FREEZE" = 1 ] && [ "$SERVER" != "seaweedfs" ]; then
+  die "--with-freeze is SeaweedFS-canonical only (the drill is built and measured against SeaweedFS; see #95/#98)"
+fi
+# The freeze drill does NOT arm the idle killer: the NAT-twin proxy inside
+# the drill parent owns the kill side (it RST-closes the wire 2 s into the
+# freeze — the measured NAT model). Arming idleTimeout=30 here was the first
+# draft's premise ("the server kills the frozen PUTs") and the RED run
+# refuted it twice over: (1) the gateway never ages out a quiet-but-open
+# request body, so the killer never fired on the frozen PUT; (2) the ONE
+# thing it did change was the retry window — a re-PUT landing inside the
+# filer's post-abort recovery raced `PutObjectPart: putToFiler failed with
+# error code 106` (the 500 InternalError that exhausted the budget in the
+# second drill run). idleTimeout=0 = the kill-9 config, one less variable.
 
 PY=python3
 command -v python3 >/dev/null 2>&1 || PY=python
@@ -199,7 +218,7 @@ else
   say "starting weed server (s3:$S3_PORT master:$MASTER_PORT volume:$VOLUME_PORT)"
   "$WEED" server -dir="$WORK/data" -ip=127.0.0.1 \
     -master.port="$MASTER_PORT" -volume.port="$VOLUME_PORT" \
-    -s3 -s3.port="$S3_PORT" -s3.config="$WORK/s3.json" -idleTimeout=0 \
+    -s3 -s3.port="$S3_PORT" -s3.config="$WORK/s3.json" -idleTimeout="${WEED_IDLE_TIMEOUT:-0}" \
     > "$WORK/weed.log" 2>&1 &
   WEED_PID=$!
   LOG="$WORK/weed.log"
@@ -263,6 +282,11 @@ cargo test -p ium-core --test adapter_s3
 if [ "$WITH_DRILL" = 1 ]; then
   say "running kill-9 drill (s3_drill)"
   cargo test -p ium-core --test s3_drill -- --nocapture
+fi
+
+if [ "$WITH_FREEZE" = 1 ]; then
+  say "running freeze drill (s3_freeze_drill, #98)"
+  cargo test -p ium-core --test s3_freeze_drill -- --nocapture
 fi
 
 if [ "$WITH_REAL" = 1 ] && [ "$SERVER" = "seaweedfs" ]; then

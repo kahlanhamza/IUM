@@ -40,20 +40,59 @@ use ium_core::{
 /// nothing-to-resume. Tickets guarantee exactly `allow_calls` calls ever
 /// reach the real adapter; the rest wedge at entry having moved nothing.
 struct MeasuringAdapter {
-    inner: S3MultipartAdapter,
+    inner: Arc<S3MultipartAdapter>,
     wire: Arc<AtomicU64>,
     /// First N arrivals proceed; every later call wedges forever. 0 = all.
     allow_calls: u32,
     tickets: AtomicU32,
+    /// Freeze-drill mode (#98): after this many COMPLETED calls, the next
+    /// starting call becomes the watched call. 0 = no freeze watch.
+    freeze_after_calls: u32,
+    /// The watched call announces itself once this many bytes are genuinely
+    /// in flight (ProgressReporter truth) — the parent SIGSTOPs on the line.
+    freeze_threshold: u64,
+    /// Freeze mode narrows the declared chunk cap so the plan splits into ≥2
+    /// chunks — a one-chunk plan has no second call to watch (ADR-011:
+    /// adapter declares, planner obeys).
+    freeze_chunk_bytes: Option<u64>,
+    completed: AtomicU32,
+    watched_taken: std::sync::atomic::AtomicBool,
 }
 
 impl MeasuringAdapter {
     fn wrap(inner: S3MultipartAdapter, wire: Arc<AtomicU64>, allow_calls: u32) -> Arc<Self> {
         Arc::new(Self {
-            inner,
+            inner: Arc::new(inner),
             wire,
             allow_calls,
             tickets: AtomicU32::new(0),
+            freeze_after_calls: 0,
+            freeze_threshold: 0,
+            freeze_chunk_bytes: None,
+            completed: AtomicU32::new(0),
+            watched_taken: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    /// The freeze-drill constructor: same measuring wrapper, plus the watched
+    /// call that announces its in-flight bytes (#98).
+    fn wrap_freeze(
+        inner: S3MultipartAdapter,
+        wire: Arc<AtomicU64>,
+        freeze_after_calls: u32,
+        freeze_threshold: u64,
+        freeze_chunk_bytes: u64,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            inner: Arc::new(inner),
+            wire,
+            allow_calls: 0,
+            tickets: AtomicU32::new(0),
+            freeze_after_calls,
+            freeze_threshold,
+            freeze_chunk_bytes: Some(freeze_chunk_bytes),
+            completed: AtomicU32::new(0),
+            watched_taken: std::sync::atomic::AtomicBool::new(false),
         })
     }
 }
@@ -67,7 +106,16 @@ impl TransferAdapter for MeasuringAdapter {
         self.inner.capabilities()
     }
     async fn probe(&self, spec: &JobSpec) -> Result<ProbeReport, AdapterError> {
-        self.inner.probe(spec).await
+        let mut report = self.inner.probe(spec).await?;
+        if self.freeze_chunk_bytes.is_some() {
+            // Freeze mode narrows the declaration: the chunk cap splits the
+            // plan, max_parallel = 1 makes the calls SEQUENTIAL so the second
+            // call provably starts after the first completed (completions ≥ 1
+            // is the watched-call precondition).
+            report.max_chunk_bytes = self.freeze_chunk_bytes;
+            report.max_parallel = Some(1);
+        }
+        Ok(report)
     }
     async fn upload_chunk(
         &self,
@@ -81,9 +129,53 @@ impl TransferAdapter for MeasuringAdapter {
             std::future::pending::<()>().await;
             unreachable!()
         }
+        // Freeze watch (#98): the first call that starts after
+        // `freeze_after_calls` completions is the watched call. It runs the
+        // real inner upload and announces itself once its bytes are genuinely
+        // in flight — the parent's SIGSTOP then provably lands mid-body.
+        // Slot discipline: only a call that actually qualifies may take the
+        // watched slot (an early arrival must NOT burn it — the first two
+        // calls start before any completion exists).
+        if self.freeze_after_calls > 0 {
+            eprintln!(
+                "[freeze-child] call idx={} completions={} taken={}",
+                lease.idx,
+                self.completed.load(Ordering::SeqCst),
+                self.watched_taken.load(Ordering::SeqCst)
+            );
+        }
+        if self.freeze_after_calls > 0
+            && !self.watched_taken.load(Ordering::SeqCst)
+            && self.completed.load(Ordering::SeqCst) >= self.freeze_after_calls
+            && !self.watched_taken.swap(true, Ordering::SeqCst)
+        {
+            let inner = Arc::clone(&self.inner);
+            let spec2 = spec.clone();
+            let lease2 = lease.clone();
+            let progress2 = progress.clone(); // same Arc counters — reporter truth shared
+            let task =
+                tokio::spawn(async move { inner.upload_chunk(&spec2, &lease2, &progress2).await });
+            let mut announced = false;
+            let confirm = loop {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                let moved = progress.moved();
+                if !announced && moved >= self.freeze_threshold {
+                    println!("INFLIGHT {moved}");
+                    announced = true;
+                }
+                if task.is_finished() {
+                    break task.await.expect("watched call task")?;
+                }
+            };
+            self.wire
+                .fetch_add(lease.end - lease.resume_from, Ordering::SeqCst);
+            self.completed.fetch_add(1, Ordering::SeqCst);
+            return Ok(confirm);
+        }
         let span = lease.end - lease.resume_from;
         let confirm = self.inner.upload_chunk(spec, lease, progress).await?;
         self.wire.fetch_add(span, Ordering::SeqCst);
+        self.completed.fetch_add(1, Ordering::SeqCst);
         Ok(confirm)
     }
     async fn verify(&self, spec: &JobSpec) -> Result<VerifyReport, AdapterError> {
@@ -110,6 +202,9 @@ async fn run_upload(
     file: &str,
     allow_calls: u32,
     workers: u32,
+    freeze_after_calls: u32,
+    freeze_threshold: u64,
+    freeze_chunk_bytes: u64,
 ) -> Result<(), String> {
     let source = std::fs::metadata(file)
         .map_err(|e| format!("source: {e}"))?
@@ -126,11 +221,21 @@ async fn run_upload(
     let wire = Arc::new(AtomicU64::new(0));
     let inner = S3MultipartAdapter::new(S3MultipartConfig::from_env().map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    mgr.register_adapter(MeasuringAdapter::wrap(
-        inner,
-        Arc::clone(&wire),
-        allow_calls,
-    ));
+    if freeze_after_calls > 0 {
+        mgr.register_adapter(MeasuringAdapter::wrap_freeze(
+            inner,
+            Arc::clone(&wire),
+            freeze_after_calls,
+            freeze_threshold,
+            freeze_chunk_bytes,
+        ));
+    } else {
+        mgr.register_adapter(MeasuringAdapter::wrap(
+            inner,
+            Arc::clone(&wire),
+            allow_calls,
+        ));
+    }
     let mgr = Arc::new(mgr);
 
     let rec = mgr
@@ -156,7 +261,23 @@ async fn run_upload(
         .await
         .map_err(|e| format!("run_job: {e}"))?;
     watcher.abort();
+    // Drill forensics: the last failure reasons straight from the journal.
+    if let Ok(evts) = mgr.journal().events_for(&rec.id) {
+        for (_, k, p) in evts.iter().rev().take(4).rev() {
+            if k.contains("error") {
+                eprintln!("[freeze-child] {k}: {p}");
+            }
+        }
+    }
+    println!("WIRE {}", wire.load(Ordering::SeqCst));
     println!("STATE {}", done.state.as_str());
+    println!("DONE {}", done.state.as_str());
+    if done.state != JobState::Done {
+        return Err(format!(
+            "job ended at {} — honest failure, drill fails",
+            done.state.as_str()
+        ));
+    }
     Ok(())
 }
 
@@ -221,9 +342,26 @@ fn main() {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(4)
                 .max(1);
+            let freeze_after_calls = arg_of(&args, "--freeze-after-parts")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let freeze_threshold = arg_of(&args, "--freeze-threshold")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(64 * 1024);
+            let freeze_chunk_bytes = arg_of(&args, "--freeze-chunk-bytes")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
             tokio::runtime::Runtime::new()
                 .expect("runtime")
-                .block_on(run_upload(&journal, &file, allow_calls, workers))
+                .block_on(run_upload(
+                    &journal,
+                    &file,
+                    allow_calls,
+                    workers,
+                    freeze_after_calls,
+                    freeze_threshold,
+                    freeze_chunk_bytes,
+                ))
         }
         "resume" => tokio::runtime::Runtime::new()
             .expect("runtime")
