@@ -31,9 +31,19 @@ ARTIFACTS+=("$BUNDLE"/appimage/*.AppImage)
 ARTIFACTS+=("$BUNDLE"/dmg/*.dmg)
 ARTIFACTS+=("$BUNDLE"/msi/*.msi)
 ARTIFACTS+=("$BUNDLE"/nsis/*.exe)
-# the updater bundles + .sig sidecars (#80): tauri emits them next to the
-# installers when createUpdaterArtifacts is on; the manifest builder pairs
-# them in build_latest_json.py — an unsigned bundle never ships
+# the updater artifacts + .sig sidecars (#80): Tauri v2's
+# createUpdaterArtifacts signs the INSTALLERS themselves (run-42816215486
+# wire fact: "Finished 3 updater signatures at: *.deb.sig / *.AppImage.sig /
+# *.rpm.sig") and wraps only macOS in .app.tar.gz — the .sig sidecars MUST
+# ship, the manifest builder pairs them in build_latest_json.py; an unsigned
+# bundle never ships. The v1 wrapper globs below are the honest union: they
+# simply do not fire on v2.
+ARTIFACTS+=("$BUNDLE"/deb/*.deb.sig)
+ARTIFACTS+=("$BUNDLE"/rpm/*.rpm.sig)
+ARTIFACTS+=("$BUNDLE"/appimage/*.AppImage.sig)
+ARTIFACTS+=("$BUNDLE"/dmg/*.dmg.sig)
+ARTIFACTS+=("$BUNDLE"/msi/*.msi.sig)
+ARTIFACTS+=("$BUNDLE"/nsis/*.exe.sig)
 ARTIFACTS+=("$BUNDLE"/msi/*.msi.zip*)
 ARTIFACTS+=("$BUNDLE"/nsis/*.nsis.zip*)
 ARTIFACTS+=("$BUNDLE"/appimage/*.AppImage.tar.gz*)

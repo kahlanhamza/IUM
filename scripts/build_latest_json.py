@@ -9,7 +9,13 @@ manifest. Rules enforced here, fail-loud:
   the build refuses to declare it (no signature, no entry);
 - one entry per platform, keyed by tauri's platform ids
   (darwin-aarch64, darwin-x86_64, linux-x86_64, windows-x86_64);
-- Windows prefers the NSIS bundle (installMode: passive in tauri.conf.json);
+- the macOS bundle is `<productName>.app.tar.gz` — NO arch in the name — so
+  its arch is DECLARED (`--darwin-arch`, the build leg's knowledge); an
+  `.app.tar.gz` with no declared arch is a hard fail, never a filename guess
+  (#100: the guess keyed the aarch64-only product as darwin-x86_64);
+- v2 serves the INSTALLERS as the updater artifacts (verified in the v0.2.1
+  release run logs): linux → the `.AppImage`, windows → the NSIS `.exe`
+  (passive install), falling back to the `.msi`;
 - URLs are absolute GitHub release-download links (the endpoint serves the
   manifest, the assets carry the bytes);
 - `--self-test` proves all of the above on a synthetic tree (the house
@@ -26,26 +32,41 @@ PLATFORM_RULES = [
     # (platform id, filename suffix of the updater bundle, prefer-when-present)
     ("darwin-aarch64", ".app.tar.gz", False),
     ("darwin-x86_64", ".app.tar.gz", False),
-    ("linux-x86_64", ".AppImage.tar.gz", False),
-    ("windows-x86_64", ".nsis.zip", True),
-    ("windows-x86_64", ".msi.zip", False),
+    ("linux-x86_64", ".AppImage", False),
+    ("windows-x86_64", ".exe", True),   # NSIS setup — passive install
+    ("windows-x86_64", ".msi", False),
 ]
 
 
-def parse_name(name: str) -> tuple[str, str] | None:
-    """Map an updater bundle filename to (platform, arch) by its shape."""
+def parse_name(name: str, darwin_arch: str) -> tuple[str, str] | None:
+    """Map an updater artifact to (platform, filename) by its v2 shape.
+
+    Tauri v2 (`createUpdaterArtifacts`) signs the installers themselves and
+    wraps only macOS in .app.tar.gz (run-42816215486 wire fact). The macOS
+    wrapper carries no arch in its name — the caller DECLARES it.
+    """
     n = name.lower()
     if n.endswith(".app.tar.gz"):
-        return ("darwin-aarch64", name) if "aarch64" in n else ("darwin-x86_64", name)
-    if n.endswith(".appimage.tar.gz"):
+        if "aarch64" in n or "arm64" in n:
+            return ("darwin-aarch64", name)
+        if "x86_64" in n or "x64" in n or "intel" in n:
+            return ("darwin-x86_64", name)
+        # no arch in the name: the DECLARED arch decides — none declared is
+        # the caller's bug and fails loud in build() (#100)
+        if not darwin_arch:
+            return ("darwin-UNDECLARED", name)
+        return (f"darwin-{darwin_arch}", name)
+    if n.endswith(".appimage"):
         return ("linux-x86_64", name)
-    if n.endswith(".nsis.zip") or n.endswith(".msi.zip"):
+    if n.endswith(".exe"):
+        return ("windows-x86_64", name)
+    if n.endswith(".msi"):
         return ("windows-x86_64", name)
     return None
 
 
 def build(dist_dir: pathlib.Path, version: str, notes: str, pub_date: str,
-          repo_slug: str, tag: str) -> dict:
+          repo_slug: str, tag: str, darwin_arch: str = "aarch64") -> dict:
     dist_dir = pathlib.Path(dist_dir)
     sigs = {p.name[: -len(".sig")]: p for p in dist_dir.glob("*.sig")}
     platforms: dict[str, dict] = {}
@@ -53,11 +74,17 @@ def build(dist_dir: pathlib.Path, version: str, notes: str, pub_date: str,
     for bundle in sorted(dist_dir.glob("*")):
         if bundle.name.endswith(".sig") or bundle.name.endswith(".json"):
             continue
-        parsed = parse_name(bundle.name)
+        parsed = parse_name(bundle.name, darwin_arch)
         if parsed is None:
             continue
-        _, _ = parsed
         platform = parsed[0]
+        if platform.startswith("darwin-UNDECLARED"):
+            raise SystemExit(
+                f"UNKEYED FAIL: {bundle.name} is a macOS updater bundle with no arch in "
+                "its name and none declared via --darwin-arch — refusing to guess "
+                "(#100: the guess shipped darwin-x86_64 for an aarch64-only product, "
+                "a key no shipped hardware reports)."
+            )
         if bundle.name not in sigs:
             raise SystemExit(
                 f"PAIRING FAIL: {bundle.name} has no .sig sidecar — refusing to declare "
@@ -69,11 +96,12 @@ def build(dist_dir: pathlib.Path, version: str, notes: str, pub_date: str,
             "url": f"https://github.com/{repo_slug}/releases/download/{tag}/{bundle.name}",
         }
         if platform == "windows-x86_64":
-            # both .nsis.zip and .msi.zip may exist; NSIS wins (passive mode)
+            # both the NSIS .exe and the .msi may exist; the NSIS setup wins
+            # (installMode: passive in tauri.conf.json)
             windows_seen[platform] = windows_seen.get(platform)
-            if bundle.name.endswith(".nsis.zip") or platform not in windows_seen:
+            if bundle.name.endswith(".exe") or platform not in windows_seen:
                 windows_seen[platform] = entry
-            if bundle.name.endswith(".nsis.zip"):
+            if bundle.name.endswith(".exe"):
                 windows_seen["__prefer__"] = entry
         else:
             platforms[platform] = entry
@@ -90,40 +118,75 @@ def build(dist_dir: pathlib.Path, version: str, notes: str, pub_date: str,
 
 
 def self_test() -> int:
-    """Synthetic dist tree → proves pairing, platform mapping, NSIS preference."""
+    """Synthetic dist tree → proves pairing, platform mapping, NSIS preference.
+
+    The fixture uses the artifacts Tauri v2 ACTUALLY emits (verified in the
+    v0.2.1 release run 42816215486 logs): `createUpdaterArtifacts` signs the
+    INSTALLERS themselves (.deb.sig / .AppImage.sig / .rpm.sig / .exe.sig /
+    .msi.sig) and wraps only macOS in .app.tar.gz — the v1 wrapper bundles
+    (.AppImage.tar.gz, .nsis.zip, .msi.zip) never occur on v2 and naming them
+    here tested a fiction that masked #100.
+    """
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         d = pathlib.Path(td)
         sig = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHNpZw"
         files = {
-            "IUM_0.2.0_aarch64.app.tar.gz": sig,
-            "IUM_0.2.0_x64.app.tar.gz": sig,
-            "IUM_0.2.0_amd64.AppImage.tar.gz": sig,
-            "IUM_0.2.0_x64-setup.nsis.zip": sig,
-            "IUM_0.2.0_x64_en-US.msi.zip": sig,
+            "IUM_0.2.1_amd64.deb": sig,
+            "IUM_0.2.1_amd64.deb.sig": sig,
+            "IUM_0.2.1_amd64.AppImage": sig,
+            "IUM_0.2.1_amd64.AppImage.sig": sig,
+            "IUM_0.2.1_x64-setup.exe": sig,
+            "IUM_0.2.1_x64-setup.exe.sig": sig,
+            "IUM_0.2.1_x64_en-US.msi": sig,
+            "IUM_0.2.1_x64_en-US.msi.sig": sig,
+            "IUM.app.tar.gz": sig,
+            "IUM.app.tar.gz.sig": sig,
         }
         for name, s in files.items():
-            (d / name).write_bytes(b"bundle")
-            (d / (name + ".sig")).write_text(s + "\n")
-        manifest = build(d, "0.2.0", "Fixes and polish.", "2026-11-08T00:00:00Z",
-                         "kahlanhamza/IUM", "v0.2.0")
+            if name.endswith(".sig"):
+                (d / name).write_text(s + "\n")
+            else:
+                (d / name).write_bytes(b"bundle")
+        # The macOS updater bundle carries NO arch in its name (the product
+        # names it <productName>.app.tar.gz) — the arch is the build leg's
+        # knowledge and MUST be passed, never guessed from the filename
+        # (#100: the shape heuristic keyed the aarch64-only product as
+        # darwin-x86_64, a key no shipped hardware reports).
+        manifest = build(d, "0.2.1", "Fixes and polish.", "2026-11-10T00:00:00Z",
+                         "kahlanhamza/IUM", "v0.2.1", darwin_arch="aarch64")
         assert set(manifest["platforms"]) == {
-            "darwin-aarch64", "darwin-x86_64", "linux-x86_64", "windows-x86_64"
+            "darwin-aarch64", "linux-x86_64", "windows-x86_64"
         }, manifest["platforms"].keys()
+        assert manifest["platforms"]["darwin-aarch64"]["url"].endswith(
+            "IUM.app.tar.gz"), "the macOS bundle keys under the PASSED arch"
+        assert manifest["platforms"]["linux-x86_64"]["url"].endswith(
+            "IUM_0.2.1_amd64.AppImage"), "v2 serves the AppImage directly"
         assert manifest["platforms"]["windows-x86_64"]["url"].endswith(
-            "IUM_0.2.0_x64-setup.nsis.zip"), "NSIS must win on windows"
-        assert manifest["platforms"]["darwin-aarch64"]["url"].endswith("aarch64.app.tar.gz")
+            "IUM_0.2.1_x64-setup.exe"), "NSIS setup wins on windows (passive)"
         assert all(p["signature"] == sig for p in manifest["platforms"].values())
-        assert manifest["version"] == "0.2.0" and manifest["pub_date"] == "2026-11-08T00:00:00Z"
+        assert manifest["version"] == "0.2.1" and manifest["pub_date"] == "2026-11-10T00:00:00Z"
         # the pairing rule: an unsigned bundle must FAIL the build
-        (d / "IUM_0.2.1_x64-setup.nsis.zip").write_bytes(b"bundle")
+        (d / "IUM_0.2.2_x64-setup.exe").write_bytes(b"bundle")
         try:
-            build(d, "0.2.1", "", "2026-11-08T00:00:00Z", "kahlanhamza/IUM", "v0.2.1")
+            build(d, "0.2.2", "", "2026-11-10T00:00:00Z", "kahlanhamza/IUM",
+                  "v0.2.2", darwin_arch="aarch64")
         except SystemExit as e:
             assert "PAIRING FAIL" in str(e)
         else:
             raise AssertionError("unsigned bundle did not fail the build")
-    print("SELF-TEST PASS: pairing, platform map, NSIS preference, schema")
+        # an updater bundle whose arch was never declared cannot be keyed —
+        # refusing is the honest answer, a wrong key is #100
+        (d / "SomeOther.app.tar.gz").write_bytes(b"bundle")
+        (d / "SomeOther.app.tar.gz.sig").write_text(sig + "\n")
+        try:
+            build(d, "0.2.2", "", "2026-11-10T00:00:00Z", "kahlanhamza/IUM",
+                  "v0.2.2", darwin_arch="")
+        except SystemExit as e:
+            assert "UNKEYED" in str(e), str(e)
+        else:
+            raise AssertionError("an undeclared .app.tar.gz did not fail the build")
+    print("SELF-TEST PASS: v2 pairing, platform map, NSIS preference, schema")
     return 0
 
 
@@ -135,6 +198,11 @@ def main() -> int:
     ap.add_argument("--pub-date", help="ISO 8601 timestamp, e.g. 2026-11-08T00:00:00Z")
     ap.add_argument("--repo", default="kahlanhamza/IUM")
     ap.add_argument("--tag", help="release tag, e.g. v0.2.0")
+    ap.add_argument("--darwin-arch", default="aarch64",
+                    choices=["aarch64", "x86_64"],
+                    help="arch of the macOS build leg — the .app.tar.gz name "
+                         "carries none, so the leg declares it (#100); the "
+                         "product ships Apple Silicon only, hence the default")
     ap.add_argument("--out", help="where to write latest.json")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args()
@@ -143,7 +211,7 @@ def main() -> int:
     if not (a.dist and a.version and a.tag and a.out):
         ap.error("--dist/--version/--tag/--out are required (or run --self-test)")
     manifest = build(pathlib.Path(a.dist), a.version, a.notes,
-                     a.pub_date or "", a.repo, a.tag)
+                     a.pub_date or "", a.repo, a.tag, darwin_arch=a.darwin_arch)
     out = pathlib.Path(a.out)
     out.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"latest.json written: {out} ({len(manifest['platforms'])} platforms)")

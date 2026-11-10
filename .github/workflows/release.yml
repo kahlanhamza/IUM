@@ -275,6 +275,9 @@ jobs:
           PY
       - name: Build the updater manifest (latest.json, #80)
         run: |
+          # the detector rides every release: the builder proves itself on the
+          # v2 wire shapes BEFORE the real manifest is built (#100)
+          python3 scripts/build_latest_json.py --self-test
           python3 scripts/build_latest_json.py \
             --dist release_assets \
             --version "${TAG#v}" \
@@ -282,7 +285,11 @@ jobs:
             --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --repo "$GITHUB_REPOSITORY" \
             --tag "$TAG" \
+            --darwin-arch aarch64 \
             --out release_assets/latest.json
+          # --darwin-arch is the product's word (Apple-Silicon-only, the dmg
+          # is aarch64) — the .app.tar.gz name carries no arch, the leg
+          # declares it, never a filename guess (#100)
           # the manifest joins the attest subjects: an updater manifest is a
           # shipped artifact like any other (#71 supply-chain bar)
       - name: Provenance — attest every shipped artifact
@@ -295,6 +302,7 @@ jobs:
             release_assets/*.dmg
             release_assets/*.msi
             release_assets/*.exe
+            release_assets/*.sig
             release_assets/*.cdx.json
             release_assets/*.zip
             release_assets/*.tar.gz
@@ -307,6 +315,7 @@ jobs:
           n=0
           for f in release_assets/*.deb release_assets/*.rpm release_assets/*.AppImage \
                    release_assets/*.dmg release_assets/*.msi release_assets/*.exe \
+                   release_assets/*.sig \
                    release_assets/*.cdx.json release_assets/*.zip \
                    release_assets/*.tar.gz release_assets/latest.json; do
             [ -f "$f" ] || continue
@@ -338,6 +347,7 @@ jobs:
           failed=0
           for f in release_assets/*.deb release_assets/*.rpm release_assets/*.AppImage \
                    release_assets/*.dmg release_assets/*.msi release_assets/*.exe \
+                   release_assets/*.sig \
                    release_assets/*.cdx.json release_assets/*.zip \
                    release_assets/*.tar.gz release_assets/latest.json; do
             [ -f "$f" ] || continue
