@@ -54,6 +54,14 @@ jobs:
       - name: Updater manifest gate (self-test)
         if: runner.os == 'Linux'
         run: python3 scripts/build_latest_json.py --self-test
+      # #102: the distro-publish hygiene gate — nothing internal (SBOMs,
+      # attestation bundles, internal refs in the notes) may ship to the
+      # public distro repo; provenance lives in release_provenance/ only.
+      - name: Distro-publish hygiene gate (self-test + repo pins)
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/distro_publish_gate.py --self-test
+          python3 scripts/distro_publish_gate.py
       # Product bar #66 lane 8 (#76): the RE-resistance repo pins stay alive
       # between releases — the [profile.release] strip pin, the checklist
       # doc and the source panic-path audit, plus the synthetic detector

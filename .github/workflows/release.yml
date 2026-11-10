@@ -263,16 +263,21 @@ jobs:
           grep 'linux_amd64.tar.gz$' syft_1.57.0_checksums.txt | sha256sum -c -
           tar xzf syft_1.57.0_linux_amd64.tar.gz syft
           ./syft version
-      - name: SBOM — generate rust + app (CycloneDX)
+      - name: SBOM — generate rust + app (CycloneDX, into the provenance sandbox)
         run: |
+          # #102: SBOMs enumerate the internal dependency closures — they are
+          # the maintainer's supply-chain record, NOT public release assets.
+          # Everything provenance-shaped lives in release_provenance/ and
+          # ships only as a private CI artifact.
+          mkdir -p release_provenance
           ./syft Cargo.lock \
             --source-name IUM --source-version "$TAG" \
-            -o "cyclonedx-json=release_assets/IUM-${TAG}-rust.cdx.json"
+            -o "cyclonedx-json=release_provenance/IUM-${TAG}-rust.cdx.json"
           ( cd ium-app && npm sbom --sbom-format cyclonedx ) \
-            > "release_assets/IUM-${TAG}-app.cdx.json"
+            > "release_provenance/IUM-${TAG}-app.cdx.json"
           python3 - <<'PY'
           import json, glob
-          for f in sorted(glob.glob("release_assets/*.cdx.json")):
+          for f in sorted(glob.glob("release_provenance/*.cdx.json")):
               d = json.load(open(f))
               print(f"{f}: specVersion={d['specVersion']}, components={len(d.get('components', []))}")
           PY
@@ -306,7 +311,7 @@ jobs:
             release_assets/*.msi
             release_assets/*.exe
             release_assets/*.sig
-            release_assets/*.cdx.json
+            release_provenance/*.cdx.json
             release_assets/*.zip
             release_assets/*.tar.gz
             release_assets/latest.json
@@ -319,7 +324,7 @@ jobs:
           for f in release_assets/*.deb release_assets/*.rpm release_assets/*.AppImage \
                    release_assets/*.dmg release_assets/*.msi release_assets/*.exe \
                    release_assets/*.sig \
-                   release_assets/*.cdx.json release_assets/*.zip \
+                   release_provenance/*.cdx.json release_assets/*.zip \
                    release_assets/*.tar.gz release_assets/latest.json; do
             [ -f "$f" ] || continue
             n=$((n+1))
@@ -337,11 +342,17 @@ jobs:
             for j in "bundles/$n"/*.jsonl; do
               [ -f "$j" ] || continue
               k=$((k+1))
-              cp "$j" "release_assets/$(basename "$f").attestation.$k.jsonl"
+              cp "$j" "release_provenance/$(basename "$f").attestation.$k.jsonl"
             done
           done
           echo "bundles attached: $n subjects"
-          ls release_assets/*.attestation.*.jsonl
+          ls release_provenance/*.attestation.*.jsonl
+      - name: Provenance — archive (private CI artifact, never public, #102)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (pinned 2026-11-06)
+        with:
+          name: release-provenance
+          path: release_provenance/
+          if-no-files-found: error
       - name: Provenance — verify (the gate — nothing ships unverified)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -351,7 +362,7 @@ jobs:
           for f in release_assets/*.deb release_assets/*.rpm release_assets/*.AppImage \
                    release_assets/*.dmg release_assets/*.msi release_assets/*.exe \
                    release_assets/*.sig \
-                   release_assets/*.cdx.json release_assets/*.zip \
+                   release_provenance/*.cdx.json release_assets/*.zip \
                    release_assets/*.tar.gz release_assets/latest.json; do
             [ -f "$f" ] || continue
             if ! gh attestation verify "$f" -R "$GITHUB_REPOSITORY"; then
@@ -361,15 +372,17 @@ jobs:
           exit $failed
       - name: Assemble "The installers" (sizes + checksums, measured)
         run: |
+          # #102: the release notes are USER-FACING — what changed, how to
+          # verify, how to install. No internal references of any kind.
           cd release_assets
           sha256sum ./* | sed 's|\./||' > SHA256SUMS.txt
           {
             echo "## The installers"
             echo
-            echo "Signed: **no** (see #65 — the signing credentials are a pinned owner"
-            echo "ask). Every artifact carries a sha256 you can check with"
-            echo '`sha256sum -c SHA256SUMS.txt`. Silent install: Windows NSIS `/S`,'
-            echo "MSI \`msiexec /i /qn\`, Linux \`dpkg -i\` / AppImage, macOS DMG drag."
+            echo "Every file ships with a sha256 — verify yours in ten seconds with"
+            echo '`sha256sum -c SHA256SUMS.txt` (commands for each OS are in the [User Guide](https://github.com/kahlanhamza/IUM-dist#verify-your-download)).'
+            echo "Silent install: Windows NSIS \`/S\`, MSI \`msiexec /i /qn\`,"
+            echo "Linux \`dpkg -i\` / AppImage, macOS DMG drag."
             echo
             echo "| Installer | Size |"
             echo "|---|---|"
@@ -380,22 +393,11 @@ jobs:
               echo "| ${f#./} | $h |"
             done
             echo
-            echo "## Supply chain (#71)"
+            echo "## Updating"
             echo
-            echo "- **SBOMs (CycloneDX):** \`IUM-${TAG}-rust.cdx.json\` — the whole"
-            echo "  Rust workspace closure (engine + Tauri backend) from the tagged"
-            echo "  \`Cargo.lock\`; \`IUM-${TAG}-app.cdx.json\` — the app npm tree"
-            echo "  **including devDependencies** (they ship inside the bundle)."
-            echo "- **Build provenance:** every artifact above is attested (SLSA v1,"
-            echo "  GitHub artifact attestations). Verify ANY file without repo access"
-            echo "  using the offline sigstore bundle that ships next to it:"
-            echo ""
-            echo "  \`cosign verify-blob-attestation <file> --bundle <file>.attestation.1.jsonl\`"
-            echo ""
-            echo "  against the public Fulcio/Rekor transparency logs. (The GitHub"
-            echo "  attestation API path, \`gh attestation verify -R kahlanhamza/IUM\`,"
-            echo "  is maintainer-side: the source repo is closed — #101.)"
-            echo "- Signed binaries: no — code-signing certs remain the pinned owner ask."
+            echo "The built-in updater reads the release feed and offers updates in place."
+            echo "Installs from v0.2.1 or earlier need one final manual update: download,"
+            echo "verify, install over the old version — journal, credentials and preferences carry over."
             echo
             echo "## Checksums"
             echo
@@ -407,6 +409,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.DISTRO_TOKEN }}
         run: |
+          # #102 belt+braces: the public set is leak-proof by construction —
+          # this assert makes ANY future provenance-shaped file a hard failure
+          # before anything reaches the public page.
+          if compgen -G 'release_assets/*.cdx.json' >/dev/null \
+             || compgen -G 'release_assets/*.attestation.*' >/dev/null; then
+            echo "PUBLISH BLOCKED: provenance-shaped files in the public set (#102)"; ls release_assets; exit 1
+          fi
           PRERELEASE_ARGS=()
           case "$TAG" in *-*) PRERELEASE_ARGS+=(--prerelease);; esac
           {
