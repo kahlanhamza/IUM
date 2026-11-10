@@ -84,3 +84,33 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: "SIGKILL after ack before journal write + 409-realign resume"
         run: bash scripts/tus-test.sh --with-drill
+
+  # The dependency-vulnerability gate (#97): the advisory DB moves daily, so
+  # the tree is scanned every night — a CVE landing in the dep tree fails
+  # loud by morning, not at the next release. Day-one catch (the lane's
+  # reason to exist): RUSTSEC-2026-0459 — the C SQLite bundled by
+  # libsqlite3-sys 0.30.x underneath the journal carried CVE-2026-119375.
+  # The tool is a pinned prebuilt musl binary; rustsec ships no checksum
+  # asset, so the committed digest IS the pin. The detector proves itself
+  # first: a hostile fixture lock MUST fail before the real lock may pass.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned cargo-audit (digest-verified)
+        run: |
+          curl -fsSLO --retry 3 --retry-delay 2 \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-x86_64-unknown-linux-musl-v0.22.2.tgz"
+          echo "7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428  cargo-audit-x86_64-unknown-linux-musl-v0.22.2.tgz" | sha256sum -c -
+          tar xzf cargo-audit-x86_64-unknown-linux-musl-v0.22.2.tgz
+          mv cargo-audit-x86_64-unknown-linux-musl-v0.22.2/cargo-audit .
+          ./cargo-audit --version
+      - name: Canary — the detector must detect (RUSTSEC-2020-0159)
+        run: |
+          if ./cargo-audit audit --file scripts/audit/vuln_fixture.lock -q; then
+            echo "::error::the audit detector accepted a known-vulnerable lockfile — the gate is a no-op" >&2
+            exit 1
+          fi
+          echo "canary rang: the hostile fixture failed the scan as it must"
+      - name: Audit the real tree — zero vulnerabilities required
+        run: ./cargo-audit audit --file Cargo.lock

@@ -1,0 +1,12 @@
+# The audit detector's hostile fixture (#97): a lockfile that MUST fail the
+# scan. chrono 0.4.19 carries RUSTSEC-2020-0159 (potential segfault in
+# localtime_r's use of an out-of-date tz database; fixed in 0.4.20).
+# The nightly audit job requires this file to produce a NON-ZERO exit before
+# the real Cargo.lock is allowed to pass — a detector that cannot detect is
+# a no-op (the R1 canary rule).
+[[package]]
+name = "chrono"
+version = "0.4.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a7bdbf8db01fd7b1c7db654b3b91c1c8e52a3a3ea0d2006c4b3e5a0f0f2c0b0"
+dependencies = []

@@ -8,6 +8,25 @@ All notable changes to IUM are documented here. Format follows
 Every entry cites its issue numbers — evidence lives in the tracker, not in
 prose. An entry without verifiable issue numbers does not belong here.
 
+## [Unreleased]
+
+### Fixed
+- **CVE-2026-119375 (RUSTSEC-2026-0459, CVSS 6.8) in the journal's bundled
+  SQLite** (#97): the C SQLite carried by `libsqlite3-sys 0.30.x` was
+  vulnerable; the journal now runs on `libsqlite3-sys 0.39.1` (via the
+  `rusqlite` 0.32 → 0.41 bump). The whole suite is the regression net —
+  including the new upgrade-path pin (#96), which proves the new SQLite
+  opens a v0.2.0 mid-flight journal byte-exact. The dependency-vulnerability
+  gate that caught it (a nightly `cargo-audit` job, detector-proven against
+  a hostile fixture lock) rides the same issue.
+
+### Added
+- The upgrade-path pin (#96): a v0.2.0 mid-flight journal (a real N-1
+  artifact, generator + sha256 committed) opens and resumes byte-exact at
+  HEAD with **zero re-upload asserted on the wire** — and a `user_version`
+  tripwire fails loud the day a v2 migration lands without a new N-1
+  fixture.
+
 ## [0.2.0] — 2026-11-08
 
 The design-and-manners cut: the Ink program's completion (palette, launch window,
