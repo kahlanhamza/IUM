@@ -9,15 +9,27 @@ export PATH="$CARGO_HOME/bin:$PATH"
 
 if command -v cargo >/dev/null 2>&1 && cargo --version >/dev/null 2>&1; then
   echo "[install-toolchain] already present: $(cargo --version)"
-  exit 0
+else
+  mkdir -p "$ROOT/.toolchain"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$ROOT/.toolchain/rustup-init.sh"
+  sh "$ROOT/.toolchain/rustup-init.sh" -y --profile minimal --default-toolchain stable
+  # Gates need rustfmt + clippy; minimal profile ships neither (recycle on
+  # 2026-11-02 cost a bootstrap detour). Install them with the toolchain.
+  rustup component add rustfmt clippy
+  cargo --version
+  rustc --version
 fi
 
-mkdir -p "$ROOT/.toolchain"
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$ROOT/.toolchain/rustup-init.sh"
-sh "$ROOT/.toolchain/rustup-init.sh" -y --profile minimal --default-toolchain stable
-# Gates need rustfmt + clippy; minimal profile ships neither (recycle on
-# 2026-11-02 cost a bootstrap detour). Install them with the toolchain.
-rustup component add rustfmt clippy
-cargo --version
-rustc --version
+# The shared artifact cache (self-healing on every invocation — the recycle
+# that wiped .toolchain on 2026-11-11 also wiped this file and the gate lost
+# its warm dep cache). Every tree (main + gate worktrees) builds into ONE
+# target dir: dep artifacts are content-addressed and path-independent, so a
+# gate worktree pays only workspace-crate recompiles (gate.sh's "half the
+# disk" contract). CARGO_TARGET_DIR stays unset in gate.sh; cargo falls back
+# to this build.target-dir.
+mkdir -p "$CARGO_HOME"
+cat > "$CARGO_HOME/config.toml" <<EOF
+[build]
+target-dir = "$ROOT/target"
+EOF
 echo "[install-toolchain] done — activate with: . scripts/rust-env.sh"
