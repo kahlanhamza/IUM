@@ -56,7 +56,7 @@ Three walls, measured on the current tree:
   e2e seams (`upload-*` ids) stay byte-compatible.
 - Each preset renders "Get your keys ↗" + a 3-click key recipe.
 - Launch presets: Backblaze B2, Cloudflare R2, Wasabi, Scaleway, DigitalOcean
-  Spaces, Filebase, and Nextcloud (WebDAV). Honest notes for the rest.
+  Spaces, Filebase, and MinIO / self-hosted S3. Honest notes for the rest.
 
 **Tier 1.5 — the S3 Test button:**
 - `S3MultipartAdapter::check_credentials(endpoint)`: zero-byte
@@ -77,7 +77,7 @@ Three walls, measured on the current tree:
 
 ## Doctrine guards
 
-- ADR-012 (new): provider knowledge is DATA in the app; the engine stays
+- ADR-013 (new): provider knowledge is DATA in the app; the engine stays
   provider-agnostic (adapters declare, planner obeys — ADR-011 untouched).
 - No relay service ever holds user credentials (the zero-telemetry posture).
 - The raw URL field never disappears (power users are today's users).
@@ -110,7 +110,7 @@ Three walls, measured on the current tree:
 - [ ] `probe_credentials` s3 arm
 - [ ] `sigv4::presign` + vectors
 - [ ] `share_link` command + Inspector copy-link moment
-- [ ] USERGUIDE §5 rewrite, README providers list, ADR-012, CHANGELOG
+- [ ] USERGUIDE §5 rewrite, README providers list, ADR-013, CHANGELOG
 - [ ] full battery GREEN locally; CI chase recorded (billing block standing)
 """
 
