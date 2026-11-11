@@ -175,10 +175,10 @@ def self_test() -> int:
         ), "manifest asset URLs are the PUBLIC distro repo's (#101)"
         assert manifest["version"] == "0.2.1" and manifest["pub_date"] == "2026-11-10T00:00:00Z"
         # the pairing rule: an unsigned bundle must FAIL the build
-        (d / "IUM_0.2.2_x64-setup.exe").write_bytes(b"bundle")
+        (d / "IUM_0.2.3_x64-setup.exe").write_bytes(b"bundle")
         try:
-            build(d, "0.2.2", "", "2026-11-10T00:00:00Z", "kahlanhamza/IUM-dist",
-                  "v0.2.2", darwin_arch="aarch64")
+            build(d, "0.2.3", "", "2026-11-10T00:00:00Z", "kahlanhamza/IUM-dist",
+                  "v0.2.3", darwin_arch="aarch64")
         except SystemExit as e:
             assert "PAIRING FAIL" in str(e)
         else:
@@ -188,8 +188,8 @@ def self_test() -> int:
         (d / "SomeOther.app.tar.gz").write_bytes(b"bundle")
         (d / "SomeOther.app.tar.gz.sig").write_text(sig + "\n")
         try:
-            build(d, "0.2.2", "", "2026-11-10T00:00:00Z", "kahlanhamza/IUM",
-                  "v0.2.2", darwin_arch="")
+            build(d, "0.2.3", "", "2026-11-10T00:00:00Z", "kahlanhamza/IUM",
+                  "v0.2.3", darwin_arch="")
         except SystemExit as e:
             assert "UNKEYED" in str(e), str(e)
         else:

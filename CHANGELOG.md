@@ -10,6 +10,8 @@ prose. An entry without verifiable issue numbers does not belong here.
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-11-11
+
 ### Added
 - **The destination lane — regular users can finally aim the engine** (#103,
   ADR-013): the create form leads with a **provider picker** — Backblaze B2,
@@ -26,6 +28,20 @@ prose. An entry without verifiable issue numbers does not belong here.
   verdict. And a finished S3 upload can hand you a **share link** — a
   presigned GET (24 h, expiring) minted on demand from your own keys via
   `sigv4::presign_url`; nothing is ever auto-published.
+- **The guided region is the signing region** (#105): submitting a guided S3
+  destination remembers the picked region for the lane, so the request
+  signature always matches the destination — a Wasabi bucket in
+  `eu-central-2` signs as `eu-central-2`, not as a default region the
+  provider refuses. Custom URL mode writes nothing; an explicitly-set
+  `IUM_S3_REGION` still wins.
+
+### Fixed
+- **The provider registry now matches the providers' own 2026
+  documentation** (#105, every page fetched and cited on the issue): Filebase's
+  general S3 endpoint is `s3.filebase.io`; Wasabi offers all 16 documented
+  regions (was 8); DigitalOcean Spaces all 13 (was 6); Backblaze B2 gained
+  `us-east-005` and dropped the uncorroborated `us-west-003`. Every preset's
+  sample URL is re-proven through the engine's own parser.
 
 ## [0.2.2] — 2026-11-11
 

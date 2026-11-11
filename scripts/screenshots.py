@@ -25,7 +25,7 @@ OUT = "/home/z/my-project/download/screenshots"
 DOCS = "/home/z/my-project/docs/screenshots"
 os.makedirs(OUT, exist_ok=True)
 
-ENGINE_SENTENCE = "ium-core v0.2.1 ready — adapters: http_one_shot, s3_multipart, tus"
+ENGINE_SENTENCE = "ium-core v0.2.3 ready — adapters: http_one_shot, s3_multipart, tus"
 
 # The OFFICIAL Tauri mock harness (node_modules/@tauri-apps/api/mocks.cjs),
 # inlined into the page by the bootstrap below. Vendor protocol, not a
@@ -171,7 +171,7 @@ SHIM = r"""
     args = args || {};
     switch (cmd) {
       case "engine_status":
-        return "ium-core v0.2.1 ready — adapters: http_one_shot, s3_multipart, tus";
+        return "ium-core v0.2.3 ready — adapters: http_one_shot, s3_multipart, tus";
       case "list_adapters":
         return ["http_oneshot", "s3_multipart", "tus", "feishu_drive", "terabox", "mega"];
       case "list_jobs":
@@ -280,12 +280,17 @@ def main() -> None:
         )
         pg.screenshot(path=f"{OUT}/01-main-window.png")
 
-        # filled intake: path stat'ed, endpoint typed, protocol picked
+        # filled intake: the GUIDED destination lane is the headline — a
+        # provider preset with its region select, bucket field, keys link,
+        # recipe and the derived readonly URL (the #107 re-shoot: the old
+        # shot drove the raw endpoint and pre-dated the picker entirely).
         pg.fill("#upload-path", "/home/you/datasets/fec-parity-bench.bin")
         pg.wait_for_selector(".dropzone--filled", timeout=8000)
-        pg.select_option("#upload-adapter", "mega")
-        pg.fill("#upload-endpoint", "https://mega.nz/fm/ium-weights")
-        pg.wait_for_timeout(350)
+        pg.select_option("#upload-adapter", "s3_multipart")
+        # the provider select's option VALUES are the preset ids (providers.ts)
+        pg.select_option("#upload-provider", "backblaze-b2")
+        pg.fill("#upload-bucket", "model-weights")
+        pg.wait_for_timeout(450)
         pg.screenshot(path=f"{OUT}/02-create-upload-filled.png")
 
         # inspector drawer on the live job
