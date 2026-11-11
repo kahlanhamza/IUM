@@ -129,16 +129,21 @@ jobs:
       - name: Linux system deps (WebKitGTK)
         if: runner.os == 'Linux'
         run: |
-          # 2026-11-11, runs 43036333957 + 43044589016: the default
-          # azure.archive.ubuntu.com mirror stalled mid-fetch — every package
-          # Ign'd at 20 s intervals, the step wedged 35+ min. GitHub's noble
-          # image routes apt through a LOCAL MIRRORLIST (file:/etc/apt/
-          # apt-mirrors.txt) — the hostname lives THERE, so the sed must
-          # cover the mirrorlist too (run 2 proved the sources-only sed
-          # no-ops and azure stalls again). Pin the canonical mirror and
-          # retry instead of crawling a dead one.
-          sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' \
-            /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list /etc/apt/apt-mirrors.txt 2>/dev/null || true
+          # 2026-11-11, three runs of evidence: the runner's HTTP egress to
+          # BOTH first-party Ubuntu archives stalls (azure.archive and then
+          # archive.ubuntu.com after the mirrorlist rewrite — same 20 s Ign
+          # crawl), while HTTPS endpoints fetch in seconds and the archives
+          # answer 200 from everywhere else. Route apt over HTTPS to the
+          # Fastly-CDN kernel.org edge mirror: the scheme AND host change,
+          # covering the local mirrorlist (where the hostname actually
+          # lives), the deb822 sources and classic sources.list.
+          for f in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list; do
+            [ -f "$f" ] && sudo sed -i \
+              -e 's|http://azure\.archive\.ubuntu\.com/ubuntu|https://mirrors.edge.kernel.org/ubuntu|g' \
+              -e 's|http://archive\.ubuntu\.com/ubuntu|https://mirrors.edge.kernel.org/ubuntu|g' \
+              -e 's|azure\.archive\.ubuntu\.com|mirrors.edge.kernel.org|g' \
+              "$f" || true
+          done
           sudo apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=15
           sudo apt-get install -y -o Acquire::Retries=5 -o Acquire::http::Timeout=15 \
             libwebkit2gtk-4.1-dev libgtk-3-dev \
@@ -173,10 +178,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: System deps (WebKitGTK build libs + driver + xvfb)
         run: |
-          # Same mirror hardening as the ium-app job above (#106) — the
-          # mirrorlist file is the one that actually carries the hostname.
-          sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' \
-            /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list /etc/apt/apt-mirrors.txt 2>/dev/null || true
+          # Same apt-over-HTTPS hardening as the ium-app job above (#106).
+          for f in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list; do
+            [ -f "$f" ] && sudo sed -i \
+              -e 's|http://azure\.archive\.ubuntu\.com/ubuntu|https://mirrors.edge.kernel.org/ubuntu|g' \
+              -e 's|http://archive\.ubuntu\.com/ubuntu|https://mirrors.edge.kernel.org/ubuntu|g' \
+              -e 's|azure\.archive\.ubuntu\.com|mirrors.edge.kernel.org|g' \
+              "$f" || true
+          done
           sudo apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=15
           sudo apt-get install -y -o Acquire::Retries=5 -o Acquire::http::Timeout=15 \
             libwebkit2gtk-4.1-dev libgtk-3-dev \
