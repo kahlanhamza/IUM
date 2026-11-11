@@ -9,8 +9,8 @@
       "regions": [
         "us-west-001",
         "us-west-002",
-        "us-west-003",
         "us-west-004",
+        "us-east-005",
         "eu-central-001",
         "eu-central-002",
         "eu-central-003"
@@ -21,7 +21,7 @@
       "sample_key": "backup.tar",
       "sample_url": "https://s3.us-west-004.backblazeb2.com/ium-sample/backup.tar",
       "key_page": "https://backblaze.com/app_keys",
-      "key_steps": "B2 console → Application Keys → Add Application Key with read/write to your bucket. The keyID is the Access key, the applicationKey is the Secret key (shown once). Your bucket's Endpoint shows the exact region to pick here.",
+      "key_steps": "B2 console → Application Keys → Add Application Key with read/write to your bucket. The keyID is the Access key, the applicationKey is the Secret key (shown once). Your bucket's Endpoint shows the exact region to pick here — the picker carries the common ones (us-west-001/002/004, us-east-005, eu-central-001/002/003); anything else goes through Custom URL.",
       "note": "Works with any B2 bucket. IUM uploads in resumable parts."
     },
     {
@@ -53,10 +53,18 @@
       "regions": [
         "us-east-1",
         "us-east-2",
+        "us-central-1",
         "us-west-1",
         "us-west-2",
+        "ca-central-1",
         "eu-central-1",
         "eu-central-2",
+        "eu-west-1",
+        "eu-west-2",
+        "eu-west-3",
+        "eu-south-1",
+        "ap-northeast-1",
+        "ap-northeast-2",
         "ap-southeast-1",
         "ap-southeast-2"
       ],
@@ -89,7 +97,21 @@
       "label": "DigitalOcean Spaces",
       "adapter": "s3_multipart",
       "endpoint_template": "https://{region}.digitaloceanspaces.com",
-      "regions": ["nyc3", "sfo3", "ams3", "fra1", "sgp1", "syd1"],
+      "regions": [
+        "nyc3",
+        "sfo2",
+        "sfo3",
+        "ams3",
+        "fra1",
+        "sgp1",
+        "syd1",
+        "lon1",
+        "tor1",
+        "blr1",
+        "atl1",
+        "ric1",
+        "mkc1"
+      ],
       "region_default": "nyc3",
       "sample_values": { "region": "nyc3" },
       "sample_bucket": "ium-sample",
@@ -103,14 +125,14 @@
       "id": "filebase",
       "label": "Filebase",
       "adapter": "s3_multipart",
-      "endpoint_template": "https://s3.filebase.com",
+      "endpoint_template": "https://s3.filebase.io",
       "sample_values": {},
       "sample_bucket": "ium-sample",
       "sample_key": "backup.tar",
-      "sample_url": "https://s3.filebase.com/ium-sample/backup.tar",
+      "sample_url": "https://s3.filebase.io/ium-sample/backup.tar",
       "key_page": "https://console.filebase.com/",
-      "key_steps": "Filebase console → Access Keys → Create Access Key. Paste the key and secret here; there is no region to pick — one endpoint serves all buckets.",
-      "note": "One endpoint for every bucket; buckets are created in the Filebase console."
+      "key_steps": "Filebase console → Access Keys → Create Access Key. Paste the key and secret here; there is no region to pick — one endpoint serves all buckets, and IUM signs with the us-east-1 scope Filebase documents for SDKs.",
+      "note": "One endpoint (s3.filebase.io) for every bucket; buckets are created in the Filebase console."
     },
     {
       "id": "minio",

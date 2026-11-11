@@ -80,8 +80,10 @@ describe("buildEndpoint — the derivation math", () => {
   it("a slotless preset (Filebase) needs only the bucket", () => {
     const fb = providerById("filebase");
     expect(fb).toBeDefined();
+    // #105: the official S3 endpoint is s3.filebase.io (filebase.com/docs/
+    // s3-api/overview); .com is their IPFS-backed endpoint, not this lane's.
     expect(buildEndpoint(fb!, { bucket: "my-bkt" })).toBe(
-      "https://s3.filebase.com/my-bkt"
+      "https://s3.filebase.io/my-bkt"
     );
   });
 
