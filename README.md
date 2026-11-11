@@ -12,7 +12,7 @@
 Resumable, segmented, multi-protocol uploads that survive slow networks, sleep,
 crashes and reboots — with *honest* badges where physics says a protocol cannot resume.
 
-![tests](https://img.shields.io/badge/tests-329%20core%20%2B%20163%20UI-brightgreen)
+![tests](https://img.shields.io/badge/tests-346%20core%20%2B%20191%20UI-brightgreen)
 ![platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
 </div>
@@ -51,7 +51,7 @@ instead of pretending it can resume.
 |---|---|
 | **Crash-safe by construction** | A write-ahead journal is the only source of truth. State is read from it, never guessed — kill the app mid-transfer and the upload resumes byte-exact with zero re-confirmed bytes. Pinned nightly by real kill-and-resume drills. |
 | **Verify-before-declare** | A job reaches Done only after the destination confirms the assembled object. Every failure carries its own written reason — never silence. |
-| **Three real transports** | HTTP one-shot (streaming PUT), S3 multipart (any S3-compatible bucket), TUS 1.0.0 (byte-level resume). Plus bridges to WebDAV, Google Drive and YouTube — connect the account, and the upload begins. |
+| **Three real transports** | HTTP one-shot (streaming PUT), S3 multipart (any S3-compatible bucket), TUS 1.0.0 (byte-level resume). Plus bridges to WebDAV, Google Drive and YouTube, and vault lanes for TeraBox, Feishu and MEGA — connect the account, and the upload begins. |
 | **Adaptive engine** | Dynamic chunk pool, slow-connection eviction voted on measured throughput, per-error-class retry budgets — every path ends in Done or Failed, never in a lie. |
 | **Built for KB/s links** | A link prober measures the wire before committing and classifies the bottleneck; pieces shrink to fit the slowest legal moment; a locked destination is a wait, not a failure. |
 | **A desktop-native face** | The **Ink** design language: first-class dark and light themes, one typography across all three OSes, keyboard-first command palette, OS notifications, a global speed cap, and WCAG AA contrast in both schemes. |
@@ -67,6 +67,7 @@ instead of pretending it can resume.
 | WebDAV | WebDAV `PUT` | bridge-declared | connect with URL + username + password |
 | Google Drive | Drive resumable | bridge-declared | one-click sign-in in your browser; the token stays in your OS keychain |
 | YouTube | resumable upload API | ✅ byte-level | native sign-in with anti-CSRF protection; uploads are private by default |
+| TeraBox · Feishu · MEGA | native bridges | bridge-declared | connect the account, the upload begins |
 
 **You don't need to know what an endpoint URL is.** The upload form asks
 "where should files go?" — pick a provider, name your bucket, and the
@@ -118,7 +119,7 @@ preferences carry over.
 
 ## How it is verified
 
-- **Every push**: the full test suite (329 engine + 163 UI) on Linux, macOS and Windows;
+- **Every push**: the full test suite (346 engine + 191 UI) on Linux, macOS and Windows;
   live wire rehearsals against four real server implementations; a real end-to-end drive
   of the desktop shell itself.
 - **Nightly**: fuzzing at scale, kill-and-resume drills on the wire, and the dependency
@@ -135,8 +136,8 @@ live in the [User Guide](USERGUIDE.md). Notable changes per release are in
 ## Security
 
 Report vulnerabilities privately via [GitHub security advisories](https://github.com/kahlanhamza/IUM/security/advisories/new)
-rather than a public issue. Every release ships checksums and a software bill of
-materials; the dependency tree is scanned for known vulnerabilities nightly.
+rather than a public issue. Every release ships checksums (`SHA256SUMS.txt`) and a minisign
+signature for each installer; the dependency tree is scanned for known vulnerabilities nightly.
 
 ---
 

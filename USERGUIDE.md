@@ -14,9 +14,11 @@ All releases live on the [Releases page](https://github.com/kahlanhamza/IUM-dist
 | macOS (Apple Silicon) | `.dmg` |
 | Windows | `.msi` (installer), `.exe` (setup wizard) |
 
-A current release ships exactly these installers — for example, v0.2.0 shipped `IUM_0.2.0_amd64.deb`, `IUM-0.2.0-1.x86_64.rpm`, `IUM_0.2.0_amd64.AppImage`, `IUM_0.2.0_aarch64.dmg`, `IUM_0.2.0_x64_en-US.msi`, and `IUM_0.2.0_x64-setup.exe`.
+A current release ships exactly these installers — for example, v0.2.2 shipped `IUM_0.2.2_amd64.deb`, `IUM-0.2.2-1.x86_64.rpm`, `IUM_0.2.2_amd64.AppImage`, `IUM_0.2.2_aarch64.dmg`, `IUM_0.2.2_x64_en-US.msi`, and `IUM_0.2.2_x64-setup.exe`.
 
-Alongside the installers you will find `SHA256SUMS.txt` (checksums for every file), a signed attestation (`.attestation.1.jsonl`) and software bill of materials (SBOM) for supply-chain auditing, and `latest.json` (what the built-in updater reads).
+Alongside the installers you will find `SHA256SUMS.txt` (checksums for every file), a minisign
+signature (`.sig`) for each installer — what the built-in updater verifies — and `latest.json`
+(what the updater reads).
 
 ## 2. Verify your download
 
@@ -37,10 +39,10 @@ shasum -a 256 -c SHA256SUMS.txt
 **Windows (PowerShell or Command Prompt)**
 
 ```bat
-certutil -hashfile IUM_0.2.0_x64-setup.exe SHA256
+certutil -hashfile IUM_0.2.2_x64-setup.exe SHA256
 ```
 
-…then compare the printed hash with the matching line in `SHA256SUMS.txt`. Teams that need a supply-chain-grade audit can additionally verify each artifact's signed attestation sidecar against its SBOM.
+…then compare the printed hash with the matching line in `SHA256SUMS.txt`.
 
 ## 3. Install
 
@@ -72,7 +74,7 @@ IUM's installers are **not code-signed yet**. That is a deliberate, known hold �
 1. **Launch IUM.** A splash shows the boot state in one live sentence — it reports the real state, and the main window appears either way.
 2. **Give the destination its credentials, once.** Open **Settings** and pick the lane you are using (S3-compatible storage, WebDAV, Google Drive, YouTube, Terabox, Feishu, Mega — each appears once its credentials are configured; lanes without credentials simply do not appear, nothing is half-broken). HTTP and TUS destinations need no credentials.
 3. **Create the job.** The new-upload form leads with a **Provider** picker so you never have to assemble a URL by hand:
-   - **Provider** — pick where your files go. Known providers (Backblaze B2, Cloudflare R2, Wasabi, Scaleway, DigitalOcean Spaces, Filebase, self-hosted MinIO) pre-fill the destination shape for you: fill in your bucket (and your region or account id where asked) and the destination URL derives itself. Each provider also carries a **Get your keys ↗** link straight to its key console and a short recipe for what to click. If your destination is not on the list — or you are the power-user kind — **Custom URL** is right there: paste any destination URL, exactly as before.
+   - **Provider** — pick where your files go. Known providers (Backblaze B2, Cloudflare R2, Wasabi, Scaleway, DigitalOcean Spaces, Filebase, self-hosted MinIO) pre-fill the destination shape for you: fill in your bucket (and your region or account id where asked) and the destination URL derives itself. The region you pick is also the region IUM signs with — submit the job and it is remembered for the lane, so the signature always matches the destination. Each provider also carries a **Get your keys ↗** link straight to its key console and a short recipe for what to click. If your destination is not on the list — or you are the power-user kind — **Custom URL** is right there: paste any destination URL, exactly as before.
    - **Adapter** — the destination type. Picking a provider on an S3-compatible lane sets this to `s3_multipart` for you; leave it alone unless you know you want otherwise.
    - **Source** — the file on your machine.
    - **Connections** — how many parallel pieces to split the upload into. The default is fine; more connections help on fast links, fewer on unstable ones.
