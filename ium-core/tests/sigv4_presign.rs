@@ -10,14 +10,16 @@
 //! The vectors below were computed by an INDEPENDENT Python reference
 //! (`scripts/presign_reference.py`, pure stdlib, written fresh from the
 //! AWS SigV4 presigned-URL rules — never translated from the Rust). The
-//! reference itself is anchored: it reproduces the published AWS
+//! reference is anchored: EVERY run re-derives the published AWS
 //! developer-guide Vector B signature (`f0e8bdb8…6bdb41`, already pinned
-//! in `sigv4.rs` from AWS's docs) byte-exact, so its HMAC chain and
-//! canonicalization are proven before it minted the presign values.
+//! in `sigv4.rs` from AWS's docs) with its own chain and REFUSES to mint
+//! if it drifts — the HMAC chain and canonicalization are re-proven before
+//! the presign values print. The access key is AWS's public documentation
+//! example key (AKIAIOSFODNN7EXAMPLE), matching the #6 vectors.
 
 use ium_core::sigv4::{Credentials, PresignInput, SigV4Signer};
 
-const AK: &str = "[REDACTED:aws_access_key]";
+const AK: &str = "AKIAIOSFODNN7EXAMPLE";
 const SK: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
 
 fn s3_signer() -> SigV4Signer {
@@ -48,11 +50,11 @@ fn vector_presigned_get_canonical_case() {
     assert_eq!(
         q,
         "X-Amz-Algorithm=AWS4-HMAC-SHA256&\
-         X-Amz-Credential=%5BREDACTED%3Aaws_access_key%5D%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&\
+         X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&\
          X-Amz-Date=20130524T000000Z&\
          X-Amz-Expires=86400&\
          X-Amz-SignedHeaders=host&\
-         X-Amz-Signature=57960b141fd231773ee1bc06307b4ae50c9be11e3cc69faf1b4fd6356b8dff27"
+         X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
     );
 }
 
@@ -73,11 +75,11 @@ fn vector_presigned_get_loopback_encoded_key() {
     assert_eq!(
         q,
         "X-Amz-Algorithm=AWS4-HMAC-SHA256&\
-         X-Amz-Credential=%5BREDACTED%3Aaws_access_key%5D%2F20261111%2Fus-east-1%2Fs3%2Faws4_request&\
+         X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20261111%2Fus-east-1%2Fs3%2Faws4_request&\
          X-Amz-Date=20261111T120000Z&\
          X-Amz-Expires=3600&\
          X-Amz-SignedHeaders=host&\
-         X-Amz-Signature=1c61cbf8257589ebc9f348abf09afcff4f9d35abc38859269b3e8c7f30848e95"
+         X-Amz-Signature=c4785c04e9475190fbfdaa045553a020a28d5582f6927649b9c96e6ffe4aac92"
     );
 }
 
