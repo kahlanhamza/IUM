@@ -57,20 +57,14 @@ describe("connectionState — the chip tells the per-lane truth", () => {
 });
 
 describe("the OAuth backend list — the obvious ones, drive joined (#84)", () => {
-  it("exactly the five obvious browser-sign-in platforms — drive rides rclone authorize", () => {
-    expect(OAUTH_BACKENDS.map((b) => b.id)).toEqual([
-      "pcloud",
-      "dropbox",
-      "onedrive",
-      "box",
-      "drive",
-    ]);
+  it("exactly the four obvious browser-sign-in platforms — dropbox went native (#109)", () => {
+    expect(OAUTH_BACKENDS.map((b) => b.id)).toEqual(["pcloud", "onedrive", "box", "drive"]);
   });
 
-  it("drive is allowlisted; youtube is NOT — rclone has no such backend (#85's own flow)", () => {
+  it("drive is allowlisted; youtube and dropbox are NOT — native flows own them (#85, #109)", () => {
     const ids = OAUTH_BACKENDS.map((b) => b.id);
     expect(ids).toContain("drive");
-    for (const absent of ["youtube", "gphotos", "google"]) {
+    for (const absent of ["youtube", "dropbox", "gphotos", "google"]) {
       expect(ids).not.toContain(absent);
     }
   });
@@ -79,6 +73,7 @@ describe("the OAuth backend list — the obvious ones, drive joined (#84)", () =
     expect(isOAuthBackend("pcloud")).toBe(true);
     expect(isOAuthBackend("drive")).toBe(true);
     expect(isOAuthBackend("youtube")).toBe(false);
+    expect(isOAuthBackend("dropbox")).toBe(false);
     expect(isOAuthBackend("$(rm -rf)")).toBe(false);
     expect(isOAuthBackend("")).toBe(false);
   });

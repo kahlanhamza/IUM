@@ -161,6 +161,12 @@ pub fn schema() -> Vec<AdapterSchema> {
                 h("token", "Google sign-in"),
             ],
         },
+        AdapterSchema {
+            adapter: "dropbox",
+            label: "Dropbox",
+            note: "Sign in with your Dropbox account in the browser — no fields to fill. The upload session lands in this app's own folder inside your Dropbox; the sign-in token lives in your OS keychain.",
+            fields: vec![h("token", "Dropbox sign-in")],
+        },
     ]
 }
 
@@ -382,6 +388,7 @@ impl Vault {
             ("youtube.client_id", "IUM_GOOGLE_CLIENT_ID"),
             ("youtube.client_secret", "IUM_GOOGLE_CLIENT_SECRET"),
             ("youtube.token", "IUM_YOUTUBE_TOKEN"),
+            ("dropbox.token", "IUM_DROPBOX_TOKEN"),
         ];
         let mut set = 0;
         for (key, var) in direct {
@@ -605,6 +612,7 @@ mod tests {
             "webdav",
             "google_drive",
             "youtube",
+            "dropbox",
         ] {
             assert!(names.contains(&want), "schema misses {want}: {names:?}");
         }

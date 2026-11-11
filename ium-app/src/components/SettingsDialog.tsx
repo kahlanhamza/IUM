@@ -374,6 +374,7 @@ function ConnectSheet({
   // (visible) + the loopback Google sign-in. The hidden token row's
   // presence is the state.
   const isYouTube = schema.adapter === "youtube";
+  const isDropbox = schema.adapter === "dropbox";
   const visibleRows = rows.filter((r) => !r.hidden);
   const binDraft = rows.find((r) => r.name === "bin")?.draft ?? null;
   return (
@@ -412,6 +413,9 @@ function ConnectSheet({
           onConnected={onConnected}
           onVaultChanged={onVaultChanged}
         />
+      )}
+      {isDropbox && (
+        <DropboxSignIn busy={busy} onError={onError} onConnected={onConnected} onVaultChanged={onVaultChanged} />
       )}
       <div className="form-grid">
         {visibleRows.map((r) => (
@@ -620,6 +624,56 @@ function GoogleSignIn({
       {!canConnect && (
         <p className="settings-note" style={{ margin: "6px 0 0" }}>
           Both the client id and the client secret are needed before the sign-in can open.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The Dropbox sign-in (#109): the lane's sheet has NO fields to fill —
+ * IUM's own OAuth identity is a PKCE public client (no secret exists on
+ * the lane). One button: the browser opens Dropbox's real consent page,
+ * the redirect returns to the shell's loopback listener on the fixed
+ * registered port, and the drawer closes itself on a green answer. The UI
+ * never sees a token byte.
+ */
+function DropboxSignIn({
+  busy,
+  onError,
+  onConnected,
+  onVaultChanged,
+}: {
+  busy: boolean;
+  onError: (message: string) => void;
+  onConnected: (message: string) => void;
+  onVaultChanged: () => Promise<void>;
+}) {
+  const [waiting, setWaiting] = useState(false);
+
+  async function connect() {
+    setWaiting(true);
+    try {
+      await api.connectDropbox();
+      await onVaultChanged();
+      onConnected(APP_COPY.oauthDone);
+    } catch (e) {
+      onError(String(e));
+    } finally {
+      setWaiting(false);
+    }
+  }
+
+  return (
+    <div className="oauth-block" aria-label="Dropbox sign-in">
+      <div className="cell-actions" style={{ justifyContent: "flex-start", marginTop: 4 }}>
+        <Button disabled={busy || waiting} onClick={() => void connect()}>
+          {waiting ? "Signing in…" : "Connect Dropbox"}
+        </Button>
+      </div>
+      {waiting && (
+        <p className="settings-note" role="status" style={{ margin: "6px 0 0" }}>
+          {APP_COPY.oauthWaiting}
         </p>
       )}
     </div>

@@ -184,6 +184,17 @@ fn build_adapter(id: &str) -> Option<Arc<dyn TransferAdapter>> {
                 None
             }
         },
+        // The Dropbox lane (#109): IUM's own OAuth identity — a PKCE PUBLIC
+        // client (no secret exists on the lane by design), one hidden token
+        // row the browser sign-in writes. Absence is the honest no-lane
+        // state.
+        "dropbox" => match ium_core::DropboxConfig::from_env() {
+            Ok(cfg) => Some(Arc::new(ium_core::DropboxAdapter::new(cfg))),
+            Err(e) => {
+                tracing::warn!("dropbox not configured (no token): {e}");
+                None
+            }
+        },
         // The rclone family (#63): serve spawn + readiness is async, setup
         // is sync, both under the app runtime (same shape as boot). The
         // webdav lane (#83) rides the same family — its constructor reads
@@ -242,6 +253,7 @@ fn register_adapters(manager: &mut JobManager) {
         "webdav",
         "google_drive",
         "youtube",
+        "dropbox",
     ] {
         if let Some(adapter) = build_adapter(id) {
             manager.register_adapter(adapter);
@@ -483,17 +495,15 @@ fn open_in_browser(url: &str) -> Result<(), String> {
 /// the answer. Ten minutes of patience — the user takes as long as they
 /// take (2FA included); then the honest timeout. Blocks: it runs on the
 /// blocking pool, never on a runtime worker.
-fn wait_for_code(expect_state: String) -> Result<String, String> {
+fn wait_for_code(port: u16, expect_state: String) -> Result<String, String> {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::time::{Duration, Instant};
-    let listener =
-        TcpListener::bind(("127.0.0.1", ium_core::google::REDIRECT_PORT)).map_err(|e| {
-            format!(
-                "could not listen on localhost:{} — another IUM sign-in may be in flight. ({e})",
-                ium_core::google::REDIRECT_PORT
-            )
-        })?;
+    let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| {
+        format!(
+            "could not listen on localhost:{port} — another IUM sign-in may be in flight. ({e})"
+        )
+    })?;
     let deadline = Instant::now() + Duration::from_secs(10 * 60);
     let ok_page = "<html><body style=\"font-family:sans-serif;background:#f8fafc;color:#0f172a\"><p>Sign-in complete. You can close this window and return to IUM.</p></body></html>";
     let bad_page = "<html><body style=\"font-family:sans-serif;background:#f8fafc;color:#0f172a\"><p>IUM did not receive a valid sign-in. Close this window and try again.</p></body></html>";
@@ -583,9 +593,11 @@ async fn connect_youtube(
     let url = ium_core::google::authorize_url(&client.client_id, &verifier, &state);
     open_in_browser(&url)?;
     let expect_state = state;
-    let code = tauri::async_runtime::spawn_blocking(move || wait_for_code(expect_state))
-        .await
-        .map_err(|e| format!("the sign-in task failed: {e}"))??;
+    let code = tauri::async_runtime::spawn_blocking(move || {
+        wait_for_code(ium_core::google::REDIRECT_PORT, expect_state)
+    })
+    .await
+    .map_err(|e| format!("the sign-in task failed: {e}"))??;
     let fresh = client.exchange_code(&code, &verifier).await?;
     vault(&app).set(
         "youtube",
@@ -593,6 +605,38 @@ async fn connect_youtube(
     )?;
     vault(&app).apply_env();
     hot_apply(&engine, "youtube")
+}
+
+/// The Dropbox sign-in (#109): IUM's OWN OAuth identity — a PKCE public
+/// client, so there are NO fields to fill and NO secret anywhere. The
+/// browser opens Dropbox's real consent page, the redirect returns to the
+/// loopback listener on the lane's fixed registered port (8738), the grant
+/// (offline refresh token included) lands under the lane's hidden secret,
+/// and the lane hot-applies — the drawer closes itself (the reflex).
+#[tauri::command]
+async fn connect_dropbox(
+    engine: State<'_, Engine>,
+    app: tauri::AppHandle,
+) -> Result<ApplyOutcome, String> {
+    let (verifier, _challenge) = ium_core::google::pkce_pair();
+    let state = ium_core::google::new_state();
+    let url = ium_core::dropbox::authorize_url(&verifier, &state);
+    open_in_browser(&url)?;
+    let expect_state = state;
+    let code = tauri::async_runtime::spawn_blocking(move || {
+        wait_for_code(ium_core::dropbox::REDIRECT_PORT, expect_state)
+    })
+    .await
+    .map_err(|e| format!("the sign-in task failed: {e}"))??;
+    let fresh = ium_core::DropboxClient
+        .exchange_code(&code, &verifier)
+        .await?;
+    vault(&app).set(
+        "dropbox",
+        BTreeMap::from([("token".to_string(), fresh.to_json())]),
+    )?;
+    vault(&app).apply_env();
+    hot_apply(&engine, "dropbox")
 }
 
 /// What Test-connection learned (#81). `checked = false` is the honest
@@ -1391,6 +1435,7 @@ pub fn run() {
             apply_credentials,
             authorize_oauth,
             connect_youtube,
+            connect_dropbox,
             probe_credentials,
             secret_mode,
             notify_user,

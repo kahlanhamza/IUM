@@ -146,6 +146,13 @@ export const api = {
    *  one-time setup until IUM ships a registered client. */
   connectYoutube: (clientId?: string, clientSecret?: string): Promise<ApplyOutcome> =>
     invoke("connect_youtube", { clientId: clientId ?? null, clientSecret: clientSecret ?? null }),
+  /** The Dropbox sign-in (#109): the shell runs its own loopback OAuth
+   *  flow on IUM's OWN OAuth identity — a PKCE PUBLIC client (no secret
+   *  exists on the lane). No fields to fill: the browser opens Dropbox's
+   *  real consent page, the redirect returns to localhost:8738 (the fixed
+   *  registered port), and the grant (offline refresh token included) is
+   *  stored under the lane's hidden secret (OS keychain). */
+  connectDropbox: (): Promise<ApplyOutcome> => invoke("connect_dropbox", {}),
   /** Read-only credential check against the DRAFTS (never persisted, no
    *  upload session created — a Test button cannot orphan a real upload). */
   probeCredentials: (adapter: string, fields: Record<string, string>): Promise<ProbeResult> =>
