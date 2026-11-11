@@ -31,5 +31,15 @@ mkdir -p "$CARGO_HOME"
 cat > "$CARGO_HOME/config.toml" <<EOF
 [build]
 target-dir = "$ROOT/target"
+
+# The sandbox disk is 9.9G and a FULL-debuginfo test build of this workspace
+# is ~6G — it fills the rootfs mid-link (ld SIGBUS, the 2026-11-11 crater)
+# and CI-parity is preserved because line-tables-only keeps
+# debug-assertions ON; only variable/type debuginfo is dropped.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
 EOF
 echo "[install-toolchain] done — activate with: . scripts/rust-env.sh"
