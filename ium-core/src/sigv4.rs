@@ -21,6 +21,19 @@
 //! no path normalization — the adapter owns the exact path it will hit) and
 //! injectable `date`/`datetime` strings (test vectors pin them; the adapter
 //! formats the current UTC time itself).
+//!
+//! **Presigned URLs** (`presign_url`, the shareable-link lane): the same
+//! canonical machinery, but the signature travels in the QUERY STRING, not
+//! the Authorization header. The presigned canonical request signs ONLY
+//! `host` (`X-Amz-SignedHeaders=host`), the payload-hash line is the
+//! literal `UNSIGNED-PAYLOAD`, and the query carries `X-Amz-Algorithm`,
+//! `X-Amz-Credential`, `X-Amz-Date`, `X-Amz-Expires`, `X-Amz-SignedHeaders`
+//! — sorted, RFC3986-encoded (the credential scope's `/` rides as `%2F`)
+//! — plus the trailing `X-Amz-Signature`. Expiry is clamped to the S3
+//! spec's 1..=604800 s. The vectors live in
+//! `tests/sigv4_presign.rs`, minted by an independent Python reference
+//! (`scripts/presign_reference.py`) that reproduces the published AWS
+//! developer-guide Vector B signature byte-exact before it signs anything.
 
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
@@ -31,7 +44,9 @@ type HmacSha256 = Hmac<Sha256>;
 /// logs them beyond the scope of one signing call.
 #[derive(Debug, Clone)]
 pub struct Credentials {
+    /// SigV4 access key id.
     pub access_key: String,
+    /// SigV4 secret key.
     pub secret_key: String,
 }
 
@@ -48,8 +63,11 @@ pub enum PayloadHash {
 /// Headers the caller must attach to the outgoing request, verbatim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedRequest {
+    /// The full `Authorization` header value.
     pub authorization: String,
+    /// The `x-amz-date` header value (the signed datetime).
     pub x_amz_date: String,
+    /// The `x-amz-content-sha256` header value (payload-hash mode).
     pub x_amz_content_sha256: String,
 }
 
@@ -85,13 +103,21 @@ pub fn derived_signing_key(secret: &str, date: &str, region: &str, service: &str
 /// — injectable so test vectors can pin them.
 #[derive(Debug, Clone, Copy)]
 pub struct SigningInput<'a> {
+    /// HTTP method (`GET`, `PUT`, `POST`, `DELETE`, `HEAD`).
     pub method: &'a str,
+    /// `host[:port]` — signed always.
     pub host: &'a str,
+    /// Pre-encoded canonical URI (the caller owns the exact path).
     pub canonical_uri: &'a str,
+    /// Query pairs, canonicalized inside (encoded, byte-sorted).
     pub query: &'a [(&'a str, &'a str)],
+    /// Extra signed headers (must not set host/x-amz-date/x-amz-content-sha256).
     pub extra_headers: &'a [(&'a str, &'a str)],
+    /// Payload-hash mode (the creq's last line).
     pub payload: &'a PayloadHash,
+    /// `YYYYMMDD` (credential scope date).
     pub date: &'a str,
+    /// `YYYYMMDDTHHMMSSZ` (signed datetime).
     pub datetime: &'a str,
 }
 
@@ -104,6 +130,7 @@ pub struct SigV4Signer {
 }
 
 impl SigV4Signer {
+    /// Build a signer over one endpoint's scope (region + service fixed).
     pub fn new(creds: Credentials, region: impl Into<String>, service: impl Into<String>) -> Self {
         Self {
             creds,
@@ -182,6 +209,88 @@ impl SigV4Signer {
             x_amz_date: datetime.to_string(),
             x_amz_content_sha256: payload_hash,
         }
+    }
+}
+
+/// One presigned-GET description (the shareable-link lane). The same
+/// field contract as [`SigningInput`] minus what presigning fixes: method
+/// GET, no extra headers (only `host` is signed), no body. `expires_secs`
+/// is validated against the S3 spec bound (1..=604800).
+#[derive(Debug, Clone, Copy)]
+pub struct PresignInput<'a> {
+    /// `host[:port]` — no scheme; signed as the only header.
+    pub host: &'a str,
+    /// Pre-encoded canonical URI (S3-style single encoding) — the caller
+    /// owns the exact path, byte-for-byte.
+    pub canonical_uri: &'a str,
+    /// Lifetime of the URL in seconds (1..=604800, the S3 bound).
+    pub expires_secs: u64,
+    /// `YYYYMMDD` (credential scope).
+    pub date: &'a str,
+    /// `YYYYMMDDTHHMMSSZ`.
+    pub datetime: &'a str,
+}
+
+/// The S3 spec's presigned-URL expiry bound: one second to seven days.
+const PRESIGN_MAX_EXPIRES: u64 = 604_800;
+
+impl SigV4Signer {
+    /// Build a presigned GET query string (including the trailing
+    /// `X-Amz-Signature`), ready to append to
+    /// `{scheme}://{host}{canonical_uri}?`. The query order is the
+    /// canonical byte-sort — wire and signature agree byte-for-byte
+    /// because both come from the same encoded pairs. Refuses an expiry
+    /// outside the S3 spec bound with the honest `Err`.
+    pub fn presign_url(&self, input: PresignInput<'_>) -> Result<String, &'static str> {
+        let PresignInput {
+            host,
+            canonical_uri,
+            expires_secs,
+            date,
+            datetime,
+        } = input;
+        if expires_secs == 0 || expires_secs > PRESIGN_MAX_EXPIRES {
+            return Err("expires must be 1..=604800 seconds (the S3 presigned-URL bound)");
+        }
+        let scope = format!("{date}/{}/{}/aws4_request", self.region, self.service);
+        let credential = format!("{}/{scope}", self.creds.access_key);
+
+        // The presigned query: sorted byte-wise, strict-encoded. The
+        // signature is computed over EXACTLY these encoded forms, and the
+        // wire URL gets the same string — no drift is possible.
+        let pairs: Vec<(String, String)> = vec![
+            ("X-Amz-Algorithm".into(), "AWS4-HMAC-SHA256".into()),
+            ("X-Amz-Credential".into(), credential),
+            ("X-Amz-Date".into(), datetime.into()),
+            ("X-Amz-Expires".into(), expires_secs.to_string()),
+            ("X-Amz-SignedHeaders".into(), "host".into()),
+        ];
+        let mut encoded: Vec<(String, String)> = pairs
+            .into_iter()
+            .map(|(k, v)| (uri_encode(&k), uri_encode(&v)))
+            .collect();
+        encoded.sort();
+        let canonical_query = encoded
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&");
+
+        // Presigned canonical request: only `host` is signed; the payload
+        // hash line is the literal UNSIGNED-PAYLOAD.
+        let canonical_request = format!(
+            "GET\n{canonical_uri}\n{canonical_query}\nhost:{host}\n\nhost\nUNSIGNED-PAYLOAD",
+        );
+        let string_to_sign = format!(
+            "AWS4-HMAC-SHA256\n{datetime}\n{scope}\n{}",
+            sha256_hex(canonical_request.as_bytes())
+        );
+        let key = derived_signing_key(&self.creds.secret_key, date, &self.region, &self.service);
+        let mut mac = HmacSha256::new_from_slice(&key).expect("HMAC accepts any key length");
+        mac.update(string_to_sign.as_bytes());
+        let signature = hex::encode(mac.finalize().into_bytes());
+
+        Ok(format!("{canonical_query}&X-Amz-Signature={signature}"))
     }
 }
 

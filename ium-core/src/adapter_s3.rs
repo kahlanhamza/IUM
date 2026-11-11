@@ -752,6 +752,62 @@ impl S3MultipartAdapter {
             .map_err(|e| AdapterError::Transient(format!("read: {e}")))?
             .to_vec())
     }
+
+    /// The Test button's engine arm (the destination lane): a zero-byte
+    /// `CreateMultipartUpload` + best-effort `AbortMultipartUpload`
+    /// against a probe key under the bucket's own `ium-probe/` namespace —
+    /// NEVER a user key (even when the endpoint carries one), never a
+    /// completed object, never an orphan (the abort is best-effort, the
+    /// same no-leftover semantics as the private `abort_probe_upload`).
+    /// Verdicts classify through the adapter's own probe-context taxonomy
+    /// (`map_error`): 403 → `AuthRequired`, probe `NoSuchBucket` →
+    /// `Unresumable`, transport failure → `Transient` — one language for
+    /// the upload path and the Test button. Bucket-only endpoints (the
+    /// create form's provider-picker shape) are first-class: the key
+    /// defaults from the probe source name and is then overridden anyway.
+    pub async fn check_credentials(&self, endpoint: &str) -> Result<(), AdapterError> {
+        // Validation BEFORE any wire traffic: a malformed URL is refused
+        // with the parser's own words, not a vague transport error.
+        let target = parse_target(endpoint, "/ium-probe/source.bin")?;
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let probe_target = S3Target {
+            key: format!("ium-probe/{ts}.bin"),
+            ..target
+        };
+        let payload = PayloadHash::Sha256Hex(EMPTY_SHA.into());
+        let req = S3Request {
+            ctx: ErrorCtx::Probe,
+            what: "CreateMultipartUpload(probe)",
+            method: "POST",
+            target: &probe_target,
+            query: &[("uploads", "")],
+            payload: &payload,
+            extra: &[],
+        };
+        let resp = self.call(req, Body::from(Vec::new())).await?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| AdapterError::Transient(format!("read: {e}")))?;
+        let upload_id = xml_text(&body, "UploadId").ok_or_else(|| {
+            AdapterError::Unknown("CreateMultipartUpload(probe): no UploadId in response".into())
+        })?;
+        // Best-effort abort: the probe owns its session and cleans it up.
+        let abort = S3Request {
+            ctx: ErrorCtx::Finalize,
+            what: "AbortMultipartUpload(probe)",
+            method: "DELETE",
+            target: &probe_target,
+            query: &[("uploadId", upload_id.as_str())],
+            payload: &payload,
+            extra: &[],
+        };
+        let _ = self.call(abort, Body::from(Vec::new())).await;
+        Ok(())
+    }
 }
 
 fn retry_after_ms(resp: &Response) -> Option<u64> {
@@ -778,7 +834,10 @@ fn io_err(e: std::io::Error) -> AdapterError {
 }
 
 /// `x-amz-date` ingredients from the system clock: (date, datetime) in UTC.
-fn amz_now() -> (String, String) {
+/// The current UTC time as (`YYYYMMDD`, `YYYYMMDDTHHMMSSZ`) — the signer's
+/// clock. Public since the shareable-link lane: the presigned GET is signed
+/// by the SAME clock the adapter uses, never a second implementation.
+pub fn amz_now() -> (String, String) {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

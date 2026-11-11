@@ -61,11 +61,15 @@ pub mod netpath;
 pub mod prober;
 pub mod rate;
 pub mod retry;
+/// The SigV4 module goes public with the shareable-link lane: presigned
+/// GET URLs are a product surface (the Inspector's copy-link), so the
+/// signer must be reachable outside the crate — same crate, one signer,
+/// no copy of the machinery (the drift guard is the vector suite).
+pub mod sigv4;
 pub mod state;
 pub mod supervisor;
 
 mod ids;
-mod sigv4;
 
 pub use adapter::{AdapterRegistry, Capability, ChunkConfirm, ProbeReport, TransferAdapter};
 pub use adapter_compress::CompressAdapter;
