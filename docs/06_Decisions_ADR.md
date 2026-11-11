@@ -119,3 +119,47 @@ M7 is the measurement, the classification, the drills, and the journal
 shape. Evidence: prober_drills.rs — per-flow caps (8 KiB/s per connection)
 classify PerFlowCap with SK/S1 = 4.0×; a shared bearer (8 KiB/s TOTAL)
 classifies BearerCap with SK/S1 = 1.0×.
+
+## ADR-013 — Provider knowledge is DATA in the app; the engine stays provider-agnostic ✅ accepted (the destination lane, owner-ratified 2026-11-11)
+
+The owner's finding: regular users think in websites ("Backblaze", "R2"),
+not in path-style object URLs — they cannot obtain the endpoint/bucket/keys
+the engine speaks, and cannot tell whether IUM would help them at all. The
+decision, three layers deep:
+
+1. **The registry is a JSON file** (`ium-app/src/data/providers.json`) —
+   one source of truth carrying endpoint templates, region lists, key-page
+   deep links and per-provider key recipes. NO provider code exists in the
+   engine: the adapters stay pure protocol (ADR-011 untouched), and adding
+   a provider is an edit to data, not to logic. The TS loader derives the
+   URL; the Rust integration test (`tests/providers_registry.rs`) feeds
+   every preset's sample URL through the ENGINE's own `parse_target` — the
+   registry cannot drift into an endpoint the engine refuses, because both
+   sides consume the same file and the parser is the single judge.
+2. **The S3 Test button is an engine primitive** with the adapter's own
+   probe-context taxonomy (`check_credentials`: zero-byte
+   `CreateMultipartUpload` + best-effort `AbortMultipartUpload` on an
+   `ium-probe/` key — never a user key, never completed, never orphaned).
+   The shell's `probe_credentials` grows the s3 arm over it; the honest
+   catch-all stays for anything still uncheckable.
+3. **The shareable link is a presigned GET, minted on demand** —
+   `sigv4::presign_url` (query-string SigV4, the S3 1..604800 s bound), the
+   shell's `share_link` command rebuilding the object from the JOURNALED
+   endpoint through the engine's parser (no UI-side URL truth), signed by
+   the SAME credentials that uploaded. Nothing is ever auto-published; a
+   link exists only when the user asks, and it expires (v1 pins 24 h).
+
+Rejected alternatives, on the record: a relay service holding user
+credentials (betrays the zero-telemetry posture — the keys-stay-local
+promise is a selling point, not an implementation detail); per-website
+proprietary adapters for "every website X" (an infinite maintenance set —
+support things with real APIs, be honest about the rest); OAuth connectors
+for the Drive/Dropbox/OneDrive tier (the eventual mainstream answer, but a
+per-provider maintenance liability — deferred until the presets prove the
+funnel). Evidence: tests/providers_registry.rs (7 presets × the real
+parser), tests/sigv4_presign.rs (vectors minted by an independent Python
+reference anchored on the published AWS Vector B), tests/s3_check_credentials.rs
+(a loopback mock S3 pinning create→abort, 403/404/transport classification,
+and the never-touched-a-user-key invariant), the vault schema test (the
+endpoint field is optional, non-secret, and its note discloses exactly what
+the probe touches).

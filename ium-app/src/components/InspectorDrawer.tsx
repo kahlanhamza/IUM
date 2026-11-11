@@ -10,10 +10,12 @@
  * (the raw state), `data-confirmed` (bytes). That grid IS the e2e seam
  * (the #65 table leg was amended to it in the same commit as this pane).
  */
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { JobSnapshot } from "../api";
+import { api } from "../api";
+import { canShareJob } from "../share";
 import { friendlyAdapter, humanBytes, hostOf } from "../logic";
-import { IconX } from "./icons";
+import { IconCheck, IconX } from "./icons";
 import { Button } from "./ui";
 
 export interface InspectorDrawerProps {
@@ -22,6 +24,26 @@ export interface InspectorDrawerProps {
 }
 
 export function InspectorDrawer({ snapshot, onClose }: InspectorDrawerProps) {
+  // The shareable-link moment (the destination lane): one click mints a
+  // 24-hour presigned GET and copies it — the link exists on demand,
+  // never before, and the expiry is spelled out, not implied.
+  const [share, setShare] = useState<"idle" | "busy" | "copied" | "failed">("idle");
+  useEffect(() => {
+    setShare("idle"); // a new snapshot is a new job — the old link's story is gone
+  }, [snapshot?.job.id]);
+  async function copyShareLink() {
+    if (!snapshot) return;
+    setShare("busy");
+    try {
+      const link = await api.shareLink(snapshot.job.id);
+      await navigator.clipboard.writeText(link.url);
+      setShare("copied");
+    } catch {
+      // The shell's honest refusal (no keys, not finished, not s3) — the
+      // toast carries its words via onError, the drawer stays quiet.
+      setShare("failed");
+    }
+  }
   // Escape closes — a desktop-app reflex, not a web-page one.
   useEffect(() => {
     if (!snapshot) return;
@@ -63,6 +85,23 @@ export function InspectorDrawer({ snapshot, onClose }: InspectorDrawerProps) {
             {humanBytes(job.source_size)} · {friendlyAdapter(job.adapter)} · {job.capability_badge}
           </div>
           <div className="mline jseq">{job.endpoint}</div>
+          {canShareJob(job) && (
+            <div className="share-row">
+              <Button variant="ghost" size="sm" disabled={share === "busy"} onClick={() => void copyShareLink()}>
+                {share === "busy" ? "Signing…" : "Copy share link (24 h)"}
+              </Button>
+              {share === "copied" && (
+                <span className="share-note" role="status">
+                  <IconCheck size={12} /> copied — this signed link opens for 24 hours, then expires
+                </span>
+              )}
+              {share === "failed" && (
+                <span className="share-note" role="alert">
+                  the link could not be signed — S3 keys saved?
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="icol">

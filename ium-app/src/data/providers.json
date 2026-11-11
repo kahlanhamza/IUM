@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "backblaze-b2",
+      "label": "Backblaze B2",
+      "adapter": "s3_multipart",
+      "endpoint_template": "https://s3.{region}.backblazeb2.com",
+      "regions": [
+        "us-west-001",
+        "us-west-002",
+        "us-west-003",
+        "us-west-004",
+        "eu-central-001",
+        "eu-central-002",
+        "eu-central-003"
+      ],
+      "region_default": "us-west-004",
+      "sample_values": { "region": "us-west-004" },
+      "sample_bucket": "ium-sample",
+      "sample_key": "backup.tar",
+      "sample_url": "https://s3.us-west-004.backblazeb2.com/ium-sample/backup.tar",
+      "key_page": "https://backblaze.com/app_keys",
+      "key_steps": "B2 console → Application Keys → Add Application Key with read/write to your bucket. The keyID is the Access key, the applicationKey is the Secret key (shown once). Your bucket's Endpoint shows the exact region to pick here.",
+      "note": "Works with any B2 bucket. IUM uploads in resumable parts."
+    },
+    {
+      "id": "cloudflare-r2",
+      "label": "Cloudflare R2",
+      "adapter": "s3_multipart",
+      "endpoint_template": "https://{account_id}.r2.cloudflarestorage.com",
+      "slots": [
+        {
+          "name": "account_id",
+          "label": "Account ID",
+          "kind": "text",
+          "placeholder": "the 32-character Account ID on the R2 dashboard"
+        }
+      ],
+      "sample_values": { "account_id": "a1b2c3d4example00" },
+      "sample_bucket": "ium-sample",
+      "sample_key": "backup.tar",
+      "sample_url": "https://a1b2c3d4example00.r2.cloudflarestorage.com/ium-sample/backup.tar",
+      "key_page": "https://dash.cloudflare.com/?to=/:account/r2/api-tokens",
+      "key_steps": "R2 dashboard → Manage R2 API Tokens → Create API Token with Object Read & Write for your bucket. The Access Key ID is the Access key, the Secret Access Key is the Secret key. Your Account ID sits on the R2 overview page — paste it here to build the endpoint.",
+      "note": "R2 has no egress fees; the endpoint is your account ID, not a region."
+    },
+    {
+      "id": "wasabi",
+      "label": "Wasabi",
+      "adapter": "s3_multipart",
+      "endpoint_template": "https://s3.{region}.wasabisys.com",
+      "regions": [
+        "us-east-1",
+        "us-east-2",
+        "us-west-1",
+        "us-west-2",
+        "eu-central-1",
+        "eu-central-2",
+        "ap-southeast-1",
+        "ap-southeast-2"
+      ],
+      "region_default": "us-east-1",
+      "sample_values": { "region": "us-east-1" },
+      "sample_bucket": "ium-sample",
+      "sample_key": "backup.tar",
+      "sample_url": "https://s3.us-east-1.wasabisys.com/ium-sample/backup.tar",
+      "key_page": "https://console.wasabi.com/",
+      "key_steps": "Wasabi console → Service accounts (Identity & Access) → Create service account with your bucket's policy. Copy the access and secret keys it shows once, and pick the region your bucket lives in.",
+      "note": "Pick the same region as your bucket — cross-region calls are refused."
+    },
+    {
+      "id": "scaleway",
+      "label": "Scaleway Object Storage",
+      "adapter": "s3_multipart",
+      "endpoint_template": "https://s3.{region}.scw.cloud",
+      "regions": ["fr-par", "nl-ams", "pl-waw"],
+      "region_default": "fr-par",
+      "sample_values": { "region": "fr-par" },
+      "sample_bucket": "ium-sample",
+      "sample_key": "backup.tar",
+      "sample_url": "https://s3.fr-par.scw.cloud/ium-sample/backup.tar",
+      "key_page": "https://console.scaleway.com/iam/api-keys",
+      "key_steps": "Scaleway console → IAM → API keys → Generate API key. The access key and secret are shown once. Pick the region your bucket lives in (fr-par, nl-ams or pl-waw).",
+      "note": "The bucket and the API key must live in the same project."
+    },
+    {
+      "id": "digitalocean-spaces",
+      "label": "DigitalOcean Spaces",
+      "adapter": "s3_multipart",
+      "endpoint_template": "https://{region}.digitaloceanspaces.com",
+      "regions": ["nyc3", "sfo3", "ams3", "fra1", "sgp1", "syd1"],
+      "region_default": "nyc3",
+      "sample_values": { "region": "nyc3" },
+      "sample_bucket": "ium-sample",
+      "sample_key": "backup.tar",
+      "sample_url": "https://nyc3.digitaloceanspaces.com/ium-sample/backup.tar",
+      "key_page": "https://cloud.digitalocean.com/account/api",
+      "key_steps": "DigitalOcean control panel → API → Spaces Keys → Generate New Key. Paste the access key and secret, and pick the region your Space lives in.",
+      "note": "The region is the one your Space was created in."
+    },
+    {
+      "id": "filebase",
+      "label": "Filebase",
+      "adapter": "s3_multipart",
+      "endpoint_template": "https://s3.filebase.com",
+      "sample_values": {},
+      "sample_bucket": "ium-sample",
+      "sample_key": "backup.tar",
+      "sample_url": "https://s3.filebase.com/ium-sample/backup.tar",
+      "key_page": "https://console.filebase.com/",
+      "key_steps": "Filebase console → Access Keys → Create Access Key. Paste the key and secret here; there is no region to pick — one endpoint serves all buckets.",
+      "note": "One endpoint for every bucket; buckets are created in the Filebase console."
+    },
+    {
+      "id": "minio",
+      "label": "MinIO / self-hosted S3",
+      "adapter": "s3_multipart",
+      "endpoint_template": "{base}",
+      "slots": [
+        {
+          "name": "base",
+          "label": "Server URL",
+          "kind": "text",
+          "placeholder": "https://minio.example.com"
+        }
+      ],
+      "self_hosted": true,
+      "sample_values": { "base": "https://minio.example.com" },
+      "sample_bucket": "ium-sample",
+      "sample_key": "backup.tar",
+      "sample_url": "https://minio.example.com/ium-sample/backup.tar",
+      "key_page": null,
+      "key_steps": "Your MinIO (or Garage, SeaweedFS, Ceph…) operator issues keys — `mc admin user add` or the console's Identity page. Paste the server URL, bucket and keys here; the endpoint is your own host, so there is no preset page to link.",
+      "note": "Self-hosted: your server, your keys, nothing leaves your network."
+    }
+  ]
+}

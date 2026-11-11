@@ -20,7 +20,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use ium_core::{
-    HttpOneShotAdapter, JobManager, JobRecord, JobSnapshot, JobSpec, S3MultipartAdapter,
+    HttpOneShotAdapter, JobManager, JobRecord, JobSnapshot, JobSpec, JobState, S3MultipartAdapter,
     S3MultipartConfig, Supervisor, TeraboxAdapter, TeraboxConfig, TransferAdapter, TusAdapter,
 };
 use tauri::{Emitter, Manager, State};
@@ -844,8 +844,37 @@ async fn probe_credentials(
             }
             bridge_probe(cfg).await
         }
-        // The s3 family (and any family without a no-job checkable
-        // endpoint): the honest not-checked answer.
+        "s3_multipart" => {
+            // The destination lane: the S3 Test button. Drafts in memory
+            // (never persisted — the #81 contract), and the probe opens and
+            // aborts its OWN session on an `ium-probe/` key under the user's
+            // bucket, so a Test can never orphan a real upload or touch a
+            // user object. The endpoint comes from the lane's new optional
+            // field; the create form's provider picker derives the real
+            // per-job URL, this is just somewhere honest to knock.
+            let (Some(access_key), Some(secret_key)) = (draft("access_key"), draft("secret_key"))
+            else {
+                return probe_missing(
+                    "Both the access key and the secret key are required for a test.",
+                );
+            };
+            let Some(endpoint) = draft("endpoint") else {
+                return probe_missing(
+                    "Paste a bucket URL to test against — the create form's provider picker can build one.",
+                );
+            };
+            let cfg = S3MultipartConfig {
+                access_key,
+                secret_key,
+                region: draft("region").unwrap_or_else(|| "us-east-1".into()),
+            };
+            match S3MultipartAdapter::new(cfg) {
+                Ok(a) => probe_raw(a.check_credentials(&endpoint).await),
+                Err(e) => probe_missing(&e.to_string()),
+            }
+        }
+        // Any family still without a no-job checkable endpoint: the honest
+        // not-checked answer.
         _ => ProbeOutcome {
             checked: false,
             ok: true,
@@ -1043,6 +1072,110 @@ fn snapshot(engine: State<Engine>, job_id: String) -> Result<JobSnapshot, String
 #[tauri::command]
 fn inspect_chunks(engine: State<Engine>, job_id: String) -> Result<JobSnapshot, String> {
     engine.0.manager().snapshot(&job_id).map_err(engine_error)
+}
+
+/// The shareable link (the destination lane, Tier 2): a presigned GET for
+/// a FINISHED s3_multipart job. The engine's own `parse_target` rebuilds
+/// the object from the journaled endpoint + source (no UI-side parser —
+/// one truth), the vault/env supplies the keys, and the signature EXPIRES
+/// (the S3 bound is 7 days; v1 pins 24 h). Nothing is auto-published: the
+/// URL authorizes a read, it does not make the object public, and it does
+/// not exist until the user asks for it here.
+#[derive(serde::Serialize)]
+struct ShareLink {
+    url: String,
+    /// Epoch seconds — the UI can show the honest deadline.
+    expires_at: u64,
+}
+
+const SHARE_TTL_SECS: u64 = 24 * 3600;
+
+#[tauri::command]
+fn share_link(
+    engine: State<Engine>,
+    app: tauri::AppHandle,
+    job_id: String,
+) -> Result<ShareLink, String> {
+    let snapshot = engine.0.manager().snapshot(&job_id).map_err(engine_error)?;
+    let job = snapshot.job;
+    if job.adapter != "s3_multipart" {
+        return Err("Share links exist for S3 destinations only.".into());
+    }
+    if job.state != JobState::Done {
+        return Err(
+            "Only a finished job shares a link — the destination must have verified the bytes."
+                .into(),
+        );
+    }
+    // Keys: the same precedence as the upload path (env wins, the vault
+    // fills the gaps) — a link is signed by the SAME credentials that
+    // uploaded, never by a separate secret.
+    let saved = vault(&app).load().adapters.get("s3_multipart").cloned();
+    let from_vault = |k: &str| {
+        saved
+            .as_ref()
+            .and_then(|m| m.get(k))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let from_env = |k: &str| {
+        std::env::var(k)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let cfg = match (
+        from_env("IUM_S3_ACCESS_KEY").or_else(|| from_vault("access_key")),
+        from_env("IUM_S3_SECRET_KEY").or_else(|| from_vault("secret_key")),
+    ) {
+        (Some(access_key), Some(secret_key)) => S3MultipartConfig {
+            access_key,
+            secret_key,
+            region: from_env("IUM_S3_REGION")
+                .or_else(|| from_vault("region"))
+                .unwrap_or_else(|| "us-east-1".into()),
+        },
+        _ => {
+            return Err("No S3 keys saved — Settings → S3 multipart first.".into());
+        }
+    };
+    // The object identity comes from the JOURNALED endpoint through the
+    // engine's own parser — the app never reimplements URL truth.
+    let target = ium_core::adapter_s3::parse_target(&job.endpoint, &job.source_path)
+        .map_err(|e| format!("This job's destination cannot produce a link: {e}"))?;
+    let signer = ium_core::sigv4::SigV4Signer::new(
+        ium_core::sigv4::Credentials {
+            access_key: cfg.access_key,
+            secret_key: cfg.secret_key,
+        },
+        cfg.region,
+        "s3",
+    );
+    let uri = ium_core::adapter_s3::encode_object_uri(&target);
+    let (date, datetime) = ium_core::adapter_s3::amz_now();
+    let query = signer
+        .presign_url(ium_core::sigv4::PresignInput {
+            host: &target.host,
+            canonical_uri: &uri,
+            expires_secs: SHARE_TTL_SECS,
+            date: &date,
+            datetime: &datetime,
+        })
+        .map_err(|e| e.to_string())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    Ok(ShareLink {
+        url: format!(
+            "{}://{}{}?{}",
+            if target.https { "https" } else { "http" },
+            target.host,
+            uri,
+            query
+        ),
+        expires_at: now + SHARE_TTL_SECS,
+    })
 }
 
 #[tauri::command]
@@ -1246,6 +1379,7 @@ pub fn run() {
             list_jobs,
             snapshot,
             inspect_chunks,
+            share_link,
             pause_job,
             resume_signal,
             cancel_job,

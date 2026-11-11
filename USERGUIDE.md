@@ -71,12 +71,15 @@ IUM's installers are **not code-signed yet**. That is a deliberate, known hold �
 
 1. **Launch IUM.** A splash shows the boot state in one live sentence — it reports the real state, and the main window appears either way.
 2. **Give the destination its credentials, once.** Open **Settings** and pick the lane you are using (S3-compatible storage, WebDAV, Google Drive, YouTube, Terabox, Feishu, Mega — each appears once its credentials are configured; lanes without credentials simply do not appear, nothing is half-broken). HTTP and TUS destinations need no credentials.
-3. **Create the job.** The new-upload form has four fields:
-   - **Adapter** — the destination type (e.g. `s3_multipart` for any S3-compatible bucket: AWS S3, Cloudflare R2, MinIO, Wasabi…).
+3. **Create the job.** The new-upload form leads with a **Provider** picker so you never have to assemble a URL by hand:
+   - **Provider** — pick where your files go. Known providers (Backblaze B2, Cloudflare R2, Wasabi, Scaleway, DigitalOcean Spaces, Filebase, self-hosted MinIO) pre-fill the destination shape for you: fill in your bucket (and your region or account id where asked) and the destination URL derives itself. Each provider also carries a **Get your keys ↗** link straight to its key console and a short recipe for what to click. If your destination is not on the list — or you are the power-user kind — **Custom URL** is right there: paste any destination URL, exactly as before.
+   - **Adapter** — the destination type. Picking a provider on an S3-compatible lane sets this to `s3_multipart` for you; leave it alone unless you know you want otherwise.
    - **Source** — the file on your machine.
-   - **Destination** — the target URL (for S3: the bucket URL, e.g. `http://s3.example.com/my-bucket/report.mp4`).
    - **Connections** — how many parallel pieces to split the upload into. The default is fine; more connections help on fast links, fewer on unstable ones.
-4. **Submit.** The job appears in the table with its live state and progress.
+4. **Test the destination before the first job** (optional, S3 lanes). In Settings → S3 multipart, paste a bucket URL and press **Test** — IUM opens and aborts its own tiny session on a probe key under your bucket, so the check never touches your objects. A wrong key or a missing bucket is a written answer now, not a surprise mid-upload.
+5. **Submit.** The job appears in the table with its live state and progress.
+
+**Need to send the file onward?** A finished S3 job can hand you a link: open the job's inspector and press **Copy share link** — you get a signed download URL that opens for 24 hours and then expires. The link is minted on demand from your own keys; nothing is made public until you ask, and nothing stays valid forever.
 
 **Job states, honestly named:** `created` (queued) → `running` → `done`. A job can sit at `paused` (you paused it), `canceled` (you canceled it), or `failed` — and `failed` always comes with a written reason: open the job's inspector to read what actually happened, taken from the upload journal.
 

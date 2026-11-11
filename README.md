@@ -62,11 +62,18 @@ instead of pretending it can resume.
 | Destination | Protocol | Resume | Notes |
 |---|---|---|---|
 | HTTP | plain `PUT` | ⚠️ restart-from-zero | streaming from disk, ETag capture, server-side verify |
-| S3-compatible | S3 multipart | ✅ per-part | AWS S3, Cloudflare R2, MinIO, Wasabi — keys set once in Settings |
+| S3-compatible | S3 multipart | ✅ per-part | Backblaze B2, Cloudflare R2, Wasabi, Scaleway, DigitalOcean Spaces, Filebase, MinIO — the form's provider picker builds the URL, keys set once in Settings |
 | TUS 1.0.0 | TUS | ✅ byte-level | server-acked offsets, drifted uploads realign |
 | WebDAV | WebDAV `PUT` | bridge-declared | connect with URL + username + password |
 | Google Drive | Drive resumable | bridge-declared | one-click sign-in in your browser; the token stays in your OS keychain |
 | YouTube | resumable upload API | ✅ byte-level | native sign-in with anti-CSRF protection; uploads are private by default |
+
+**You don't need to know what an endpoint URL is.** The upload form asks
+"where should files go?" — pick a provider, name your bucket, and the
+destination builds itself, with a deep link to the provider's key console
+and a test button that checks your keys before the first job. A finished
+upload can hand you a private, expiring share link. Anything else still
+takes a pasted URL — power users lose nothing.
 
 Where a server physically cannot resume, the UI says **One-shot ⚠️** instead of pretending.
 The badge is derived from the destination's declared capabilities — never hard-coded.

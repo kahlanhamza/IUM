@@ -7,15 +7,33 @@
  * The shell stats whatever lands, the engine plans — the UI never computes
  * transfer truth.
  *
+ * The destination picker (the destination lane, owner-ratified): regular
+ * users think in websites, not path-style object URLs — so the form leads
+ * with a provider picker. A preset swaps the raw URL field for guided
+ * slots (region / account id / server) + a bucket, and DERIVES the
+ * endpoint into the same `#upload-endpoint` value (readonly — the user
+ * sees the truth, the submit path is unchanged). "Custom URL" is the
+ * DEFAULT and is byte-identical to the pre-picker form: the raw field,
+ * the recents datalist, every e2e seam (#upload-* ids) untouched.
+ *
  * e2e contract (pinned on #65): ids `upload-path` / `upload-endpoint` /
  * `upload-adapter` / `upload-connections` / `upload-submit`; the adapter
- * select's option VALUES stay the engine registry names.
+ * select's option VALUES stay the engine registry names. New seams ride
+ * THEIR OWN ids (`upload-provider`, `upload-bucket`,
+ * `provider-slot-*`) so the WebDriver lane never trips on them.
  */
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "../api";
 import { friendlyAdapter, humanBytes } from "../logic";
+import {
+  buildEndpoint,
+  guidedSlots,
+  providersForAdapter,
+  PROVIDER_CUSTOM,
+  type Provider,
+} from "../providers";
 import { humanizeError } from "../copy";
 import { IconAlert, IconCheck, IconFile, IconUpload, IconX } from "./icons";
 import { Button, Field, Select, TextInput } from "./ui";
@@ -34,10 +52,40 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
   const [sourcePath, setSourcePath] = useState("");
   const [sourceSize, setSourceSize] = useState<number | null>(null);
   const [endpoint, setEndpoint] = useState("");
+  // The provider picker's state: which preset, its slot values and the
+  // bucket. `custom` is the default — the raw field owns the endpoint.
+  const [providerId, setProviderId] = useState<string>(PROVIDER_CUSTOM);
+  const [slotValues, setSlotValues] = useState<Record<string, string>>({});
+  const [bucket, setBucket] = useState("");
   const [maxConns, setMaxConns] = useState(3);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+
+  const providerOptions = adapter ? providersForAdapter(adapter) : [];
+  const preset: Provider | null =
+    providerOptions.find((p) => p.id === providerId) ?? null;
+  const guided = preset !== null && preset.id !== PROVIDER_CUSTOM;
+  const slots = guided ? guidedSlots(preset) : [];
+
+  // A lane switch invalidates a preset from another lane — fall back to
+  // custom (the preset list is per-adapter).
+  useEffect(() => {
+    if (preset && preset.adapter !== adapter) {
+      setProviderId(PROVIDER_CUSTOM);
+      setSlotValues({});
+      setEndpoint("");
+    }
+  }, [adapter, preset]);
+
+  // The derivation is presentation math over the registry (the engine's
+  // parse_target refuses anything malformed at job time anyway): guided
+  // mode OWNS the endpoint state, incomplete input derives to "" which
+  // simply keeps the submit disabled — never a half-URL.
+  useEffect(() => {
+    if (!guided || !preset) return;
+    setEndpoint(buildEndpoint(preset, { ...slotValues, bucket }));
+  }, [guided, preset, slotValues, bucket]);
 
   useEffect(() => {
     api
@@ -126,6 +174,26 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
     await stat(path);
   }
 
+  /** Pick a provider: presets pre-fill their enum defaults (a region
+   *  select starts on the provider's default, not empty); leaving a preset
+   *  for custom hands the endpoint state back to the raw field, clean. */
+  function pickProvider(id: string) {
+    const p = providerOptions.find((x) => x.id === id);
+    setProviderId(id);
+    if (p && p.id !== PROVIDER_CUSTOM) {
+      const defaults: Record<string, string> = {};
+      for (const s of guidedSlots(p)) {
+        if (s.default) defaults[s.name] = s.default;
+      }
+      setSlotValues(defaults);
+      setEndpoint(""); // derived fresh by the effect below
+    } else {
+      setSlotValues({});
+      setBucket("");
+      setEndpoint("");
+    }
+  }
+
   async function submit() {
     if (!adapter || !sourcePath || sourceSize === null || !endpoint.trim()) return;
     setBusy(true);
@@ -143,6 +211,7 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
       setSourcePath("");
       setSourceSize(null);
       setEndpoint("");
+      setBucket("");
       onCreated();
     } catch (e) {
       const msg = String(e);
@@ -228,21 +297,99 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
           />
         </Field>
 
-        <Field label="Destination" htmlFor="upload-endpoint">
-          <TextInput
-            id="upload-endpoint"
-            mono
-            placeholder="endpoint URL"
-            value={endpoint}
-            list="endpoint-recents"
-            onChange={(e) => setEndpoint(e.target.value)}
-          />
-          <datalist id="endpoint-recents">
-            {recents.map((ep) => (
-              <option key={ep} value={ep} />
+        {/* The provider picker: presets for the lane, "Custom URL" first
+            and DEFAULT — the raw-field behavior is untouched in custom. */}
+        {providerOptions.length > 0 && (
+          <Field label="Provider" htmlFor="upload-provider">
+            <Select
+              id="upload-provider"
+              value={providerId}
+              onChange={(e) => pickProvider(e.target.value)}
+            >
+              {providerOptions.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
+
+        {guided ? (
+          <>
+            {slots.map((s) => (
+              <Field key={s.name} label={s.label} htmlFor={`provider-slot-${s.name}`}>
+                {s.kind === "enum" ? (
+                  <Select
+                    id={`provider-slot-${s.name}`}
+                    value={slotValues[s.name] ?? s.default ?? ""}
+                    onChange={(e) =>
+                      setSlotValues((v) => ({ ...v, [s.name]: e.target.value }))
+                    }
+                  >
+                    {(s.options ?? []).map((o) => (
+                      <option key={o} value={o}>
+                        {o}
+                      </option>
+                    ))}
+                  </Select>
+                ) : (
+                  <TextInput
+                    id={`provider-slot-${s.name}`}
+                    placeholder={s.placeholder}
+                    value={slotValues[s.name] ?? ""}
+                    onChange={(e) =>
+                      setSlotValues((v) => ({ ...v, [s.name]: e.target.value }))
+                    }
+                  />
+                )}
+              </Field>
             ))}
-          </datalist>
-        </Field>
+            <Field label="Bucket" htmlFor="upload-bucket">
+              <TextInput
+                id="upload-bucket"
+                mono
+                placeholder="your-bucket-name"
+                value={bucket}
+                onChange={(e) => setBucket(e.target.value)}
+              />
+            </Field>
+            <Field label="Destination URL" htmlFor="upload-endpoint" full>
+              <TextInput
+                id="upload-endpoint"
+                mono
+                readOnly
+                placeholder="pick your bucket above — the URL derives here"
+                value={endpoint}
+              />
+            </Field>
+            <div className="provider-hint" role="note">
+              {preset?.note && <div className="provider-note">{preset.note}</div>}
+              <div className="provider-steps">{preset?.key_steps}</div>
+              {preset?.key_page && (
+                <a href={preset.key_page} target="_blank" rel="noreferrer">
+                  Get your keys ↗
+                </a>
+              )}
+            </div>
+          </>
+        ) : (
+          <Field label="Destination" htmlFor="upload-endpoint">
+            <TextInput
+              id="upload-endpoint"
+              mono
+              placeholder="endpoint URL"
+              value={endpoint}
+              list="endpoint-recents"
+              onChange={(e) => setEndpoint(e.target.value)}
+            />
+            <datalist id="endpoint-recents">
+              {recents.map((ep) => (
+                <option key={ep} value={ep} />
+              ))}
+            </datalist>
+          </Field>
+        )}
 
         <Field label="Protocol" htmlFor="upload-adapter">
           {/* Option VALUES stay the engine registry names — the #65 seam. */}

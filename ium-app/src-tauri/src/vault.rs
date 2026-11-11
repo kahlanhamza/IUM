@@ -75,11 +75,20 @@ pub fn schema() -> Vec<AdapterSchema> {
         AdapterSchema {
             adapter: "s3_multipart",
             label: "S3 multipart",
-            note: "Any S3-compatible endpoint (AWS R2 MinIO SeaweedFS…).",
+            note: "Any S3-compatible storage. The create form's provider picker derives the destination URL for known providers (Backblaze B2, Cloudflare R2, Wasabi…). Paste a bucket URL below to make the Test button check your keys against it — the probe opens and aborts its own session on an ium-probe/ key, so it never touches your objects.",
             fields: vec![
                 f("access_key", "Access key", true, true),
                 f("secret_key", "Secret key", true, true),
                 f("region", "Region", false, true),
+                // The Test button drives against this (the destination lane):
+                // non-secret, optional — the probe needs SOME endpoint to
+                // knock on; the create form derives the real one per job.
+                f(
+                    "endpoint",
+                    "Bucket URL for the Test button (e.g. https://s3.us-west-004.backblazeb2.com/my-bucket)",
+                    false,
+                    false,
+                ),
             ],
         },
         AdapterSchema {
@@ -879,5 +888,40 @@ mod tests {
         let data = v.load();
         assert!(!data.adapters.contains_key("feishu"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The destination lane: the s3 lane's Test button needs an endpoint to
+    /// knock on. The field is non-secret, optional, visible — and the note
+    /// discloses EXACTLY what the probe touches (an ium-probe/ key, opened
+    /// and aborted), because trust is spelled out, not implied.
+    #[test]
+    fn s3_lane_carries_a_testable_endpoint_field() {
+        let s3 = schema()
+            .into_iter()
+            .find(|a| a.adapter == "s3_multipart")
+            .expect("the s3 lane is in the schema");
+        let endpoint = s3
+            .fields
+            .iter()
+            .find(|f| f.name == "endpoint")
+            .expect("the Test button's endpoint field");
+        assert!(!endpoint.secret, "a bucket URL is not a secret");
+        assert!(
+            !endpoint.required,
+            "uploads derive their own endpoint per job — the field exists for the Test button"
+        );
+        assert!(!endpoint.hidden, "the user must be able to type it");
+        for name in ["access_key", "secret_key"] {
+            let f = s3
+                .fields
+                .iter()
+                .find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("{name} is still in the schema"));
+            assert!(f.secret && f.required, "{name} stays a required secret");
+        }
+        assert!(
+            s3.note.contains("ium-probe/"),
+            "the note discloses exactly what the probe touches"
+        );
     }
 }

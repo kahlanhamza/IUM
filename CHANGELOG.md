@@ -8,6 +8,25 @@ All notable changes to IUM are documented here. Format follows
 Every entry cites its issue numbers — evidence lives in the tracker, not in
 prose. An entry without verifiable issue numbers does not belong here.
 
+## [Unreleased]
+
+### Added
+- **The destination lane — regular users can finally aim the engine** (#103,
+  ADR-013): the create form leads with a **provider picker** — Backblaze B2,
+  Cloudflare R2, Wasabi, Scaleway, DigitalOcean Spaces, Filebase and
+  self-hosted MinIO pre-fill the destination shape; you name the bucket (and
+  region/account id where asked) and the URL derives itself, with a **Get
+  your keys ↗** deep link and a per-provider recipe. Custom URL stays the
+  default and is byte-identical to the old raw field. The registry is one
+  JSON file whose every preset is cross-checked against the engine's own
+  `parse_target` in CI — the app cannot offer a destination the engine
+  refuses. The S3 lane gained a **Test button** that works: a zero-byte
+  `CreateMultipartUpload` + `Abort` on an `ium-probe/` key (never a user
+  object, never an orphan) with the adapter's own error taxonomy as the
+  verdict. And a finished S3 upload can hand you a **share link** — a
+  presigned GET (24 h, expiring) minted on demand from your own keys via
+  `sigv4::presign_url`; nothing is ever auto-published.
+
 ## [0.2.2] — 2026-11-11
 
 ### Changed

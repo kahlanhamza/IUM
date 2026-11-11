@@ -1568,3 +1568,37 @@ button.sitem:hover {
   --bg: rgba(11, 16, 26, 0.7);
   --surface: rgba(14, 21, 33, 0.82);
 }
+
+/* --- the destination lane: provider hint + share row ------------------- */
+.provider-hint {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline, rgba(128, 128, 128, 0.25));
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted, inherit);
+}
+.provider-hint .provider-note {
+  font-weight: 600;
+}
+.provider-hint a {
+  align-self: flex-start;
+  color: var(--accent, inherit);
+}
+.share-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.share-note {
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}

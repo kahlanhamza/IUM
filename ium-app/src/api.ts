@@ -61,6 +61,14 @@ export interface JobSnapshot {
   events: [number, string, string][];
 }
 
+/** The shareable link (the destination lane): a presigned GET minted by
+ *  the shell from the journaled endpoint + the vault's keys. `expires_at`
+ *  is epoch seconds — the UI shows the honest deadline. */
+export interface ShareLink {
+  url: string;
+  expires_at: number;
+}
+
 /** The telemetry Privacy view (#75): consent + the local buffer's shape. */
 export interface TelemetryStatus {
   consent: boolean;
@@ -95,6 +103,11 @@ export const api = {
   /** Spec Sprint-1 item 9 name for the per-chunk inspector drawer (#16). */
   inspectChunks: (jobId: string): Promise<JobSnapshot> =>
     invoke("inspect_chunks", { jobId }),
+  /** The shareable link (the destination lane): presigned GET for a
+   *  FINISHED s3 job — 24 h TTL, minted on demand, never stored. The
+   *  shell refuses anything else (other lanes have no link semantics). */
+  shareLink: (jobId: string): Promise<ShareLink> =>
+    invoke("share_link", { jobId }),
   pauseJob: (jobId: string): Promise<void> => invoke("pause_job", { jobId }),
   resumeSignal: (jobId: string): Promise<void> =>
     invoke("resume_signal", { jobId }),
