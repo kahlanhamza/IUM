@@ -29,12 +29,21 @@ const createJob = vi.fn((_spec: unknown, _maxConns: number) =>
     updated_at: 0,
   })
 );
+const credentialsSet = vi.fn((_adapter: string, _fields: Record<string, string>) =>
+  Promise.resolve()
+);
+const applyCredentials = vi.fn((_adapter: string) =>
+  Promise.resolve({ adapter: "s3_multipart", rebuilt: ["s3_multipart"], removed: [] })
+);
 
 vi.mock("../api", () => ({
   api: {
     listAdapters: () => Promise.resolve(["http_oneshot", "s3_multipart", "tus"]),
     statFile: () => Promise.resolve(1024),
     createJob: (spec: unknown, maxConns: number) => createJob(spec, maxConns),
+    credentialsSet: (adapter: string, fields: Record<string, string>) =>
+      credentialsSet(adapter, fields),
+    applyCredentials: (adapter: string) => applyCredentials(adapter),
   },
 }));
 
@@ -44,6 +53,8 @@ afterEach(() => {
   cleanup();
   created.mockClear();
   createJob.mockClear();
+  credentialsSet.mockClear();
+  applyCredentials.mockClear();
 });
 
 function mount() {
@@ -141,6 +152,49 @@ describe("the destination picker", () => {
     const spec = createJob.mock.calls[0][0] as { endpoint: string; adapter: string };
     expect(spec.endpoint).toBe("https://s3.us-west-004.backblazeb2.com/my-bkt");
     expect(spec.adapter).toBe("s3_multipart");
+  });
+
+  // #105: the picked region IS the signing scope. The job-time signer reads
+  // env → vault, never the job draft — so a guided submit must write the
+  // region through to the vault (partial merge: keys untouched) and hot-apply
+  // the lane BEFORE createJob drives it. Wasabi rejects a scope that
+  // disagrees with the host's region; a guided eu-central-2 pick signed
+  // us-east-1 was exactly that rejection.
+  it("a guided submit hands the picked region to the vault and hot-applies before the job", async () => {
+    mount();
+    await pickProtocol("s3_multipart");
+    fireEvent.change(byId("upload-path"), { target: { value: "/tmp/video.mp4" } });
+    await pickProvider("Wasabi");
+    fireEvent.change(screen.getByLabelText(/Region/i), { target: { value: "eu-central-2" } });
+    fireEvent.change(await screen.findByLabelText(/Bucket/i), { target: { value: "my-bkt" } });
+    const submit = await waitFor(() => {
+      const b = document.getElementById("upload-submit") as HTMLButtonElement;
+      expect(b.disabled).toBe(false);
+      return b;
+    });
+    fireEvent.click(submit);
+    await waitFor(() => expect(createJob).toHaveBeenCalled());
+    expect(credentialsSet).toHaveBeenCalledWith("s3_multipart", { region: "eu-central-2" });
+    expect(applyCredentials).toHaveBeenCalledWith("s3_multipart");
+    const jobOrder = createJob.mock.invocationCallOrder[0];
+    expect(credentialsSet.mock.invocationCallOrder[0]).toBeLessThan(jobOrder);
+    expect(applyCredentials.mock.invocationCallOrder[0]).toBeLessThan(jobOrder);
+  });
+
+  it("a custom submit never writes the vault", async () => {
+    mount();
+    await pickProtocol("s3_multipart");
+    fireEvent.change(byId("upload-path"), { target: { value: "/tmp/video.mp4" } });
+    fireEvent.change(byId("upload-endpoint"), { target: { value: "https://s3.example.com/bkt" } });
+    const submit = await waitFor(() => {
+      const b = document.getElementById("upload-submit") as HTMLButtonElement;
+      expect(b.disabled).toBe(false);
+      return b;
+    });
+    fireEvent.click(submit);
+    await waitFor(() => expect(createJob).toHaveBeenCalled());
+    expect(credentialsSet).not.toHaveBeenCalled();
+    expect(applyCredentials).not.toHaveBeenCalled();
   });
 });
 

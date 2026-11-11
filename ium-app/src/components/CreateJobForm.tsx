@@ -199,6 +199,21 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
     setBusy(true);
     setError(null);
     try {
+      // #105: on a guided preset with a region slot, the picked region IS
+      // the signing scope — the job-time signer reads env → vault, never
+      // the job draft, so the region must reach the vault (a documented
+      // partial merge: absent field = keep, so the keys are untouched) and
+      // the lane must hot-apply (the #81 rebuild, no restart) BEFORE the
+      // job drives it. Custom mode writes nothing. An explicitly-set
+      // IUM_S3_REGION env still wins in the adapter config — operator
+      // intent outranks the form.
+      const preset = providerOptions.find((p) => p.id === providerId);
+      const guidedRegion =
+        preset && preset.id !== PROVIDER_CUSTOM ? slotValues.region?.trim() : undefined;
+      if (adapter === "s3_multipart" && guidedRegion) {
+        await api.credentialsSet(adapter, { region: guidedRegion });
+        await api.applyCredentials(adapter);
+      }
       await api.createJob(
         {
           source_path: sourcePath,
