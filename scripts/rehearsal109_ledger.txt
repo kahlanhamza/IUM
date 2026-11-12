@@ -1,0 +1,20 @@
+WIRE probe get_current_account: HTTP 200 {"account_id": "dbid:AACsyd908wHX1Qfqh0T-fjGalzmFgQaLtrA", "account_type": {".tag": "basic"}, "country": "TH", "disabled": false, "email": "redmonsimon@gmail.com", "email_verified": true, "is_paired": false, "locale": "en", "name": {"abbreviated_name": "SR", "display_name": "simon redmon", "familiar
+probe OK account_id=dbid:A…<masked>
+payload 9437184 B (4+4+1 MiB), local content_hash=741069d32062eb7de12b3dc106b7bc2e7f3400901bd3d98780e4f4988a9f6737
+WIRE start: HTTP 200 {"session_id": "pid_upload_session:ABILUqIdE2PDlu1FFwUCwbgfSXt4273riKBhNPlqbqnkYU-Ktg"}
+start OK session_id=pid_up…<masked> (persisted)
+WIRE append#1 @0: HTTP 200 4B body
+WIRE append#2 BEHIND @0 (deliberate): HTTP 200 4B body
+BEHIND-offset append answered 200 — probing true server offset with far-offset append
+WIRE probe far @100MiB: HTTP 409 {"error": {".tag": "incorrect_offset", "correct_offset": 4194304}, "error_summary": "incorrect_offset/", "user_message": {"locale": "en", "text": "incorrect_offset"}}
+  incorrect_offset: declared=104857600 server correct_offset=4194304
+SERVER TRUTH: session holds 4194304 B after behind-offset 200
+semantics: behind-offset append was NO-OP (idempotent-retry tolerance)
+WIRE append#2 proper @4194304: HTTP 200 4B body
+WIRE append#3 @8388608: HTTP 200 4B body
+appends done, journal believes server holds 9437184 B
+WIRE finish: HTTP 200 {"client_modified": "2026-11-11T22:33:51Z", "content_hash": "741069d32062eb7de12b3dc106b7bc2e7f3400901bd3d98780e4f4988a9f6737", "id": "id:n-NU3gk8xYUAAAAAAAAABQ", "is_downloadable": true, "name": "ium-rehearsal-1794436430.bin", "path_display": "/ium-rehearsal-1794436430.bin", "path_lower": "/ium-reh
+finish OK name=ium-rehearsal-1794436430.bin size=9437184 server content_hash=741069d32062eb7de12b3dc106b7bc2e7f3400901bd3d98780e4f4988a9f6737
+VERIFY server==local content_hash -> True
+WIRE cleanup delete_v2: HTTP 200 {"metadata": {".tag": "file", "client_modified": "2026-11-11T22:33:51Z", "content_hash": "741069d32062eb7de12b3dc106b7bc2e7f3400901bd3d98780e4f4988a9f6737", "id": "id:n-NU3gk8xYUAAAAAAAAABQ", "is_downloadable": true, "name": "ium-rehearsal-1794436430.bin", "path_display": "/ium-rehearsal-1794436430.
+cleanup HTTP 200
