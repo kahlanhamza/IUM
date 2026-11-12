@@ -153,6 +153,14 @@ export const api = {
    *  registered port), and the grant (offline refresh token included) is
    *  stored under the lane's hidden secret (OS keychain). */
   connectDropbox: (): Promise<ApplyOutcome> => invoke("connect_dropbox", {}),
+  /** The OneDrive sign-in (#110): the shell runs its own loopback OAuth
+   *  flow on IUM's OWN Entra identity — a PKCE PUBLIC client (no secret
+   *  exists on the lane). No fields to fill: the browser opens Microsoft's
+   *  real consent page, the redirect returns to localhost:8739 (the fixed
+   *  engine port; Entra's bare-loopback registration matches any port),
+   *  and the grant (offline_access refresh token included) is stored
+   *  under the lane's hidden secret (OS keychain). */
+  connectOnedrive: (): Promise<ApplyOutcome> => invoke("connect_onedrive", {}),
   /** Read-only credential check against the DRAFTS (never persisted, no
    *  upload session created — a Test button cannot orphan a real upload). */
   probeCredentials: (adapter: string, fields: Record<string, string>): Promise<ProbeResult> =>

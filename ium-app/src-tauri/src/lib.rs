@@ -195,6 +195,17 @@ fn build_adapter(id: &str) -> Option<Arc<dyn TransferAdapter>> {
                 None
             }
         },
+        // The OneDrive lane (#110): IUM's own Entra identity — a PKCE PUBLIC
+        // client (no secret exists on the lane by design), one hidden token
+        // row the browser sign-in writes. Absence is the honest no-lane
+        // state.
+        "onedrive" => match ium_core::OneDriveConfig::from_env() {
+            Ok(cfg) => Some(Arc::new(ium_core::OneDriveAdapter::new(cfg))),
+            Err(e) => {
+                tracing::warn!("onedrive not configured (no token): {e}");
+                None
+            }
+        },
         // The rclone family (#63): serve spawn + readiness is async, setup
         // is sync, both under the app runtime (same shape as boot). The
         // webdav lane (#83) rides the same family — its constructor reads
@@ -254,6 +265,7 @@ fn register_adapters(manager: &mut JobManager) {
         "google_drive",
         "youtube",
         "dropbox",
+        "onedrive",
     ] {
         if let Some(adapter) = build_adapter(id) {
             manager.register_adapter(adapter);
@@ -637,6 +649,40 @@ async fn connect_dropbox(
     )?;
     vault(&app).apply_env();
     hot_apply(&engine, "dropbox")
+}
+
+/// The OneDrive sign-in (#110): IUM's OWN Entra identity — a PKCE public
+/// client, so there are NO fields to fill and NO secret anywhere. The
+/// browser opens Microsoft's real consent page, the redirect returns to
+/// the loopback listener on the lane's fixed port (8739 — Entra matches
+/// any port against the bare `http://localhost` native registration), the
+/// grant (`offline_access` refresh token included) lands under the lane's
+/// hidden secret, and the lane hot-applies — the drawer closes itself
+/// (the reflex).
+#[tauri::command]
+async fn connect_onedrive(
+    engine: State<'_, Engine>,
+    app: tauri::AppHandle,
+) -> Result<ApplyOutcome, String> {
+    let (verifier, _challenge) = ium_core::google::pkce_pair();
+    let state = ium_core::google::new_state();
+    let url = ium_core::onedrive::authorize_url(&verifier, &state);
+    open_in_browser(&url)?;
+    let expect_state = state;
+    let code = tauri::async_runtime::spawn_blocking(move || {
+        wait_for_code(ium_core::onedrive::REDIRECT_PORT, expect_state)
+    })
+    .await
+    .map_err(|e| format!("the sign-in task failed: {e}"))??;
+    let fresh = ium_core::OneDriveClient
+        .exchange_code(&code, &verifier)
+        .await?;
+    vault(&app).set(
+        "onedrive",
+        BTreeMap::from([("token".to_string(), fresh.to_json())]),
+    )?;
+    vault(&app).apply_env();
+    hot_apply(&engine, "onedrive")
 }
 
 /// What Test-connection learned (#81). `checked = false` is the honest
@@ -1436,6 +1482,7 @@ pub fn run() {
             authorize_oauth,
             connect_youtube,
             connect_dropbox,
+            connect_onedrive,
             probe_credentials,
             secret_mode,
             notify_user,

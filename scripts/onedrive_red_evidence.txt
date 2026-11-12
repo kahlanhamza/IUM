@@ -1,0 +1,18 @@
+   |                   ^^^^^^^^ could not find `onedrive` in `ium_core`
+
+error[E0433]: cannot find `onedrive` in `ium_core`
+  --> ium-core/tests/onedrive_contract.rs:35:19
+   |
+35 |         ium_core::onedrive::CLIENT_ID,
+   |                   ^^^^^^^^ could not find `onedrive` in `ium_core`
+
+error[E0433]: cannot find `onedrive` in `ium_core`
+  --> ium-core/tests/onedrive_contract.rs:91:25
+   |
+91 |     let cfg = ium_core::onedrive::OneDriveConfig::from_parts(
+   |                         ^^^^^^^^ could not find `onedrive` in `ium_core`
+
+Some errors have detailed explanations: E0432, E0433.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `ium-core` (test "onedrive_contract") due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...

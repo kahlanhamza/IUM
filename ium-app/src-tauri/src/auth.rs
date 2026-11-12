@@ -22,7 +22,7 @@
 /// joined when the owner lifted the shelving (#84); YouTube stays OUT —
 /// rclone has no such backend, its sign-in is #85's own loopback flow.
 pub fn is_oauth_backend(id: &str) -> bool {
-    matches!(id, "pcloud" | "onedrive" | "box" | "drive")
+    matches!(id, "pcloud" | "box" | "drive")
 }
 
 /// The remote name a browser-signed-in backend rides under: `IUM_<BACKEND>`
@@ -202,7 +202,7 @@ Paste the following into your remote machine --->
 
     #[test]
     fn the_allowlist_is_the_obvious_oauth_ones_drive_included() {
-        for id in ["pcloud", "onedrive", "box", "drive"] {
+        for id in ["pcloud", "box", "drive"] {
             assert!(is_oauth_backend(id));
         }
         // YouTube is NOT here — rclone has no such backend; its sign-in is
@@ -211,6 +211,9 @@ Paste the following into your remote machine --->
         // Dropbox left the BRIDGE allowlist in #109: the native lane owns
         // the platform now (IUM's own OAuth identity, PKCE public client).
         assert!(!is_oauth_backend("dropbox"));
+        // OneDrive left the BRIDGE allowlist in #110: the native lane owns
+        // the platform now (IUM's own Entra identity, PKCE public client).
+        assert!(!is_oauth_backend("onedrive"));
         assert!(!is_oauth_backend(""));
         assert!(!is_oauth_backend("$(x)"));
     }

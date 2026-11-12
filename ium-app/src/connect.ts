@@ -37,7 +37,6 @@ export interface OAuthBackend {
  *  YouTube stays out — rclone has no such backend (#85's own flow). */
 export const OAUTH_BACKENDS: OAuthBackend[] = [
   { id: "pcloud", label: "pCloud", note: "Sign in with your pCloud account in the browser." },
-  { id: "onedrive", label: "OneDrive", note: "Sign in with your Microsoft account in the browser." },
   { id: "box", label: "Box", note: "Sign in with your Box account in the browser." },
   { id: "drive", label: "Google Drive", note: "Sign in with your Google account in the browser." },
 ];

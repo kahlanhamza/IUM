@@ -59,6 +59,7 @@ pub mod google;
 pub mod journal;
 pub mod manager;
 pub mod netpath;
+pub mod onedrive;
 pub mod prober;
 pub mod rate;
 pub mod retry;
@@ -88,6 +89,7 @@ pub use google::{GoogleClient, TokenSet};
 pub use ids::new_id;
 pub use journal::{ChunkRow, JobRecord, SessionJournal};
 pub use manager::{JobManager, JobSnapshot};
+pub use onedrive::{OneDriveAdapter, OneDriveClient, OneDriveConfig};
 pub use state::JobState;
 pub use supervisor::Supervisor;
 

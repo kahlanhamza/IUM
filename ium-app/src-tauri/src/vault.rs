@@ -167,6 +167,12 @@ pub fn schema() -> Vec<AdapterSchema> {
             note: "Sign in with your Dropbox account in the browser — no fields to fill. The upload session lands in this app's own folder inside your Dropbox; the sign-in token lives in your OS keychain.",
             fields: vec![h("token", "Dropbox sign-in")],
         },
+        AdapterSchema {
+            adapter: "onedrive",
+            label: "OneDrive",
+            note: "Sign in with your Microsoft account in the browser — no fields to fill. The upload lands where the job's destination says inside your OneDrive; the sign-in token lives in your OS keychain.",
+            fields: vec![h("token", "Microsoft sign-in")],
+        },
     ]
 }
 
@@ -389,6 +395,7 @@ impl Vault {
             ("youtube.client_secret", "IUM_GOOGLE_CLIENT_SECRET"),
             ("youtube.token", "IUM_YOUTUBE_TOKEN"),
             ("dropbox.token", "IUM_DROPBOX_TOKEN"),
+            ("onedrive.token", "IUM_ONEDRIVE_TOKEN"),
         ];
         let mut set = 0;
         for (key, var) in direct {
