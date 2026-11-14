@@ -20,8 +20,16 @@
  *    the splash; the main UI owns the unreachable state honestly.
  */
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
+
+/** The boot budget is injected (#112): the retry contract must be provable
+ *  without real clocks — 60 ms budget, 5 ms interval, the real helper. */
+vi.mock("./boot", async (importOriginal) => ({
+  ...await importOriginal<Record<string, unknown>>(),
+  BOOT_BUDGET_MS: 60,
+  BOOT_INTERVAL_MS: 5,
+}));
 
 /** Explicit cleanup, not the auto-hook: components from an earlier test
  *  must be UNMOUNTED before the next one counts completions — a still-
@@ -64,6 +72,28 @@ describe("the launch surface (#87)", () => {
       expect(container.textContent).toContain("opening IUM anyway"),
     );
   });
+
+  // #112: the boot gap is not a down engine. Tauri boots the webviews
+  // BEFORE `.setup()` manages the engine, so the splash's first probe can
+  // hit "state not managed" while the engine is still opening the journal.
+  // The splash must RETRY and complete through the READY path — the
+  // owner's v0.2.4 screenshot was a race-lost probe pinned as degraded.
+  it("retries a boot-race refusal and hands off through the ready path", async () => {
+    const { mockLaunchDeps, Launch, completions } = await harness();
+    let calls = 0;
+    mockLaunchDeps({
+      engine: () => {
+        calls++;
+        if (calls < 3) return Promise.reject(new Error("state not managed for field 'engine'"));
+        return Promise.resolve("ium-core ready");
+      },
+    });
+    const { container } = render(<Launch />);
+    await waitFor(() => expect(completions().length).toBe(1), { timeout: 3000 });
+    // the READY path — no degraded sentence, ever
+    expect(container.textContent).not.toContain("opening IUM anyway");
+    expect(calls).toBeGreaterThanOrEqual(3);
+  });
 });
 
 /** Loads the component lazily (RED reads clearly: missing module), wires
@@ -77,10 +107,12 @@ async function harness() {
     Launch: mod.Launch,
     APP_COPY: copy.APP_COPY,
     completions: () => calls,
-    mockLaunchDeps(opts: { engine: Promise<string> }) {
+    mockLaunchDeps(opts: { engine: Promise<string> | (() => Promise<string>) }) {
       calls.length = 0;
       mocks.mockIPC((cmd: string) => {
-        if (cmd === "engine_status") return opts.engine;
+        if (cmd === "engine_status") {
+          return typeof opts.engine === "function" ? opts.engine() : opts.engine;
+        }
         if (cmd === "complete_launch") {
           calls.push(cmd);
           return null;

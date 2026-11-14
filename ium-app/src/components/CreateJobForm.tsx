@@ -26,6 +26,7 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "../api";
+import { BOOT_BUDGET_MS, BOOT_INTERVAL_MS, retryUntil } from "../boot";
 import { friendlyAdapter, humanBytes } from "../logic";
 import {
   buildEndpoint,
@@ -88,17 +89,31 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
   }, [guided, preset, slotValues, bucket]);
 
   useEffect(() => {
-    api
-      .listAdapters()
-      .then((names) => {
-        setAdapters(names);
-        setAdapter((cur) => cur || names[0] || "");
-      })
-      .catch((e) => {
-        const msg = `registry unavailable: ${e}`;
+    // The boot gate (#112): the registry names are fetched through the
+    // shared retry budget — Tauri boots the webviews BEFORE the shell's
+    // `.setup()` manages the engine, so the first fetch can answer
+    // "state not managed" while the journal is still opening. Only a
+    // registry that stays silent for the whole budget renders the
+    // banner — those words then mean a REAL registry problem, not a
+    // race the engine would have won a second later.
+    let alive = true;
+    void retryUntil(() => api.listAdapters(), {
+      deadlineMs: BOOT_BUDGET_MS,
+      intervalMs: BOOT_INTERVAL_MS,
+    }).then((r) => {
+      if (!alive) return;
+      if (r.ok) {
+        setAdapters(r.value);
+        setAdapter((cur) => cur || r.value[0] || "");
+      } else {
+        const msg = `registry unavailable: ${String(r.error)}`;
         setError(msg);
         onError(msg);
-      });
+      }
+    });
+    return () => {
+      alive = false;
+    };
   }, [onError]);
 
   // Zero-touch intake (#65): the OS drag-drop lands here and rides the same

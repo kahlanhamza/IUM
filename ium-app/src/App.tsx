@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, type AdapterSchema, type JobRecord, type JobSnapshot } from "./api";
+import { BOOT_BUDGET_MS, BOOT_INTERVAL_MS, waitForEngine } from "./boot";
 import { CommandPalette, modGlyph, type Command } from "./components/CommandPalette";
 import { CreateJobForm } from "./components/CreateJobForm";
 import { InspectorDrawer } from "./components/InspectorDrawer";
@@ -178,15 +179,51 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    api
-      .engineStatus()
-      .then((detail) => setEngine({ kind: "ready", detail }))
-      .catch((e) => {
-        setEngine({ kind: "down", detail: String(e) });
-        pushToast("error", humanizeError(`engine unreachable: ${e}`).title);
-      });
-    refreshJobs();
-    refreshLanes();
+    // The boot gate (#112): the webviews run BEFORE the shell's `.setup()`
+    // manages the engine, so the first probes can land inside the boot gap
+    // and answer "state not managed for field 'engine'". The shell polls
+    // until the engine answers or the budget is spent, and ONLY THEN reads
+    // the journal — a race-lost probe must not pin the pill red or empty
+    // the tables (the owner's v0.2.4 first-launch screenshot). A budget
+    // spent keeps the honest down state AND a slow recovery poll: a cold
+    // boot outliving the budget still reaches a working UI, no restart.
+    let alive = true;
+    let recovery: number | undefined;
+    const load = () => {
+      refreshJobs();
+      refreshLanes();
+    };
+    void waitForEngine(() => api.engineStatus(), {
+      deadlineMs: BOOT_BUDGET_MS,
+      intervalMs: BOOT_INTERVAL_MS,
+    }).then((boot) => {
+      if (!alive) return;
+      if (boot.ok) {
+        setEngine({ kind: "ready", detail: boot.detail });
+        load();
+        return;
+      }
+      setEngine({ kind: "down", detail: boot.detail });
+      pushToast("error", humanizeError(`engine unreachable: ${boot.detail}`).title);
+      // The recovery lane (#112): the boot may outlive the budget (a slow
+      // disk, a jammed AV scan) — the pill keeps polling at walking pace
+      // and flips to ready the moment the engine lands. No state is
+      // derived here: the flip comes from the engine's own answer.
+      recovery = window.setInterval(() => {
+        api
+          .engineStatus()
+          .then((detail) => {
+            if (!alive || recovery === undefined) return;
+            window.clearInterval(recovery);
+            recovery = undefined;
+            setEngine({ kind: "ready", detail });
+            load();
+          })
+          .catch(() => {
+            /* still down — the pill stays honest, the poll continues */
+          });
+      }, 5000);
+    });
 
     // The silent startup update check (#80): once per boot, a few seconds
     // in, Tauri-only (the wrapper degrades to null elsewhere). A failed
@@ -237,6 +274,8 @@ export default function App() {
     });
 
     return () => {
+      alive = false;
+      if (recovery !== undefined) window.clearInterval(recovery);
       clearTimeout(updateTimer);
       unlisten.then((f) => f()).catch(() => {
         /* no Tauri runtime (plain-browser dev) — nothing to unlisten */

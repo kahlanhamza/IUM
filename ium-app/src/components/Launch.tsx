@@ -12,10 +12,20 @@
  * main window owns the unreachable state (its own honest pill), the
  * watchdog in the shell (`complete_launch`'s sibling timer) backs the same
  * contract from the Rust side. No fake progress, no animation library.
+ *
+ * #112: the probe is a POLL, not a one-shot. Tauri boots the webviews
+ * before the shell's `.setup()` manages the engine, so the first probe
+ * can hit "state not managed" while the engine is still opening the
+ * journal — a boot gap is not a down engine, and one race-lost refusal
+ * must not pin the splash as degraded (the owner's v0.2.4 screenshot).
+ * The verdict is the shared boot budget's (BOOT_BUDGET_MS): answered →
+ * the ready handoff; spent → the honest degraded handoff. Same
+ * never-trap contract as before — now decided after real retries.
  */
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { api } from "../api";
+import { BOOT_BUDGET_MS, BOOT_INTERVAL_MS, waitForEngine } from "../boot";
 import { APP_COPY } from "../copy";
 import { Logomark } from "./icons";
 
@@ -46,10 +56,14 @@ export function Launch() {
       }, 350);
     };
 
-    api
-      .engineStatus()
-      .then(() => complete())
-      .catch(() => complete(APP_COPY.launchDegraded));
+    void waitForEngine(() => api.engineStatus(), {
+      deadlineMs: BOOT_BUDGET_MS,
+      intervalMs: BOOT_INTERVAL_MS,
+    }).then((boot) => {
+      // ready → the plain handoff; budget spent → the honest degraded
+      // sentence. Either way the handoff fires exactly once (`done`).
+      complete(boot.ok ? undefined : APP_COPY.launchDegraded);
+    });
 
     // The IPC-side safety net: if the shell never answers either way
     // (a wedged engine mid-boot), the splash still yields.
@@ -58,6 +72,12 @@ export function Launch() {
       8000,
     );
     return () => {
+      // #112: the boot verdict may resolve AFTER the splash is gone (the
+      // retry budget outlives an unmount in tests and in a fast handoff).
+      // `done = true` retires the verdict — an unmounted splash never
+      // completes, so no zombie invoke can fire (the exactly-once
+      // contract covers the whole lifetime, not just mounted ones).
+      done = true;
       window.clearTimeout(watchdog);
       if (handoff !== undefined) window.clearTimeout(handoff);
     };

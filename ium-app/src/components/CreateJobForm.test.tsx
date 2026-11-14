@@ -36,9 +36,18 @@ const applyCredentials = vi.fn((_adapter: string) =>
   Promise.resolve({ adapter: "s3_multipart", rebuilt: ["s3_multipart"], removed: [] })
 );
 
+/** The adapter fetch is swappable so the boot-race contract (#112) can be
+ *  driven: default = the healthy registry. */
+const listAdaptersState = vi.hoisted(() => {
+  const state: { impl: () => Promise<string[]> } = {
+    impl: () => Promise.resolve(["http_oneshot", "s3_multipart", "tus"]),
+  };
+  return state;
+});
+
 vi.mock("../api", () => ({
   api: {
-    listAdapters: () => Promise.resolve(["http_oneshot", "s3_multipart", "tus"]),
+    listAdapters: () => listAdaptersState.impl(),
     statFile: () => Promise.resolve(1024),
     createJob: (spec: unknown, maxConns: number) => createJob(spec, maxConns),
     credentialsSet: (adapter: string, fields: Record<string, string>) =>
@@ -48,6 +57,14 @@ vi.mock("../api", () => ({
 }));
 
 import { CreateJobForm } from "./CreateJobForm";
+
+/** The boot budget is injected (#112): the retry contract must be provable
+ *  without real clocks — 60 ms budget, 5 ms interval, the real helper. */
+vi.mock("../boot", async (importOriginal) => ({
+  ...await importOriginal<Record<string, unknown>>(),
+  BOOT_BUDGET_MS: 60,
+  BOOT_INTERVAL_MS: 5,
+}));
 
 afterEach(() => {
   cleanup();
@@ -195,6 +212,49 @@ describe("the destination picker", () => {
     await waitFor(() => expect(createJob).toHaveBeenCalled());
     expect(credentialsSet).not.toHaveBeenCalled();
     expect(applyCredentials).not.toHaveBeenCalled();
+  });
+
+  // #112: Tauri boots the webviews before the shell's `.setup()` manages the
+  // engine — a fresh install can answer list_adapters with "state not
+  // managed" for the first seconds. The form must RETRY, not pin that as a
+  // permanent "registry unavailable" banner (the owner's v0.2.4 screenshot).
+  it("retries a boot-race refusal — the select fills, no banner, no onError", async () => {
+    let calls = 0;
+    listAdaptersState.impl = () => {
+      calls++;
+      if (calls < 3) {
+        return Promise.reject(
+          new Error("state not managed for field 'engine' on command 'list_adapters'"),
+        );
+      }
+      return Promise.resolve(["http_oneshot", "s3_multipart", "tus"]);
+    };
+    const onErr = vi.fn();
+    render(<CreateJobForm onCreated={created} recents={[]} onError={onErr} />);
+    const sel = document.getElementById("upload-adapter") as unknown as HTMLSelectElement;
+    await waitFor(() => expect(sel.options.length).toBe(3), { timeout: 3000 });
+    expect(onErr).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("registry unavailable");
+    expect(calls).toBe(3);
+  });
+
+  it("a registry that never answers within the budget still speaks — once, honestly", async () => {
+    let calls = 0;
+    listAdaptersState.impl = () => {
+      calls++;
+      return Promise.reject(
+        new Error("state not managed for field 'engine' on command 'list_adapters'"),
+      );
+    };
+    const onErr = vi.fn();
+    render(<CreateJobForm onCreated={created} recents={[]} onError={onErr} />);
+    await waitFor(
+      () => expect(document.body.textContent).toContain("registry unavailable"),
+      { timeout: 3000 },
+    );
+    expect(onErr).toHaveBeenCalledTimes(1);
+    expect(onErr.mock.calls[0][0]).toContain("registry unavailable");
+    expect(calls).toBeGreaterThan(1); // it retried before giving up
   });
 });
 

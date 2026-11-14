@@ -12,7 +12,7 @@
 Resumable, segmented, multi-protocol uploads that survive slow networks, sleep,
 crashes and reboots — with *honest* badges where physics says a protocol cannot resume.
 
-![tests](https://img.shields.io/badge/tests-346%20core%20%2B%20191%20UI-brightgreen)
+![tests](https://img.shields.io/badge/tests-376%20core%20%2B%20202%20UI-brightgreen)
 ![platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 
 </div>
@@ -121,7 +121,7 @@ preferences carry over.
 
 ## How it is verified
 
-- **Every push**: the full test suite (346 engine + 191 UI) on Linux, macOS and Windows;
+- **Every push**: the full test suite (376 engine + 202 UI) on Linux, macOS and Windows;
   live wire rehearsals against four real server implementations; a real end-to-end drive
   of the desktop shell itself.
 - **Nightly**: fuzzing at scale, kill-and-resume drills on the wire, and the dependency
