@@ -95,7 +95,8 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev \
             librsvg2-dev libxdo-dev libssl-dev build-essential
       - name: Fetch the pinned rclone sidecar (#118)
-        run: python3 scripts/fetch_rclone_sidecar.py
+        shell: bash
+        run: python3 scripts/fetch_rclone_sidecar.py || python scripts/fetch_rclone_sidecar.py
         # The per-runner triple is auto-detected (windows-msvc / aarch64-apple
         # / linux-gnu). The archive is verified against the official
         # SHA256SUMS of the pinned release — a mismatch fails the leg before

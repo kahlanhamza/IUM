@@ -156,6 +156,13 @@ jobs:
       - name: Frontend logic tests (vitest)
         working-directory: ium-app
         run: npm test
+      - name: Fetch the pinned rclone sidecar (#118)
+        shell: bash
+        run: python3 scripts/fetch_rclone_sidecar.py || python scripts/fetch_rclone_sidecar.py
+        # tauri-build VALIDATES externalBin at cargo-build time — without
+        # the sidecar file, `cargo clippy/test -p ium-app` fails before the
+        # gates even run (run 43651729299's wire fact). CI downloads it
+        # exactly like the release legs do.
       - name: Shell lane (clippy, deny warnings)
         run: cargo clippy -p ium-app --all-targets -- -D warnings
       - name: Shell lane (tests)
@@ -198,6 +205,11 @@ jobs:
           npm run build
       - name: Install tauri-driver (locked, cached)
         run: cargo install tauri-driver --locked
+      - name: Fetch the pinned rclone sidecar (#118)
+        shell: bash
+        run: python3 scripts/fetch_rclone_sidecar.py || python scripts/fetch_rclone_sidecar.py
+        # Same wire fact as the ium-app job: tauri-build validates
+        # externalBin during `cargo build` — the sidecar must be on disk.
       - name: Build shell + loopback recorder
         run: |
           cargo build -p ium-app --bin ium-app --features ium-app/custom-protocol
