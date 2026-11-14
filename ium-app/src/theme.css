@@ -605,6 +605,19 @@ button.sitem:hover {
   grid-column: 1 / -1;
 }
 
+/* The connect sheets' field grid (#113): the sheets are the #82 "one
+   honest row" surface — ONE credential field per row, full width, real
+   breathing room. The create form's 4-column .form-grid above is a
+   different surface with a different job; the sheets never borrow it
+   (that borrow is what collapsed the tracks and painted the labels over
+   each other). */
+.sheet-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 12px;
+}
+
 @media (max-width: 860px) {
   .form-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -622,7 +635,10 @@ button.sitem:hover {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-2);
-  white-space: nowrap;
+  /* #113: labels WRAP. `nowrap` is what painted the 90-char S3 endpoint
+     label across its neighbors — the owner's screenshot. A label is
+     secondary text that flows; the grid never collapses around it. */
+  overflow-wrap: anywhere;
 }
 
 .input,

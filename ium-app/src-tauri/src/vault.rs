@@ -75,7 +75,7 @@ pub fn schema() -> Vec<AdapterSchema> {
         AdapterSchema {
             adapter: "s3_multipart",
             label: "S3 multipart",
-            note: "Any S3-compatible storage. The create form's provider picker derives the destination URL for known providers (Backblaze B2, Cloudflare R2, Wasabi…). Paste a bucket URL below to make the Test button check your keys against it — the probe opens and aborts its own session on an ium-probe/ key, so it never touches your objects.",
+            note: "Any S3-compatible storage. The create form's provider picker derives the destination URL for known providers (Backblaze B2, Cloudflare R2, Wasabi…). Paste a bucket URL below (e.g. https://s3.us-west-004.backblazeb2.com/my-bucket) to make the Test button check your keys against it — the probe opens and aborts its own session on an ium-probe/ key, so it never touches your objects.",
             fields: vec![
                 f("access_key", "Access key", true, true),
                 f("secret_key", "Secret key", true, true),
@@ -83,12 +83,9 @@ pub fn schema() -> Vec<AdapterSchema> {
                 // The Test button drives against this (the destination lane):
                 // non-secret, optional — the probe needs SOME endpoint to
                 // knock on; the create form derives the real one per job.
-                f(
-                    "endpoint",
-                    "Bucket URL for the Test button (e.g. https://s3.us-west-004.backblazeb2.com/my-bucket)",
-                    false,
-                    false,
-                ),
+                // #113: the label is ONE line of copy — the example URL and
+                // the probe disclosure live in the note above, not here.
+                f("endpoint", "Bucket URL (the Test button's target)", false, false),
             ],
         },
         AdapterSchema {
@@ -938,5 +935,29 @@ mod tests {
             s3.note.contains("ium-probe/"),
             "the note discloses exactly what the probe touches"
         );
+    }
+
+    /// #113 RED: the S3 endpoint label is ONE line of copy. The 90-char
+    /// spelling was sheet noise — it painted across the other labels in
+    /// the connect sheet (the owner's screenshot). The example URL and the
+    /// probe disclosure live in the NOTE, not the label.
+    #[test]
+    fn the_s3_endpoint_label_is_one_line_of_copy() {
+        let s3 = schema()
+            .into_iter()
+            .find(|a| a.adapter == "s3_multipart")
+            .expect("the s3 lane is in the schema");
+        let endpoint = s3
+            .fields
+            .iter()
+            .find(|f| f.name == "endpoint")
+            .expect("the Test button's endpoint field");
+        assert!(
+            endpoint.label.len() <= 60,
+            "label is sheet noise ({} chars): {}",
+            endpoint.label.len(),
+            endpoint.label
+        );
+        assert!(!endpoint.label.contains("http"), "no URLs in a label");
     }
 }

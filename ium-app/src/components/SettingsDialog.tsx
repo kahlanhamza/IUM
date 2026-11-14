@@ -421,7 +421,7 @@ function ConnectSheet({
       {isOnedrive && (
         <OneDriveSignIn busy={busy} onError={onError} onConnected={onConnected} onVaultChanged={onVaultChanged} />
       )}
-      <div className="form-grid">
+      <div className="sheet-grid">
         {visibleRows.map((r) => (
           <SecretField
             key={r.name}
