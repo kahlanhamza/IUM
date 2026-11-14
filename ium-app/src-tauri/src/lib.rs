@@ -528,12 +528,12 @@ fn open_in_browser(url: &str) -> Result<(), String> {
             return Ok(());
         }
         let (program, entry, arg) = auth::windows_fallback_command(url);
-        return console_child(program)
+        console_child(program)
             .arg(entry)
             .arg(arg)
             .spawn()
             .map(|_| ())
-            .map_err(|e| format!("could not open the browser at {url} ({e})"));
+            .map_err(|e| format!("could not open the browser at {url} ({e})"))
     }
     #[cfg(target_os = "macos")]
     let spawn = std::process::Command::new("open").arg(url).spawn();
