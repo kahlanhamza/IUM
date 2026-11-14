@@ -31,6 +31,7 @@ from quickxorhash import quick_xor_hash  # noqa: E402
 SECRETS = Path("/home/z/my-project/.secrets")
 TOKF = SECRETS / "onedrive_rehearsal_token.json"
 LEDGER = SECRETS / "onedrive_rehearsal_ledger.txt"
+SESSF = SECRETS / "onedrive_device_session.json"
 CLIENT_ID = (SECRETS / "onedrive_client_id").read_text().strip()
 SCOPE = "offline_access Files.ReadWrite User.Read"
 AUTH = "https://login.microsoftonline.com/common/oauth2/v2.0"
@@ -101,23 +102,51 @@ def start() -> None:
     print(f"verification_uri : {resp['verification_uri']}")
     print(f"user_code        : {resp['user_code']}")
     print(f"expires_in       : {resp['expires_in']}s  poll_interval={resp['interval']}s")
+    # persist the session so --wait polls THE SAME device_code (the code is
+    # relayed through chat; a re-initiated session would never match)
+    sess = {
+        "device_code": resp["device_code"],
+        "user_code": resp["user_code"],
+        "verification_uri": resp["verification_uri"],
+        "interval": resp["interval"],
+        "deadline": time.time() + resp["expires_in"],
+    }
+    SESSF.write_text(json.dumps(sess) + "\n")
+    SESSF.chmod(0o600)
 
 
 def wait_and_rehearse() -> None:
-    st, resp = post_form(f"{AUTH}/devicecode", {"client_id": CLIENT_ID, "scope": SCOPE})
-    if st != 200:
-        print(f"devicecode FAILED: HTTP {st} {json.dumps(resp)[:300]}")
-        sys.exit(1)
-    uri, code = resp["verification_uri"], resp["user_code"]
-    interval, deadline = resp["interval"], time.time() + resp["expires_in"]
-    print(f"WAITING for authorization: open {uri} and type {code} (window {resp['expires_in']}s)")
+    device_code = uri = code = None
+    interval = deadline = None
+    if SESSF.exists():
+        sess = json.loads(SESSF.read_text())
+        if sess["deadline"] > time.time():
+            device_code, uri, code = sess["device_code"], sess["verification_uri"], sess["user_code"]
+            interval, deadline = sess["interval"], sess["deadline"]
+            print(f"RESUMED device session: open {uri} and type {code} "
+                  f"(window ends in {int(deadline - time.time())}s)")
+        else:
+            print("stale device session — reissuing a fresh one")
+            SESSF.unlink()
+    if device_code is None:
+        st, resp = post_form(f"{AUTH}/devicecode", {"client_id": CLIENT_ID, "scope": SCOPE})
+        if st != 200:
+            print(f"devicecode FAILED: HTTP {st} {json.dumps(resp)[:300]}")
+            sys.exit(1)
+        device_code, uri, code = resp["device_code"], resp["verification_uri"], resp["user_code"]
+        interval, deadline = resp["interval"], time.time() + resp["expires_in"]
+        sess = {"device_code": device_code, "user_code": code, "verification_uri": uri,
+                "interval": interval, "deadline": deadline}
+        SESSF.write_text(json.dumps(sess) + "\n")
+        SESSF.chmod(0o600)
+    print(f"WAITING for authorization: open {uri} and type {code}")
     token_resp = None
     while time.time() < deadline:
         time.sleep(interval)
         st, tr = post_form(f"{AUTH}/token", {
             "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
             "client_id": CLIENT_ID,
-            "device_code": resp["device_code"],
+            "device_code": device_code,
         })
         if st == 200:
             token_resp = tr
