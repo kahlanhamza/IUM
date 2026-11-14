@@ -100,8 +100,8 @@ pub fn schema() -> Vec<AdapterSchema> {
         },
         AdapterSchema {
             adapter: "mega",
-            label: "MEGA (rclone bridge)",
-            note: "Your MEGA login. Optional 2FA code if the account has it.",
+            label: "MEGA",
+            note: "Your MEGA login. Optional 2FA code if the account has it. The rclone bridge it rides is bundled — nothing to install.",
             fields: vec![
                 f("user", "Email", false, true),
                 f("pass", "Password", true, true),

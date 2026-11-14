@@ -51,3 +51,6 @@ rea-lab/longhaul/
 
 # Kaggle kernel staging (built artifacts; the push script re-creates them)
 .kaggle-stage/
+
+# --- the bundled rclone sidecar (#118): fetched at build time, never in git ---
+ium-app/src-tauri/binaries/

@@ -94,6 +94,13 @@ jobs:
           sudo apt-get install -y -o Acquire::Retries=5 -o Acquire::http::Timeout=15 \
             libwebkit2gtk-4.1-dev libgtk-3-dev \
             librsvg2-dev libxdo-dev libssl-dev build-essential
+      - name: Fetch the pinned rclone sidecar (#118)
+        run: python3 scripts/fetch_rclone_sidecar.py
+        # The per-runner triple is auto-detected (windows-msvc / aarch64-apple
+        # / linux-gnu). The archive is verified against the official
+        # SHA256SUMS of the pinned release — a mismatch fails the leg before
+        # any installer is built. Tauri's externalBin picks the file up and
+        # installs it next to the app binary in EVERY bundle.
       - name: Build the installers (per-OS bundle list)
         working-directory: ium-app
         env:
@@ -183,7 +190,8 @@ jobs:
           DEB=$(ls ium-app/dist_release/*.deb)
           PKG=$(dpkg-deb -f "$DEB" Package)
           sudo dpkg -i "$DEB"
-          BIN=$(dpkg -L "$PKG" | grep -m1 '/bin/' | head -n1)
+          # #118: rclone ships in bin/ next to the app — name the binary.
+          BIN=$(dpkg -L "$PKG" | grep -m1 '/bin/IUM$')
           test -x "$BIN"
           xvfb-run -a timeout 12 "$BIN" &
           sleep 8
@@ -198,8 +206,10 @@ jobs:
         run: |
           $msi = (Get-ChildItem ium-app/dist_release/*.msi).FullName
           Start-Process msiexec.exe -ArgumentList "/i","`"$msi`"","/qn","/norestart" -Wait
-          $exe = (Get-ChildItem "C:\Program Files\IUM\*.exe" | Select-Object -First 1).FullName
-          if (-not $exe) { throw "MSI binary not found after silent install" }
+          # #118: rclone.exe ships next to IUM.exe now — name the binary,
+          # never "first *.exe".
+          if (-not (Test-Path "C:\Program Files\IUM\IUM.exe")) { throw "MSI binary not found after silent install" }
+          $exe = "C:\Program Files\IUM\IUM.exe"
           $p = Start-Process $exe -PassThru
           Start-Sleep -Seconds 8
           if ($p.HasExited) { throw "PROCESS DIED during smoke boot" }
@@ -214,8 +224,10 @@ jobs:
           if (-not $exe) { throw "NSIS setup not found" }
           Start-Process $exe -ArgumentList "/S" -Wait
           $dst = "$env:LOCALAPPDATA\IUM"
-          $bin = (Get-ChildItem "$dst\*.exe" | Where-Object Name -notlike "Uninstall*" | Select-Object -First 1).FullName
-          if (-not $bin) { throw "NSIS binary not found after /S install" }
+          # #118: rclone.exe ships next to IUM.exe now — name the binary,
+          # never "first non-uninstaller *.exe".
+          if (-not (Test-Path "$dst\IUM.exe")) { throw "NSIS binary not found after /S install" }
+          $bin = "$dst\IUM.exe"
           $p = Start-Process $bin -PassThru
           Start-Sleep -Seconds 8
           if ($p.HasExited) { throw "PROCESS DIED during NSIS smoke boot" }
@@ -231,8 +243,10 @@ jobs:
           hdiutil attach "$DMG" -mountpoint /tmp/ium_dmg -nobrowse -quiet
           cp -R /tmp/ium_dmg/IUM.app /Applications/
           hdiutil detach /tmp/ium_dmg
-          # The executable's name follows mainBinaryName — locate, never assume.
-          EXE="/Applications/IUM.app/Contents/MacOS/$(ls /Applications/IUM.app/Contents/MacOS | head -n1)"
+          # The executable's name follows mainBinaryName — and #118 ships
+          # rclone next to it in MacOS/, so the binary is NAMED, never
+          # "first file".
+          EXE="/Applications/IUM.app/Contents/MacOS/IUM"
           test -x "$EXE"
           "$EXE" &
           sleep 8

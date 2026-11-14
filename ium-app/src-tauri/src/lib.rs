@@ -12,6 +12,7 @@
 //! aborted.
 
 mod auth;
+mod rclonebin;
 mod telemetry;
 mod vault;
 
@@ -129,6 +130,23 @@ impl vault::SecretStore for KeyringStore {
             Err(e) => Err(e.to_string()),
         }
     }
+}
+
+/// The rclone binary every shell-side spawn uses (#118): the pure
+/// resolution order lives in `rclonebin` (explicit → env → sidecar →
+/// PATH). The startup install already filled the env seats from the
+/// bundled sidecar, so this helper sees them for free — an operator's
+/// vault `bin` field or `IUM_*_RCLONE_BIN` env still wins, a bundled
+/// machine resolves next-to-executable, and a hand-installed rclone
+/// keeps working through PATH.
+fn rclone_bin(explicit: Option<String>) -> std::path::PathBuf {
+    let env = std::env::var("IUM_RCLONE_BIN").ok();
+    let sidecar = rclonebin::sidecar_path();
+    std::path::PathBuf::from(rclonebin::resolve_rclone_bin(
+        explicit.as_deref(),
+        env.as_deref(),
+        sidecar.as_deref(),
+    ))
 }
 
 fn engine_error(e: ium_core::EngineError) -> String {
@@ -423,10 +441,10 @@ async fn authorize_oauth(
     if !auth::is_oauth_backend(&backend) {
         return Err(format!("not a browser-sign-in backend: {backend}"));
     }
-    let bin = bin
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "rclone".to_string());
+    let bin = bin.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    // #118: the resolved bin — vault bin field, env, the bundled sidecar,
+    // then PATH. A bundled machine can sign in with rclone absent from PATH.
+    let bin = rclone_bin(bin).to_string_lossy().into_owned();
     // The spawn+wait blocks for as long as the user takes in their browser
     // — it runs on the blocking pool, never on a runtime worker.
     // #115: CREATE_NO_WINDOW on Windows — rclone is console-subsystem and
@@ -816,7 +834,7 @@ async fn probe_credentials(
                 return probe_missing("Your MEGA email and password are required for a test.");
             };
             let obscured = ium_core::adapter_rclone::RcloneBridgeConfig::rclone_obscure(
-                &std::path::PathBuf::from("rclone"),
+                &rclone_bin(None),
                 &pass,
             )
             .await;
@@ -833,6 +851,7 @@ async fn probe_credentials(
             };
             cfg.bucket = draft("bucket").unwrap_or_else(|| "ium".into());
             cfg.lane_name = ium_core::adapter_rclone::MEGA_LANE;
+            cfg.rclone_bin = rclone_bin(None);
             cfg.extra_env = vec![
                 ("RCLONE_CONFIG_MEGA_TYPE".into(), "mega".into()),
                 ("RCLONE_CONFIG_MEGA_USER".into(), user),
@@ -851,7 +870,7 @@ async fn probe_credentials(
                     "The server URL, your username and the password are required for a test.",
                 );
             };
-            let bin = draft("bin").unwrap_or_else(|| "rclone".into());
+            let bin = rclone_bin(draft("bin")).to_string_lossy().into_owned();
             let obscured = ium_core::adapter_rclone::RcloneBridgeConfig::rclone_obscure(
                 &std::path::PathBuf::from(&bin),
                 &password,
@@ -933,8 +952,8 @@ async fn probe_credentials(
                         .get("rclone_bridge")
                         .and_then(|m| m.get("bin"))
                         .cloned()
-                })
-                .unwrap_or_else(|| "rclone".into());
+                });
+            let bin = rclone_bin(bin).to_string_lossy().into_owned();
             let bucket = data
                 .adapters
                 .get("google_drive")
@@ -958,8 +977,7 @@ async fn probe_credentials(
             ) else {
                 return probe_missing("The remote name is required for a test.");
             };
-            cfg.rclone_bin =
-                std::path::PathBuf::from(draft("bin").unwrap_or_else(|| "rclone".into()));
+            cfg.rclone_bin = rclone_bin(draft("bin"));
             cfg.bucket = draft("bucket").unwrap_or_else(|| "ium".into());
             if let Some(extra) = draft("extra_env") {
                 for line in extra.lines() {
@@ -1464,6 +1482,13 @@ pub fn run() {
             // wins: real env vars are never overwritten) — the *_from_env
             // constructors behave identically, vault-configured machines
             // just get the same registry env-configured ones do (#69).
+            // #118: the bundled sidecar becomes the default bin BEFORE the
+            // vault fills the env gaps — only-if-unset, so real env vars and
+            // the vault's bin field always win. A bundled machine resolves
+            // next-to-executable even with an empty vault.
+            if rclonebin::install_rclone_env() {
+                tracing::info!("rclone: the bundled sidecar is the default bin");
+            }
             let injected = vault::Vault::open(&vault_dir(app.handle())).apply_env();
             if injected > 0 {
                 tracing::info!("vault: injected {injected} credential variables");

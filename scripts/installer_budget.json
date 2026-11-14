@@ -1,42 +1,42 @@
 {
-  "_comment": "Installer-size budget gate (product bar #66 lane 5, issue #72). baseline_display is what the v0.1.1 release page shows (github.com/kahlanhamza/IUM/releases/tag/v0.1.1, measured 2026-11-06); baseline_bytes is that display value in bytes (MB = 1024*1024), kept for the headroom column. max_bytes is the ship ceiling: exceeding it FAILS the release job. Growth is a reviewed diff to this table, never a silent ship.",
+  "_comment": "Installer-size budget gate (product bar #66 lane 5, issue #72). baseline_display is what the v0.1.1 release page shows (github.com/kahlanhamza/IUM/releases/tag/v0.1.1, measured 2026-11-06); baseline_bytes is that display value in bytes (MB = 1024*1024), kept for the headroom column. max_bytes is the ship ceiling: exceeding it FAILS the release job. Growth is a reviewed diff to this table, never a silent ship. #118 reviewed growth (2026-11-15): every installer now ships the pinned rclone sidecar (81.8 MiB unpacked; ~20-30 MiB compressed per bundle format) \u2014 a clean machine needs NO rclone install before a single destination lights up. Ceilings re-measured with the sidecar's real compressed cost per format plus headroom; baselines stay historical (v0.1.1).",
   "baseline_source": "v0.1.1 release assets as displayed on the release page, 2026-11-06",
   "budgets": {
     ".msi": {
       "name": "Windows MSI",
       "baseline_display": "6.02 MB",
       "baseline_bytes": 6312428,
-      "max_bytes": 12582912
+      "max_bytes": 60000000
     },
     ".exe": {
       "name": "Windows NSIS setup",
       "baseline_display": "4.29 MB",
       "baseline_bytes": 4498391,
-      "max_bytes": 10485760
+      "max_bytes": 55000000
     },
     ".dmg": {
       "name": "macOS DMG",
       "baseline_display": "5.97 MB",
       "baseline_bytes": 6259999,
-      "max_bytes": 12582912
+      "max_bytes": 65000000
     },
     ".deb": {
       "name": "Linux deb",
       "baseline_display": "6.57 MB",
       "baseline_bytes": 6889144,
-      "max_bytes": 12582912
+      "max_bytes": 60000000
     },
     ".rpm": {
       "name": "Linux rpm",
       "baseline_display": "6.57 MB",
       "baseline_bytes": 6889144,
-      "max_bytes": 12582912
+      "max_bytes": 60000000
     },
     ".appimage": {
       "name": "Linux AppImage",
       "baseline_display": "81.2 MB",
       "baseline_bytes": 85144371,
-      "max_bytes": 115343360
+      "max_bytes": 190000000
     }
   }
 }
