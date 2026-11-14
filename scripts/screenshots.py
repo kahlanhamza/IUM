@@ -25,7 +25,7 @@ OUT = "/home/z/my-project/download/screenshots"
 DOCS = "/home/z/my-project/docs/screenshots"
 os.makedirs(OUT, exist_ok=True)
 
-ENGINE_SENTENCE = "ium-core v0.2.4 ready — adapters: http_one_shot, s3_multipart, tus"
+ENGINE_SENTENCE = "ium-core v0.2.5 ready — adapters: http_one_shot, s3_multipart, tus"
 
 # The OFFICIAL Tauri mock harness (node_modules/@tauri-apps/api/mocks.cjs),
 # inlined into the page by the bootstrap below. Vendor protocol, not a
@@ -138,6 +138,15 @@ SHIM = r"""
 
   const schema = [
     {
+      adapter: "s3_multipart", label: "S3 multipart", note: "Any S3-compatible storage. The create form's provider picker derives the destination URL for known providers (Backblaze B2, Cloudflare R2, Wasabi…). Paste a bucket URL below (e.g. https://s3.us-west-004.backblazeb2.com/my-bucket) to make the Test button check your keys against it — the probe opens and aborts its own session on an ium-probe/ key, so it never touches your objects.",
+      fields: [
+        { name: "access_key", label: "Access key", secret: true, required: true },
+        { name: "secret_key", label: "Secret key", secret: true, required: true },
+        { name: "region", label: "Region", secret: false, required: true },
+        { name: "endpoint", label: "Bucket URL (the Test button's target)", secret: false, required: false },
+      ],
+    },
+    {
       adapter: "mega", label: "MEGA (rclone bridge)", note: "Your MEGA login — the engine bridges through rclone.",
       fields: [
         { name: "user", label: "Email", secret: false, required: true },
@@ -154,6 +163,12 @@ SHIM = r"""
     },
   ];
   const views = {
+    s3_multipart: {
+      access_key: { label: "Access key", secret: true, required: true, present: false, value: null },
+      secret_key: { label: "Secret key", secret: true, required: true, present: false, value: null },
+      region: { label: "Region", secret: false, required: true, present: false, value: null },
+      endpoint: { label: "Bucket URL (the Test button's target)", secret: false, required: false, present: false, value: null },
+    },
     mega: {
       user: { label: "Email", secret: false, required: true, present: true, value: "you@example.com" },
       pass: { label: "Password", secret: true, required: true, present: true, value: null },
@@ -171,7 +186,7 @@ SHIM = r"""
     args = args || {};
     switch (cmd) {
       case "engine_status":
-        return "ium-core v0.2.4 ready — adapters: http_one_shot, s3_multipart, tus";
+        return "ium-core v0.2.5 ready — adapters: http_one_shot, s3_multipart, tus";
       case "list_adapters":
         return ["http_oneshot", "s3_multipart", "tus", "feishu_drive", "terabox", "mega"];
       case "list_jobs":
@@ -314,6 +329,20 @@ def main() -> None:
         )
         pg.wait_for_timeout(350)
         pg.screenshot(path=f"{OUT}/05-settings-credentials.png")
+
+        # the CONNECT SHEET (#113/#116 re-shoot): the surface the owner's
+        # v0.2.4 screenshot showed broken — labels painted over each other.
+        # The fixed sheet is the release's headline: one field per row,
+        # labels that wrap. Scroll back up, open the S3 lane's sheet.
+        pg.eval_on_selector(
+            'div[aria-label^="Settings"]',
+            "el => el.scrollTo(0, 0)",
+        )
+        pg.wait_for_timeout(300)
+        pg.click('button[aria-label="Connect S3 multipart"]')
+        pg.wait_for_selector('button[aria-label="Save and connect S3 multipart"]', timeout=8000)
+        pg.wait_for_timeout(450)
+        pg.screenshot(path=f"{OUT}/07-connect-sheet-s3.png")
         ctx.close()
 
         # ---------------------------------------------------- light pass

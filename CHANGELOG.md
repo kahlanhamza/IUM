@@ -10,6 +10,30 @@ prose. An entry without verifiable issue numbers does not belong here.
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-11-14
+
+### Fixed
+- **The connect sheets render one field per row** (#113): the settings
+  sheets no longer borrow the create form's four-column grid, field labels
+  wrap instead of painting across their neighbors, and the S3 endpoint
+  label is one line of copy (its example URL lives in the note above the
+  field). The sheet that shipped broken in the owner's screenshot now
+  reads the way Google's and Microsoft's own credential forms do — one
+  honest row per field.
+- **The settings dialog and command palette stay opaque under Windows 11
+  Mica** (#114): floating surfaces consume a solid layer token the
+  material program can never override, so the dialog no longer prints the
+  app content and wallpaper through itself.
+- **Connect no longer opens a console window or a broken sign-in page**
+  (#115): the browser handoff on Windows is the OS shell's own opener (no
+  `cmd`, so the OAuth URL survives intact — the scope and PKCE Microsoft
+  was refusing to see are back in the request), and every background
+  helper spawn hides its console window.
+- **First-launch reliability** (#112): a cold first boot can no longer
+  strand the app on "engine unreachable" — the interface retries the
+  engine within the boot window and recovers on its own; a slow 30-second
+  cold start reaches a working window without a restart.
+
 ## [0.2.4] — 2026-11-14
 
 ### Added

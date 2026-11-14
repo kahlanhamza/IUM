@@ -40,6 +40,7 @@ inspector and a centered settings modal.
 | ![The main window — toolbar, library sidebar, intake, the dense upload list, the status bar](docs/screenshots/01-main-window.png) | ![The intake filled — a stat'ed file, destination, protocol](docs/screenshots/02-create-upload-filled.png) |
 | ![The docked inspector — the chunk grid, the job summary, the live journal](docs/screenshots/03-inspector-chunks.png) | ![Settings — the centered modal: Appearance, Notifications and Speed lead, the Privacy stance follows](docs/screenshots/04-settings-privacy.png) |
 | ![Settings — the credentials vault and About](docs/screenshots/05-settings-credentials.png) | ![The light scheme — the logo ink on paper white](docs/screenshots/06-main-window-light.png) |
+| ![The S3 connect sheet — one field per row, labels that wrap](docs/screenshots/07-connect-sheet-s3.png) | |
 
 Every progress percent you see is journal truth — a paused, done or failed row shows
 what the journal confirmed, not a guess. A one-shot destination says **One-shot ⚠**

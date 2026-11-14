@@ -42,7 +42,7 @@ vi.mock("./api", () => ({
           new Error("state not managed for field 'engine' on command 'engine_status'"),
         );
       }
-      return Promise.resolve("ium-core v0.2.4 ready — adapters: http_one_shot, s3_multipart, tus");
+      return Promise.resolve("ium-core v0.2.5 ready — adapters: http_one_shot, s3_multipart, tus");
     },
     listJobs: () => {
       state.listJobsCalls++;

@@ -1,7 +1,7 @@
 /**
  * The README gate (#77): the README ships with receipts — the committed
  * product screenshots are embedded, and the roadmap section reflects the
- * tree's real state (v0.2.4, product-bar lanes closed, the telemetry
+ * tree's real state (v0.2.5, product-bar lanes closed, the telemetry
  * stance on record), not a stale M0–M7 / v0.1.0 snapshot.
  */
 import { readFileSync } from "node:fs";
@@ -18,6 +18,7 @@ const SHOTS = [
   "docs/screenshots/04-settings-privacy.png",
   "docs/screenshots/05-settings-credentials.png",
   "docs/screenshots/06-main-window-light.png",
+  "docs/screenshots/07-connect-sheet-s3.png",
 ];
 
 describe("the README ships with receipts (#77)", () => {
