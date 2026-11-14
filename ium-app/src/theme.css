@@ -60,9 +60,14 @@
 
 /* ---------------------------------------------------------------- tokens */
 :root {
-  /* surfaces — light chrome, white content */
+  /* surfaces — light chrome, white content. --surface-solid is the OPAQUE
+     floating-surface layer (#114): the material program may translucify
+     --bg and --surface (window chrome), but a surface a user reads text on
+     — the settings modal, the command palette — never goes see-through.
+     The mica blocks override --bg/--surface and NEVER this token. */
   --bg: #f5f6f8;
   --surface: #ffffff;
+  --surface-solid: #ffffff;
   --surface-2: #eef0f4;
   --surface-3: #e4e8ee;
 
@@ -124,6 +129,7 @@
   /* surfaces — the dark chrome, the panel above it */
   --bg: #0b101a;
   --surface: #0e1521;
+  --surface-solid: #0e1521;
   --surface-2: #131c2c;
   --surface-3: #18233a;
 
@@ -932,7 +938,11 @@ button.sitem:hover {
   max-width: min(92vw, 640px);
   max-height: min(78vh, 720px);
   overflow-y: auto;
-  background: var(--surface);
+  /* #114: the OPAQUE layer — under Windows 11 Mica the --surface token
+     itself goes translucent (0.82-0.84 alpha) and the dialog printed the
+     app + wallpaper through itself. Floating surfaces consume the solid
+     token, which no material block ever overrides. */
+  background: var(--surface-solid, var(--surface));
   border: 1px solid var(--border-strong);
   border-radius: var(--r-card);
   box-shadow: var(--shadow-3);
@@ -974,7 +984,8 @@ button.sitem:hover {
   transform: translateX(-50%);
   width: 640px;
   max-width: min(92vw, 640px);
-  background: var(--surface);
+  /* #114: the OPAQUE floating layer (same contract as .modal). */
+  background: var(--surface-solid, var(--surface));
   border: 1px solid var(--border-strong);
   border-radius: var(--r-card);
   box-shadow: var(--shadow-3);

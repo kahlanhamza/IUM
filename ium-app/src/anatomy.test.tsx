@@ -144,6 +144,32 @@ describe("the anatomy metrics are the mockup's (#88, from the real stylesheet)",
   });
 });
 
+describe("floating surfaces stay opaque under every material (#114)", () => {
+  it("the settings modal consumes --surface-solid, not the material-translucent --surface", () => {
+    expect(block(".modal")).toMatch(/background:\s*var\(--surface-solid/);
+  });
+
+  it("the command palette consumes --surface-solid too", () => {
+    expect(block(".cmdk")).toMatch(/background:\s*var\(--surface-solid/);
+  });
+
+  it("--surface-solid exists and is opaque in both themes", () => {
+    expect(CSS).toMatch(/--surface-solid:\s*#ffffff/);
+    expect(CSS).toMatch(/--surface-solid:\s*#0e1521/);
+  });
+
+  it("the Mica blocks never override --surface-solid — chrome may go translucent, dialogs may not", () => {
+    expect(CSS.indexOf('[data-material="mica"]'), "the mica material block exists").toBeGreaterThanOrEqual(0);
+    for (const m of CSS.matchAll(/\[data-material="mica"][^{]*\{/g)) {
+      const end = CSS.indexOf("}", m.index);
+      const body = CSS.slice(m.index, end);
+      expect(body, "mica must not touch the solid dialog surface").not.toMatch(
+        /--surface-solid/,
+      );
+    }
+  });
+});
+
 describe("the anatomy in the rendered shell (#88)", () => {
   it("the toolbar carries NO brand block — the ladder's Chrome rung, enforced in the component", async () => {
     const { default: App } = await import("./App");
