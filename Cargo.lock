@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "foreign-types-macros"
-version = "0.2.5"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea5190182e6915eb873ddbc16e23b711b6eb1f9c00a0d0a3a91b5f6228475225"
 dependencies = [
