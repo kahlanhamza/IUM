@@ -429,9 +429,11 @@ async fn authorize_oauth(
         .unwrap_or_else(|| "rclone".to_string());
     // The spawn+wait blocks for as long as the user takes in their browser
     // — it runs on the blocking pool, never on a runtime worker.
+    // #115: CREATE_NO_WINDOW on Windows — rclone is console-subsystem and
+    // would otherwise open a visible console in front of the user.
     let backend_for_spawn = backend.clone();
     let run = tauri::async_runtime::spawn_blocking(move || {
-        std::process::Command::new(&bin)
+        console_child(&bin)
             .arg("authorize")
             .arg(&backend_for_spawn)
             .output()
@@ -488,18 +490,44 @@ async fn authorize_oauth(
 
 /// Open the user's default browser at `url` — the provider owns the flow
 /// (the OS opener, per-OS one-liner; no extra shell dependency).
+///
+/// #115: the Windows handoff is `explorer.exe` — a GUI binary. The URL
+/// travels as ONE argv (no shell parsing: every `&` in the authorize URL
+/// stays data) and no console window can exist. The previous `cmd /c
+/// start ""` handoff was the release blocker: the authorize URL carries
+/// no space (the scope rides `%20`), std does not quote it, cmd.exe runs
+/// every `&` as a command separator — the browser got
+/// `authorize?client_id=…` alone (the AADSTS900144 page the owner
+/// screenshotted) plus a console window in the user's face.
 fn open_in_browser(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let spawn = std::process::Command::new("open").arg(url).spawn();
     #[cfg(target_os = "windows")]
-    let spawn = std::process::Command::new("cmd")
-        .args(["/c", "start", "", url])
-        .spawn();
+    let spawn = {
+        let (program, arg) = auth::windows_browser_command(url);
+        std::process::Command::new(program).arg(arg).spawn()
+    };
     #[cfg(all(unix, not(target_os = "macos")))]
     let spawn = std::process::Command::new("xdg-open").arg(url).spawn();
     spawn
         .map(|_| ())
         .map_err(|e| format!("could not open the browser at {url} ({e})"))
+}
+
+/// Every Windows spawn from the GUI process carries `CREATE_NO_WINDOW`
+/// (#115): a console-subsystem child (rclone, `cmd /c ver`) otherwise
+/// opens a VISIBLE console window in front of the user. No-op elsewhere.
+/// stdio capture is unaffected — piping suppresses the OUTPUT, never the
+/// window; the flag suppresses the window.
+fn console_child(program: &str) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(auth::CREATE_NO_WINDOW);
+    }
+    cmd
 }
 
 /// The loopback redirect server (#85): ONE `GET /?code=…&state=…`, the
@@ -1057,7 +1085,9 @@ fn parse_windows_build(ver: &str) -> u32 {
 
 #[cfg(target_os = "windows")]
 fn real_windows_build() -> u32 {
-    std::process::Command::new("cmd")
+    // #115: CREATE_NO_WINDOW — this probe runs at every boot and the
+    // visible console flash it produced was the owner's other complaint.
+    console_child("cmd")
         .args(["/c", "ver"])
         .output()
         .ok()

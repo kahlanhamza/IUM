@@ -121,6 +121,32 @@ pub fn merge_env_lines(existing: &str, add: &[String]) -> String {
         .join("\n")
 }
 
+/// The Windows browser handoff (#115): `explorer.exe`, a GUI binary. The
+/// URL travels as ONE argv — no shell parsing (every `&` stays DATA), and
+/// no console window can exist. The `cmd /c start "" <url>` handoff was
+/// the release blocker: the authorize URL carries no space (the scope
+/// rides `%20`), std therefore does not quote it, and cmd.exe executes
+/// every `&` as a command separator — the browser received
+/// `authorize?client_id=…` alone, the literal `AADSTS900144: The request
+/// body must contain the following parameter: 'scope'.` page (wire-fact
+/// reproduced 2026-11-14), plus a console window in the user's face.
+#[cfg_attr(all(not(target_os = "windows"), not(test)), allow(dead_code))]
+pub const WINDOWS_BROWSER: &str = "explorer.exe";
+
+/// The one Windows browser handoff: program + the URL byte-verbatim.
+#[cfg_attr(all(not(target_os = "windows"), not(test)), allow(dead_code))]
+pub fn windows_browser_command(url: &str) -> (&'static str, String) {
+    (WINDOWS_BROWSER, url.to_string())
+}
+
+/// `CREATE_NO_WINDOW` (0x08000000): every Windows spawn from the GUI
+/// process carries it. A console-subsystem child (rclone, `cmd /c ver`)
+/// otherwise opens a VISIBLE console window in front of the user — the
+/// owner's second complaint. std's `CommandExt` and tokio's
+/// `Command::creation_flags` take the same constant.
+#[cfg_attr(all(not(target_os = "windows"), not(test)), allow(dead_code))]
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +286,26 @@ Paste the following into your remote machine --->
     fn merge_drops_blank_lines_and_keyless_junk() {
         let merged = merge_env_lines("\nnot-a-pair\nKEEP=1\n", &[]);
         assert_eq!(merged, "KEEP=1");
+    }
+
+    /// #115: the Windows browser handoff is a GUI binary and the URL is
+    /// ONE argv — no shell between us and the browser, so every `&` in the
+    /// authorize URL stays data. The full OneDrive authorize URL (the real
+    /// shape: client_id, redirect_uri, response_type, state, PKCE, the
+    /// %-encoded scope) must survive byte-verbatim.
+    #[test]
+    fn the_windows_browser_handoff_never_touches_a_shell() {
+        let url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=c3a906be-d85b-4409-b3cd-bc152ae58550&redirect_uri=http%3A%2F%2Flocalhost%3A8739&response_type=code&state=st&code_challenge=ch&code_challenge_method=S256&scope=offline_access%20Files.ReadWrite%20User.Read";
+        let (program, arg) = windows_browser_command(url);
+        assert_eq!(program, "explorer.exe", "a GUI binary — no console exists");
+        assert_ne!(program, "cmd", "cmd parses & as a command separator");
+        assert_eq!(arg, url, "the URL travels byte-verbatim, never re-quoted");
+    }
+
+    /// #115: the spawn contract constant is the Win32 CREATE_NO_WINDOW —
+    /// every console-subsystem child from the GUI process hides its console.
+    #[test]
+    fn create_no_window_is_the_win32_contract() {
+        assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);
     }
 }

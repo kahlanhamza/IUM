@@ -52,6 +52,55 @@ use crate::adapter_s3::{S3MultipartAdapter, S3MultipartConfig};
 use crate::chunk::Lease;
 use crate::JobSpec;
 
+/// The Win32 `CREATE_NO_WINDOW` flag (0x08000000). The shell is a GUI
+/// process; rclone is a console-subsystem binary — a GUI parent spawning a
+/// console child gets a VISIBLE console window unless this flag rides the
+/// spawn (#115). std's `CommandExt::creation_flags` and tokio's
+/// `Command::creation_flags` take the same constant. Only the Windows
+/// branches of [`QuietSpawn`] consume it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// The #115 spawn contract, one call per site: on Windows every child from
+/// the GUI shell carries `CREATE_NO_WINDOW` (no console window may appear
+/// in front of the user); elsewhere a no-op. stdio capture is unaffected —
+/// piping suppresses the OUTPUT, never the window; the flag suppresses the
+/// window. Every spawn site in this module (obscure, serve, mkdir,
+/// --version, purge) must go through it — that is the audit's whole list.
+trait QuietSpawn {
+    /// Apply the per-OS window policy; returns self for builder chaining.
+    fn quiet(&mut self) -> &mut Self;
+}
+
+impl QuietSpawn for tokio::process::Command {
+    fn quiet(&mut self) -> &mut Self {
+        #[cfg(target_os = "windows")]
+        {
+            self.creation_flags(CREATE_NO_WINDOW);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = self;
+        }
+        self
+    }
+}
+
+impl QuietSpawn for std::process::Command {
+    fn quiet(&mut self) -> &mut Self {
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            self.creation_flags(CREATE_NO_WINDOW);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = self;
+        }
+        self
+    }
+}
+
 /// The bridge's URL scheme — `rclone-bridge://<key>` (the key is required:
 /// the journaled endpoint must be self-contained for reattach).
 pub const BRIDGE_SCHEME: &str = "rclone-bridge://";
@@ -398,6 +447,7 @@ impl RcloneBridgeConfig {
     /// config from DRAFTS (never env) and needs the same preprocessing.
     pub async fn rclone_obscure(bin: &PathBuf, pass: &str) -> Result<String, AdapterError> {
         let out = tokio::process::Command::new(bin)
+            .quiet()
             .args(["obscure", pass])
             .output()
             .await
@@ -552,6 +602,7 @@ impl RcloneBridgeAdapter {
 
     async fn spawn_serve(cfg: &RcloneBridgeConfig) -> Result<Child, AdapterError> {
         tokio::process::Command::new(&cfg.rclone_bin)
+            .quiet()
             .args(["serve", "s3", &cfg.remote, "--addr", "127.0.0.1:0"])
             .envs(cfg.extra_env.iter().cloned())
             .stdout(std::process::Stdio::null())
@@ -636,6 +687,7 @@ impl RcloneBridgeAdapter {
     async fn ensure_bucket(cfg: &RcloneBridgeConfig) -> Result<(), AdapterError> {
         let target = format!("{}/{}", cfg.remote.trim_end_matches('/'), cfg.bucket);
         let out = tokio::process::Command::new(&cfg.rclone_bin)
+            .quiet()
             .args(["mkdir", &target])
             .envs(cfg.extra_env.iter().cloned())
             .output()
@@ -752,6 +804,19 @@ mod tests {
     use std::io::Write;
     use std::path::Path;
 
+    /// #115: the spawn contract. The constant is the Win32
+    /// CREATE_NO_WINDOW; both `Command` types chain through `.quiet()` (the
+    /// compile proof that every spawn site CAN carry the flag). The visual
+    /// half — no console window — is the flag's own OS contract on Windows.
+    #[test]
+    fn the_spawn_contract_pins_create_no_window_and_both_command_types() {
+        assert_eq!(CREATE_NO_WINDOW, 0x0800_0000);
+        let mut t = tokio::process::Command::new("true");
+        t.quiet().arg("--version");
+        let mut s = std::process::Command::new("true");
+        s.quiet().arg("--version");
+    }
+
     #[test]
     fn listen_line_variants() {
         // W11 — v1.75.2's exact render, bracket glitch included.
@@ -829,7 +894,11 @@ mod tests {
         }
         let bin = std::env::var("IUM_RCLONE_BIN").unwrap_or_else(|_| "rclone".into());
         let bin = PathBuf::from(bin);
-        match std::process::Command::new(&bin).arg("--version").output() {
+        match std::process::Command::new(&bin)
+            .quiet()
+            .arg("--version")
+            .output()
+        {
             Ok(o) if o.status.success() => Some(bin),
             _ => None,
         }
@@ -1055,6 +1124,7 @@ mod tests {
         // a crashed round must not leave them on the owner's account).
         let remote_root = cfg.remote.trim_end_matches('/').to_string();
         let out = tokio::process::Command::new(&cfg.rclone_bin)
+            .quiet()
             .args(["purge", &format!("{remote_root}/{bucket}")])
             .envs(cfg.extra_env.iter().cloned())
             .output()
