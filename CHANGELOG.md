@@ -10,6 +10,37 @@ prose. An entry without verifiable issue numbers does not belong here.
 
 ## [Unreleased]
 
+## [0.2.6] — 2026-11-15
+
+### Fixed
+- **Connect actually opens the browser now** (#117): clicking Connect on
+  Dropbox, OneDrive, YouTube or Google Drive no longer opens the
+  Documents folder. The previous handoff handed the sign-in URL to
+  Windows Explorer, which on Windows 11 does not forward URLs to the
+  browser — it opens the Documents folder and the sign-in silently dies.
+  The handoff is now the OS's own opener (the same call every
+  browser-launcher uses): the URL reaches the real sign-in page intact,
+  still with no console window.
+- **Every destination works on a clean machine — the app no longer
+  requires installing rclone** (#118): the MEGA, WebDAV, Google Drive and
+  advanced bridge lanes (plus the pCloud/Box/Drive browser sign-ins) run
+  on a helper that used to be assumed present on the machine — and was
+  not. A fresh install therefore showed "nothing is working": MEGA
+  credentials saved but never lit up, tests refused, lanes never
+  appeared. Every installer now bundles the helper; connecting MEGA with
+  just an email and a password now works out of the box.
+- **The upload form shows every destination — and the S3 presets are
+  finally reachable** (#119): the destination dropdown used to list only
+  already-connected lanes, so a fresh install read "the product can
+  upload nowhere" — no providers, no presets. The dropdown now lists the
+  full supported catalog: connected destinations first, the rest honestly
+  marked "not connected yet" with an Open Settings shortcut; picking
+  S3 surfaces the ready-to-use provider presets (Backblaze B2, Cloudflare
+  R2, Wasabi, Scaleway, DigitalOcean Spaces, Filebase, MinIO) that guide
+  the guided bucket-URL flow.
+- The MEGA settings row is labeled simply "MEGA" — the bundled helper it
+  rides is an implementation detail, not product copy.
+
 ## [0.2.5] — 2026-11-14
 
 ### Fixed
