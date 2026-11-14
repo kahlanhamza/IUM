@@ -120,14 +120,18 @@ def wait_and_rehearse() -> None:
     interval = deadline = None
     if SESSF.exists():
         sess = json.loads(SESSF.read_text())
+        device_code, uri, code = sess["device_code"], sess["verification_uri"], sess["user_code"]
+        interval = sess["interval"]
+        # grace: the owner may have authorized seconds before the nominal
+        # window closed — the SERVER's verdict is the truth, so always poll
+        # (guaranteed ~30s of attempts past the local deadline)
+        deadline = max(sess["deadline"], time.time() + 30)
         if sess["deadline"] > time.time():
-            device_code, uri, code = sess["device_code"], sess["verification_uri"], sess["user_code"]
-            interval, deadline = sess["interval"], sess["deadline"]
             print(f"RESUMED device session: open {uri} and type {code} "
-                  f"(window ends in {int(deadline - time.time())}s)")
+                  f"(window ends in {int(sess['deadline'] - time.time())}s)")
         else:
-            print("stale device session — reissuing a fresh one")
-            SESSF.unlink()
+            print(f"RESUMED device session past nominal window — polling anyway, "
+                  f"the server decides (code {code})")
     if device_code is None:
         st, resp = post_form(f"{AUTH}/devicecode", {"client_id": CLIENT_ID, "scope": SCOPE})
         if st != 200:
