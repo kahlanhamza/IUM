@@ -491,24 +491,37 @@ async fn authorize_oauth(
 /// Open the user's default browser at `url` — the provider owns the flow
 /// (the OS opener, per-OS one-liner; no extra shell dependency).
 ///
-/// #115: the Windows handoff is `explorer.exe` — a GUI binary. The URL
-/// travels as ONE argv (no shell parsing: every `&` in the authorize URL
-/// stays data) and no console window can exist. The previous `cmd /c
-/// start ""` handoff was the release blocker: the authorize URL carries
-/// no space (the scope rides `%20`), std does not quote it, cmd.exe runs
-/// every `&` as a command separator — the browser got
-/// `authorize?client_id=…` alone (the AADSTS900144 page the owner
-/// screenshotted) plus a console window in the user's face.
+/// #117: the Windows handoff is `ShellExecuteW` ("open" verb) — the OS's
+/// own opener. The two previous handoffs each failed a different way:
+/// `cmd /c start` split the authorize URL at every `&` (#115's blocker,
+/// the AADSTS900144 page) and `explorer.exe` — a GUI binary, one-argv —
+/// turns out NOT to forward URL protocol associations on Windows 11: it
+/// treats the argument as a path and opens the user's **Documents**
+/// folder instead (the owner's wire report that this issue closes). The
+/// shell-API handoff honors the protocol association, passes the URL as
+/// one wide string, and no console window can exist. The rundll32
+/// fallback (also GUI-subsystem, also one-argv) catches the rare
+/// ShellExecuteW refusal; both ride under #115's CREATE_NO_WINDOW
+/// invariant where a spawn is involved at all.
 fn open_in_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        if auth::windows_shell_open(url).is_ok() {
+            return Ok(());
+        }
+        let (program, entry, arg) = auth::windows_fallback_command(url);
+        return console_child(program)
+            .arg(entry)
+            .arg(arg)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("could not open the browser at {url} ({e})"));
+    }
     #[cfg(target_os = "macos")]
     let spawn = std::process::Command::new("open").arg(url).spawn();
-    #[cfg(target_os = "windows")]
-    let spawn = {
-        let (program, arg) = auth::windows_browser_command(url);
-        std::process::Command::new(program).arg(arg).spawn()
-    };
     #[cfg(all(unix, not(target_os = "macos")))]
     let spawn = std::process::Command::new("xdg-open").arg(url).spawn();
+    #[cfg(not(target_os = "windows"))]
     spawn
         .map(|_| ())
         .map_err(|e| format!("could not open the browser at {url} ({e})"))

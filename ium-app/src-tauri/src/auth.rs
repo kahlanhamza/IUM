@@ -121,22 +121,76 @@ pub fn merge_env_lines(existing: &str, add: &[String]) -> String {
         .join("\n")
 }
 
-/// The Windows browser handoff (#115): `explorer.exe`, a GUI binary. The
-/// URL travels as ONE argv — no shell parsing (every `&` stays DATA), and
-/// no console window can exist. The `cmd /c start "" <url>` handoff was
-/// the release blocker: the authorize URL carries no space (the scope
-/// rides `%20`), std therefore does not quote it, and cmd.exe executes
-/// every `&` as a command separator — the browser received
-/// `authorize?client_id=…` alone, the literal `AADSTS900144: The request
-/// body must contain the following parameter: 'scope'.` page (wire-fact
-/// reproduced 2026-11-14), plus a console window in the user's face.
+/// The Windows browser handoff, third correction (#117). History is the
+/// design note: `cmd /c start` (the #115 blocker) split the URL at every
+/// `&` (no space → no quoting → the browser received `authorize?client_id=…`
+/// alone, the AADSTS900144 page, plus a console window in the user's face);
+/// `explorer.exe` (#115's fix) is a GUI binary and one-argv, but **Windows
+/// 11 does not forward a URL argument to the protocol handler** — explorer
+/// treats it as a path, resolves nothing, and falls back to opening the
+/// **Documents** folder (the owner's wire report 2026-11-15: "it opens
+/// Documents folder in my pc, that's all what it does"). The correction is
+/// the OS's own opener: `ShellExecuteW` with the `open` verb — the exact
+/// API `cmd /c start`, PowerShell `Start-Process` and every opener crate
+/// ultimately call. It honors URL protocol associations (http/https → the
+/// default browser), takes the URL as ONE wide string (no shell, no
+/// parsing, every `&` stays data), and is a GUI-path API — no console
+/// window can exist.
+///
+/// Win32 ShellExecuteW contract: the SE_ERR failure codes occupy 0..=32 —
+/// a return GREATER than this constant means the protocol handler launched.
 #[cfg_attr(all(not(target_os = "windows"), not(test)), allow(dead_code))]
-pub const WINDOWS_BROWSER: &str = "explorer.exe";
+pub const SHELL_OPEN_FAILURE_MAX: isize = 32;
 
-/// The one Windows browser handoff: program + the URL byte-verbatim.
+/// The one Windows browser handoff: the OS's own opener. `Err` carries the
+/// refusal only when ShellExecuteW itself failed — the caller's fallback
+/// ([`windows_fallback_command`]) takes over from there.
+#[cfg(target_os = "windows")]
+pub fn windows_shell_open(url: &str) -> Result<(), &'static str> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(
+            hwnd: isize,
+            verb: *const u16,
+            file: *const u16,
+            params: *const u16,
+            dir: *const u16,
+            show: i32,
+        ) -> isize;
+    }
+    let wide: Vec<u16> = std::ffi::OsStr::new(url).encode_wide().chain([0]).collect();
+    let verb: Vec<u16> = std::ffi::OsStr::new("open")
+        .encode_wide()
+        .chain([0])
+        .collect();
+    let r = unsafe {
+        ShellExecuteW(
+            0,
+            verb.as_ptr(),
+            wide.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1, // SW_SHOWNORMAL — the browser's own window placement
+        )
+    };
+    if r > SHELL_OPEN_FAILURE_MAX {
+        Ok(())
+    } else {
+        Err("ShellExecuteW refused the URL handoff")
+    }
+}
+
+/// The Windows fallback opener (#117), for the rare refusal of
+/// [`windows_shell_open`]: `rundll32 url.dll,FileProtocolHandler <url>` —
+/// the battle-tested mechanism rclone itself used on Windows for years.
+/// rundll32 is a GUI-subsystem binary (no console window), it drives the
+/// SAME protocol association, and it hands its command-line tail to the
+/// entry point as ONE LPWSTR — the URL arrives byte-verbatim, never
+/// re-parsed, every `&` still data.
 #[cfg_attr(all(not(target_os = "windows"), not(test)), allow(dead_code))]
-pub fn windows_browser_command(url: &str) -> (&'static str, String) {
-    (WINDOWS_BROWSER, url.to_string())
+pub fn windows_fallback_command(url: &str) -> (&'static str, &'static str, String) {
+    ("rundll32", "url.dll,FileProtocolHandler", url.to_string())
 }
 
 /// `CREATE_NO_WINDOW` (0x08000000): every Windows spawn from the GUI
@@ -288,18 +342,35 @@ Paste the following into your remote machine --->
         assert_eq!(merged, "KEEP=1");
     }
 
-    /// #115: the Windows browser handoff is a GUI binary and the URL is
-    /// ONE argv — no shell between us and the browser, so every `&` in the
-    /// authorize URL stays data. The full OneDrive authorize URL (the real
-    /// shape: client_id, redirect_uri, response_type, state, PKCE, the
-    /// %-encoded scope) must survive byte-verbatim.
+    /// #117: the Windows fallback handoff is rundll32's FileProtocolHandler —
+    /// a GUI-subsystem binary; the URL is ONE argv, byte-verbatim, and no
+    /// shell ever parses it (rundll32 hands its command-line tail to the
+    /// entry point as one LPWSTR). The full OneDrive authorize URL (the
+    /// real shape: client_id, redirect_uri, response_type, state, PKCE,
+    /// the %-encoded scope) must survive byte-verbatim.
     #[test]
-    fn the_windows_browser_handoff_never_touches_a_shell() {
+    fn the_windows_fallback_handoff_is_rundll32_and_the_url_is_byte_verbatim() {
         let url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=c3a906be-d85b-4409-b3cd-bc152ae58550&redirect_uri=http%3A%2F%2Flocalhost%3A8739&response_type=code&state=st&code_challenge=ch&code_challenge_method=S256&scope=offline_access%20Files.ReadWrite%20User.Read";
-        let (program, arg) = windows_browser_command(url);
-        assert_eq!(program, "explorer.exe", "a GUI binary — no console exists");
+        let (program, entry, arg) = windows_fallback_command(url);
+        assert_eq!(
+            program, "rundll32",
+            "a GUI-subsystem binary — no console exists"
+        );
         assert_ne!(program, "cmd", "cmd parses & as a command separator");
+        assert_ne!(program, "explorer.exe", "explorer.exe does NOT forward URL protocol associations on Windows 11 — it falls back to the Documents folder (the owner's wire report)");
+        assert_eq!(
+            entry, "url.dll,FileProtocolHandler",
+            "the protocol-handler entry"
+        );
         assert_eq!(arg, url, "the URL travels byte-verbatim, never re-quoted");
+    }
+
+    /// #117: the ShellExecuteW success threshold is the Win32 contract —
+    /// the SE_ERR codes occupy 0..=32; anything above means the protocol
+    /// handler launched.
+    #[test]
+    fn shell_open_success_threshold_is_the_win32_contract() {
+        assert_eq!(SHELL_OPEN_FAILURE_MAX, 32);
     }
 
     /// #115: the spawn contract constant is the Win32 CREATE_NO_WINDOW —
