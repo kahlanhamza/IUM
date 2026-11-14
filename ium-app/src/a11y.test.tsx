@@ -76,7 +76,12 @@ const snapshot: JobSnapshot = {
 describe("a11y: the intake form (error state included — registry failure is deterministic in jsdom)", () => {
   it("has no axe violations", async () => {
     const { container } = render(
-      <CreateJobForm onCreated={() => {}} recents={["https://uploads.example.com/files"]} onError={() => {}} />,
+      <CreateJobForm
+        onCreated={() => {}}
+        recents={["https://uploads.example.com/files"]}
+        onError={() => {}}
+        onOpenSettings={() => {}}
+      />,
     );
     await expectAccessible(container as HTMLElement);
   });

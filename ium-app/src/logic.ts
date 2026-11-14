@@ -58,10 +58,59 @@ export const ADAPTER_LABELS: Record<string, string> = {
   webdav: "WebDAV",
   google_drive: "Google Drive",
   youtube: "YouTube",
+  dropbox: "Dropbox",
+  onedrive: "OneDrive",
 };
 
 export function friendlyAdapter(name: string): string {
   return ADAPTER_LABELS[name] ?? name;
+}
+
+/**
+ * The create form's Protocol dropdown (#119): the build's FULL capability
+ * surface, not just the live registry. The engine honestly registers a
+ * credential lane only once its credentials exist — but the create form is
+ * a product surface, and on a fresh machine that honesty read as "the
+ * product can upload nowhere": http/tus only, no S3 presets reachable,
+ * every destination invisible. The owner's own words: "there is no
+ * provider in the dropdown selector, nothing."
+ *
+ * Order: registered lanes FIRST (labels unchanged, option VALUES stay the
+ * registry names — the #65 e2e seam), then every supported-but-unregistered
+ * schema lane, honestly suffixed. A registered lane whose label matches a
+ * schema label never doubles (the feishu_drive registry name vs the
+ * `feishu` schema id are one product lane). The schema labels are the
+ * product's own copy ("S3 multipart", "MEGA", "Dropbox").
+ */
+export interface ProtocolOption {
+  value: string;
+  label: string;
+  connected: boolean;
+}
+
+export function protocolOptions(
+  registered: string[],
+  schema: { adapter: string; label: string }[],
+): ProtocolOption[] {
+  const out: ProtocolOption[] = [];
+  const seenValues = new Set<string>();
+  const seenLabels = new Set<string>();
+  for (const r of registered) {
+    const label = friendlyAdapter(r);
+    out.push({ value: r, label, connected: true });
+    seenValues.add(r);
+    seenLabels.add(label);
+  }
+  for (const s of schema) {
+    if (seenValues.has(s.adapter) || seenLabels.has(s.label)) continue;
+    out.push({
+      value: s.adapter,
+      label: `${s.label} — not connected yet`,
+      connected: false,
+    });
+    seenValues.add(s.adapter);
+  }
+  return out;
 }
 
 /**

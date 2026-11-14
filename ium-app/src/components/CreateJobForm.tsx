@@ -27,7 +27,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { api } from "../api";
 import { BOOT_BUDGET_MS, BOOT_INTERVAL_MS, retryUntil } from "../boot";
-import { friendlyAdapter, humanBytes } from "../logic";
+import { humanBytes, protocolOptions } from "../logic";
 import {
   buildEndpoint,
   guidedSlots,
@@ -45,10 +45,14 @@ export interface CreateJobFormProps {
   recents: string[];
   /** Surface async failures as toasts — silent failures are a dev-tool habit. */
   onError: (message: string) => void;
+  /** The not-connected door (#119): an unregistered lane's "Open Settings"
+   *  button — the honest "this destination exists, connect it first". */
+  onOpenSettings: () => void;
 }
 
-export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProps) {
+export function CreateJobForm({ onCreated, recents, onError, onOpenSettings }: CreateJobFormProps) {
   const [adapters, setAdapters] = useState<string[]>([]);
+  const [schema, setSchema] = useState<{ adapter: string; label: string }[]>([]);
   const [adapter, setAdapter] = useState("");
   const [sourcePath, setSourcePath] = useState("");
   const [sourceSize, setSourceSize] = useState<number | null>(null);
@@ -64,6 +68,12 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
   const [dragOver, setDragOver] = useState(false);
 
   const providerOptions = adapter ? providersForAdapter(adapter) : [];
+  // #119: the dropdown is the FULL capability surface — registered lanes
+  // first, every supported lane the schema knows after. A fresh machine
+  // sees every destination, honestly suffixed, instead of a list that
+  // reads "the product uploads nowhere".
+  const protocolList = protocolOptions(adapters, schema);
+  const laneConnected = adapter ? adapters.includes(adapter) : true;
   const preset: Provider | null =
     providerOptions.find((p) => p.id === providerId) ?? null;
   const guided = preset !== null && preset.id !== PROVIDER_CUSTOM;
@@ -111,6 +121,16 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
         onError(msg);
       }
     });
+    // The static schema rides its own fetch — it answers even on a fresh
+    // machine with an empty registry (the #119 capability surface).
+    api
+      .credentialsSchema()
+      .then((s) => {
+        if (alive) setSchema(s.map((a) => ({ adapter: a.adapter, label: a.label })));
+      })
+      .catch(() => {
+        /* schema absence: the dropdown falls back to the registry alone */
+      });
     return () => {
       alive = false;
     };
@@ -252,7 +272,9 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
     }
   }
 
-  const ready = Boolean(adapter && sourcePath && sourceSize !== null && endpoint.trim() && !busy);
+  const ready = Boolean(
+    adapter && laneConnected && sourcePath && sourceSize !== null && endpoint.trim() && !busy,
+  );
   const filled = Boolean(sourcePath && sourceSize !== null);
   // The copy table (#70): the human sentence + the hint, and the engine's
   // own words stay visible — the product never hides what the engine said.
@@ -422,15 +444,34 @@ export function CreateJobForm({ onCreated, recents, onError }: CreateJobFormProp
         )}
 
         <Field label="Protocol" htmlFor="upload-adapter">
-          {/* Option VALUES stay the engine registry names — the #65 seam. */}
+          {/* Option VALUES stay the engine registry names — the #65 seam.
+              #119: the list is the build's full capability surface — a
+              fresh machine sees every destination, honestly suffixed. */}
           <Select id="upload-adapter" value={adapter} onChange={(e) => setAdapter(e.target.value)}>
-            {adapters.map((a) => (
-              <option key={a} value={a}>
-                {friendlyAdapter(a)}
+            {protocolList.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
               </option>
             ))}
           </Select>
         </Field>
+
+        {adapter && !laneConnected && (
+          <div
+            className="provider-hint"
+            id="upload-adapter-hint"
+            role="note"
+            style={{ gridColumn: "1 / -1" }}
+          >
+            <div className="provider-note">
+              This destination isn't connected yet — add its credentials in
+              Settings and it becomes uploadable.
+            </div>
+            <Button variant="ghost" size="sm" onClick={onOpenSettings}>
+              Open Settings
+            </Button>
+          </div>
+        )}
 
         <Field label="Connections" htmlFor="upload-connections">
           <TextInput

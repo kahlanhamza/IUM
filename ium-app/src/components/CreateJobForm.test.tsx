@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const created = vi.fn();
+const openSettings = vi.fn();
 const createJob = vi.fn((_spec: unknown, _maxConns: number) =>
   Promise.resolve({
     id: "j1",
@@ -45,9 +46,27 @@ const listAdaptersState = vi.hoisted(() => {
   return state;
 });
 
+/** The capability surface (#119): the vault schema, swappable like the
+ *  registry — the fresh-machine contract drives it to the honest empty. */
+const schemaState = vi.hoisted(() => {
+  const state: { impl: () => Promise<{ adapter: string; label: string }[]> } = {
+    impl: () =>
+      Promise.resolve([
+        { adapter: "s3_multipart", label: "S3 multipart" },
+        { adapter: "terabox", label: "TeraBox" },
+        { adapter: "mega", label: "MEGA" },
+        { adapter: "webdav", label: "WebDAV" },
+        { adapter: "dropbox", label: "Dropbox" },
+        { adapter: "onedrive", label: "OneDrive" },
+      ]),
+  };
+  return state;
+});
+
 vi.mock("../api", () => ({
   api: {
     listAdapters: () => listAdaptersState.impl(),
+    credentialsSchema: () => schemaState.impl(),
     statFile: () => Promise.resolve(1024),
     createJob: (spec: unknown, maxConns: number) => createJob(spec, maxConns),
     credentialsSet: (adapter: string, fields: Record<string, string>) =>
@@ -69,13 +88,23 @@ vi.mock("../boot", async (importOriginal) => ({
 afterEach(() => {
   cleanup();
   created.mockClear();
+  openSettings.mockClear();
   createJob.mockClear();
   credentialsSet.mockClear();
   applyCredentials.mockClear();
+  listAdaptersState.impl = () =>
+    Promise.resolve(["http_oneshot", "s3_multipart", "tus"]);
 });
 
 function mount() {
-  render(<CreateJobForm onCreated={created} recents={[]} onError={() => {}} />);
+  render(
+    <CreateJobForm
+      onCreated={created}
+      recents={[]}
+      onError={() => {}}
+      onOpenSettings={openSettings}
+    />,
+  );
 }
 
 const CUSTOM = "Custom URL (paste any destination)";
@@ -230,9 +259,23 @@ describe("the destination picker", () => {
       return Promise.resolve(["http_oneshot", "s3_multipart", "tus"]);
     };
     const onErr = vi.fn();
-    render(<CreateJobForm onCreated={created} recents={[]} onError={onErr} />);
+    render(
+      <CreateJobForm
+        onCreated={created}
+        recents={[]}
+        onError={onErr}
+        onOpenSettings={openSettings}
+      />,
+    );
     const sel = document.getElementById("upload-adapter") as unknown as HTMLSelectElement;
-    await waitFor(() => expect(sel.options.length).toBe(3), { timeout: 3000 });
+    // #119: the fill is the full capability surface — the three REGISTERED
+    // values keep their order, the schema lanes follow them.
+    await waitFor(
+      () => expect(Array.from(sel.options).map((o) => o.value).slice(0, 3)).toEqual(
+        ["http_oneshot", "s3_multipart", "tus"],
+      ),
+      { timeout: 3000 },
+    );
     expect(onErr).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain("registry unavailable");
     expect(calls).toBe(3);
@@ -247,7 +290,14 @@ describe("the destination picker", () => {
       );
     };
     const onErr = vi.fn();
-    render(<CreateJobForm onCreated={created} recents={[]} onError={onErr} />);
+    render(
+      <CreateJobForm
+        onCreated={created}
+        recents={[]}
+        onError={onErr}
+        onOpenSettings={openSettings}
+      />,
+    );
     await waitFor(
       () => expect(document.body.textContent).toContain("registry unavailable"),
       { timeout: 3000 },
@@ -257,6 +307,76 @@ describe("the destination picker", () => {
     expect(calls).toBeGreaterThan(1); // it retried before giving up
   });
 });
+
+describe("the capability surface (#119): a fresh machine can SEE the destinations", () => {
+  /** The owner's fresh Windows machine: zero credential lanes registered —
+   *  the registry holds only the generic protocols. */
+  function mountFresh() {
+    listAdaptersState.impl = () => Promise.resolve(["http_oneshot", "tus"]);
+    render(
+      <CreateJobForm
+        onCreated={created}
+        recents={[]}
+        onError={() => {}}
+        onOpenSettings={openSettings}
+      />,
+    );
+  }
+
+  it("an unregistered lane is selectable, honestly suffixed", async () => {
+    mountFresh();
+    const sel = document.getElementById("upload-adapter") as unknown as HTMLSelectElement;
+    await waitFor(() => expect(sel.options.length).toBeGreaterThan(2));
+    const labels = Array.from(sel.options).map((o) => o.textContent);
+    expect(labels).toContain("S3 multipart — not connected yet");
+    expect(labels).toContain("MEGA — not connected yet");
+    expect(labels).toContain("Dropbox — not connected yet");
+    fireEvent.change(sel, { target: { value: "s3_multipart" } });
+    expect(sel.value).toBe("s3_multipart");
+  });
+
+  it("the S3 presets are reachable from an unregistered lane", async () => {
+    mountFresh();
+    const sel = document.getElementById("upload-adapter") as unknown as HTMLSelectElement;
+    await waitFor(() => expect(sel.options.length).toBeGreaterThan(2));
+    fireEvent.change(sel, { target: { value: "s3_multipart" } });
+    const provider = (await waitFor(() => screen.getByLabelText(/Provider/i))) as HTMLSelectElement;
+    const labels = Array.from(provider.options).map((o) => o.textContent);
+    expect(labels).toContain(B2);
+    expect(labels).toContain("Cloudflare R2");
+  });
+
+  it("submit stays disabled and the honest hint opens Settings", async () => {
+    mountFresh();
+    const sel = document.getElementById("upload-adapter") as unknown as HTMLSelectElement;
+    await waitFor(() => expect(sel.options.length).toBeGreaterThan(2));
+    fireEvent.change(sel, { target: { value: "mega" } });
+    fireEvent.change(byId("upload-path"), { target: { value: "/tmp/video.mp4" } });
+    const hint = await waitFor(() => {
+      const h = document.getElementById("upload-adapter-hint");
+      expect(h).not.toBeNull();
+      return h as HTMLElement;
+    });
+    expect(hint.textContent).toContain("isn\'t connected yet");
+    const submit = document.getElementById("upload-submit") as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    const door = screen.getByRole("button", { name: /Open Settings/i });
+    fireEvent.click(door);
+    expect(openSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("a registered lane is never suffixed — the connected surface is unchanged", async () => {
+    // The default (healthy-registry) mount: s3_multipart IS registered.
+    mount();
+    const sel = document.getElementById("upload-adapter") as unknown as HTMLSelectElement;
+    await waitFor(() => expect(sel.options.length).toBeGreaterThan(2));
+    const labels = Array.from(sel.options).map((o) => o.textContent);
+    expect(labels).toContain("S3 multipart");
+    expect(labels).not.toContain("S3 multipart — not connected yet");
+    expect(labels).not.toContain("HTTP one-shot — not connected yet");
+  });
+});
+
 
 async function firstOptionValue(select: HTMLSelectElement, label: string): Promise<string> {
   await waitFor(() => expect(select.options.length).toBeGreaterThan(0));

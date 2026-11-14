@@ -536,6 +536,7 @@ export default function App() {
             }}
             recents={recentEndpoints(jobs)}
             onError={onError}
+            onOpenSettings={() => setSettingsOpen(true)}
           />
 
           {views.length === 0 ? (

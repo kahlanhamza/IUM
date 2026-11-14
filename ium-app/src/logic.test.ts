@@ -9,6 +9,7 @@ import {
   friendlyAdapter,
   hostOf,
   percentDone,
+  protocolOptions,
   recentEndpoints,
   speedBetween,
 } from "./logic";
@@ -103,5 +104,57 @@ describe("progress math over journal snapshots (#16)", () => {
     expect(hostOf("https://bucket.example.com/s3/prefix")).toBe("bucket.example.com");
     expect(hostOf("http://localhost:1080/files")).toBe("localhost:1080");
     expect(hostOf("not a url")).toBe("not a url");
+  });
+});
+
+describe("protocolOptions (#119): the full capability surface", () => {
+  const SCHEMA = [
+    { adapter: "s3_multipart", label: "S3 multipart" },
+    { adapter: "mega", label: "MEGA" },
+    { adapter: "feishu", label: "Feishu Drive" },
+    { adapter: "dropbox", label: "Dropbox" },
+    { adapter: "onedrive", label: "OneDrive" },
+  ];
+
+  it("registered lanes come first, labels unchanged, values are the registry names", () => {
+    const out = protocolOptions(["http_oneshot", "tus"], SCHEMA);
+    expect(out.slice(0, 2).map((o) => o.value)).toEqual(["http_oneshot", "tus"]);
+    expect(out[0].label).toBe("HTTP one-shot");
+    expect(out[0].connected).toBe(true);
+  });
+
+  it("supported-but-unregistered lanes follow, honestly suffixed", () => {
+    const out = protocolOptions(["http_oneshot", "tus"], SCHEMA);
+    const rest = out.slice(2);
+    expect(rest.map((o) => o.value)).toEqual([
+      "s3_multipart",
+      "mega",
+      "feishu",
+      "dropbox",
+      "onedrive",
+    ]);
+    expect(rest.every((o) => !o.connected)).toBe(true);
+    expect(rest[0].label).toBe("S3 multipart — not connected yet");
+    expect(rest[1].label).toBe("MEGA — not connected yet");
+  });
+
+  it("a registered lane never doubles as an unregistered one (the feishu_drive name seat)", () => {
+    // The engine registers FeishuAdapter under `feishu_drive`; the vault
+    // schema lists it as `feishu`. Same product lane: ONE option, connected.
+    const out = protocolOptions(["feishu_drive"], SCHEMA);
+    expect(out.map((o) => o.value)).toEqual([
+      "feishu_drive",
+      "s3_multipart",
+      "mega",
+      "dropbox",
+      "onedrive",
+    ]);
+    expect(out[0]).toEqual({ value: "feishu_drive", label: "Feishu Drive", connected: true });
+  });
+
+  it("the empty registry still shows the whole surface — the fresh-machine fix", () => {
+    const out = protocolOptions([], SCHEMA);
+    expect(out).toHaveLength(SCHEMA.length);
+    expect(out.every((o) => !o.connected)).toBe(true);
   });
 });
