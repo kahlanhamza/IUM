@@ -51,7 +51,7 @@ instead of pretending it can resume.
 |---|---|
 | **Crash-safe by construction** | A write-ahead journal is the only source of truth. State is read from it, never guessed — kill the app mid-transfer and the upload resumes byte-exact with zero re-confirmed bytes. Pinned nightly by real kill-and-resume drills. |
 | **Verify-before-declare** | A job reaches Done only after the destination confirms the assembled object. Every failure carries its own written reason — never silence. |
-| **Three real transports** | HTTP one-shot (streaming PUT), S3 multipart (any S3-compatible bucket), TUS 1.0.0 (byte-level resume). Plus bridges to WebDAV, Google Drive and YouTube, and vault lanes for TeraBox, Feishu and MEGA — connect the account, and the upload begins. |
+| **Three real transports, two native clouds** | HTTP one-shot (streaming PUT), S3 multipart (any S3-compatible bucket), TUS 1.0.0 (byte-level resume). Plus bridges to WebDAV, Google Drive and YouTube, vault lanes for TeraBox, Feishu and MEGA, and **native Dropbox and OneDrive connectors** that sign in with IUM's own OAuth identity and verify every finished upload against the provider's own hash — connect the account, and the upload begins. |
 | **Adaptive engine** | Dynamic chunk pool, slow-connection eviction voted on measured throughput, per-error-class retry budgets — every path ends in Done or Failed, never in a lie. |
 | **Built for KB/s links** | A link prober measures the wire before committing and classifies the bottleneck; pieces shrink to fit the slowest legal moment; a locked destination is a wait, not a failure. |
 | **A desktop-native face** | The **Ink** design language: first-class dark and light themes, one typography across all three OSes, keyboard-first command palette, OS notifications, a global speed cap, and WCAG AA contrast in both schemes. |
@@ -67,6 +67,8 @@ instead of pretending it can resume.
 | WebDAV | WebDAV `PUT` | bridge-declared | connect with URL + username + password |
 | Google Drive | Drive resumable | bridge-declared | one-click sign-in in your browser; the token stays in your OS keychain |
 | YouTube | resumable upload API | ✅ byte-level | native sign-in with anti-CSRF protection; uploads are private by default |
+| Dropbox | OAuth + chunked append | ✅ session resume | native sign-in with IUM's own app identity; every upload verified against the server's `content_hash` |
+| OneDrive · OneDrive for Business | Graph upload sessions | ✅ session resume | native sign-in with IUM's own app identity; verified against the server's `quickXorHash`; uniform 5 MiB fragments, server-wins realign |
 | TeraBox · Feishu · MEGA | native bridges | bridge-declared | connect the account, the upload begins |
 
 **You don't need to know what an endpoint URL is.** The upload form asks

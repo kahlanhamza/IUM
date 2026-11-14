@@ -10,6 +10,27 @@ prose. An entry without verifiable issue numbers does not belong here.
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-11-14
+
+### Added
+- **Native Dropbox connector** (#109): sign in from the app with IUM's own
+  OAuth app identity — your browser, your Dropbox account, no shared app
+  password. Uploads run as resumable chunked-append sessions; a job
+  interrupted mid-flight resumes on its journaled session id with the
+  server's own answer correcting any drifted offset; and a job reaches Done
+  only after the finished object's `content_hash` matches what Dropbox
+  stored — verify-before-declare, the same rule the local journal has always
+  kept, extended to the cloud.
+- **Native OneDrive connector** (#110): the same shape for OneDrive and
+  OneDrive for Business. Entra sign-in with IUM's own public-client
+  identity, Microsoft Graph upload sessions carrying uniform 5 MiB
+  fragments, server-wins realign on any drifted offset, and verify-
+  before-declare against the server's `quickXorHash`. Both connectors were
+  rehearsed live against the real APIs before shipping — probe, session,
+  fragments, a deliberate desync answered 416, the realign, the atomic
+  final fragment that commits, and the hash triple-match local vs receipt
+  vs read-back.
+
 ## [0.2.3] — 2026-11-11
 
 ### Added

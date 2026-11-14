@@ -102,7 +102,7 @@ describe("the About update control (#80)", () => {
 
   it("available update → consent click → download progress → restart armed", async () => {
     let release: (() => void) | undefined;
-    updaterMock.checkForUpdate.mockResolvedValue({ version: "0.2.2", notes: null });
+    updaterMock.checkForUpdate.mockResolvedValue({ version: "0.2.5", notes: null });
     updaterMock.downloadAndInstall.mockImplementation(
       (onProgress?: (p: { downloaded: number; total?: number }) => void) =>
         new Promise<void>((resolve) => {
@@ -117,10 +117,10 @@ describe("the About update control (#80)", () => {
     renderDialog();
     const btn = await screen.findByText("Check for updates");
     fireEvent.click(btn);
-    await waitFor(() => expect(screen.getByText(/0\.2\.2 is available/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/0\.2\.5 is available/)).toBeTruthy());
     // the consent rule: nothing installs until the user clicks
     expect(updaterMock.downloadAndInstall).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText("Download 0.2.2"));
+    fireEvent.click(screen.getByText("Download 0.2.5"));
     await waitFor(() => expect(updaterMock.downloadAndInstall).toHaveBeenCalled());
     expect(screen.getByText(/Downloading 60%/)).toBeTruthy();
     release?.();
