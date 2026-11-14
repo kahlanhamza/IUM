@@ -50,12 +50,10 @@ pub fn resolve_rclone_bin(
     env_bin: Option<&str>,
     sidecar: Option<&str>,
 ) -> String {
-    for seat in [explicit, env_bin, sidecar] {
-        if let Some(v) = seat {
-            let t = v.trim();
-            if !t.is_empty() {
-                return t.to_string();
-            }
+    for v in [explicit, env_bin, sidecar].into_iter().flatten() {
+        let t = v.trim();
+        if !t.is_empty() {
+            return t.to_string();
         }
     }
     PATH_FALLBACK.to_string()
